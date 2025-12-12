@@ -69,7 +69,7 @@ fn run() !void {
     server.enableCompletions();
 
     // Run the server
-    try server.run();
+    try server.run(.stdio);
 }
 
 fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

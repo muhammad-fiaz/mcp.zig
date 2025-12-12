@@ -151,16 +151,36 @@ pub const Server = struct {
         self.capabilities.completions = .{};
     }
 
-    /// Run the server with STDIO transport
-    pub fn run(self: *Self) !void {
-        // Create STDIO transport
-        const stdio = try self.allocator.create(transport_mod.StdioTransport);
-        stdio.* = transport_mod.StdioTransport.init(self.allocator);
-        self.stdio_transport = stdio;
-        self.transport = stdio.transport();
+    /// Options for running the server
+    pub const RunOptions = union(enum) {
+        stdio: void,
+        http: struct { port: u16 = 8080, host: []const u8 = "localhost" },
+    };
 
-        // Main message loop
-        try self.messageLoop();
+    /// Run the server with the specified transport
+    pub fn run(self: *Self, options: RunOptions) !void {
+        switch (options) {
+            .stdio => {
+                self.log("Server listening on STDIO");
+                const stdio = try self.allocator.create(transport_mod.StdioTransport);
+                stdio.* = transport_mod.StdioTransport.init(self.allocator);
+                self.stdio_transport = stdio;
+                self.transport = stdio.transport();
+                try self.messageLoop();
+            },
+            .http => |config| {
+                const url = try std.fmt.allocPrint(self.allocator, "http://{s}:{d}", .{ config.host, config.port });
+                defer self.allocator.free(url);
+
+                const stderr = std.io.getStdErr().writer();
+                stderr.print("Server listening on {s}\n", .{url}) catch {};
+
+                const http = try self.allocator.create(transport_mod.HttpTransport);
+                http.* = try transport_mod.HttpTransport.init(self.allocator, url);
+                self.transport = http.transport();
+                try self.messageLoop();
+            },
+        }
     }
 
     /// Run the server with a custom transport
@@ -187,7 +207,8 @@ pub const Server = struct {
             };
 
             if (message_data) |data| {
-                defer self.allocator.free(data);
+                // url is required by transport and must handle its own lifetime or leak for server duration
+                // defer self.allocator.free(url);
                 try self.handleMessage(data);
             }
         }
@@ -215,6 +236,12 @@ pub const Server = struct {
 
     /// Handle an incoming request
     fn handleRequest(self: *Self, request: jsonrpc.Request) !void {
+        // Log request
+        var buf: [256]u8 = undefined;
+        if (std.fmt.bufPrint(&buf, "Received request: {s}", .{request.method})) |msg| {
+            self.log(msg);
+        } else |_| {}
+
         // Check if server is initialized (except for initialize request)
         if (self.state == .uninitialized and !std.mem.eql(u8, request.method, "initialize")) {
             const error_response = jsonrpc.createErrorResponse(

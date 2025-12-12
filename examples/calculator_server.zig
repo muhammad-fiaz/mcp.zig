@@ -56,7 +56,7 @@ fn run() !void {
     });
 
     server.enableLogging();
-    try server.run();
+    try server.run(.stdio);
 }
 
 fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

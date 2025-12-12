@@ -184,16 +184,18 @@ pub const HttpTransport = struct {
     const Self = @This();
 
     /// Initializes a new HTTP transport with the given endpoint URL.
-    pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) !Self {
+        const owned_endpoint = try allocator.dupe(u8, endpoint);
         return .{
             .allocator = allocator,
-            .endpoint = endpoint,
+            .endpoint = owned_endpoint,
             .pending_responses = .{},
         };
     }
 
     /// Releases resources held by the transport.
     pub fn deinit(self: *Self) void {
+        self.allocator.free(self.endpoint);
         for (self.pending_responses.items) |item| {
             self.allocator.free(item);
         }
@@ -281,7 +283,7 @@ pub fn createTransport(
         .http => {
             const url = options.url orelse return error.MissingUrl;
             const http = try allocator.create(HttpTransport);
-            http.* = HttpTransport.init(allocator, url);
+            http.* = try HttpTransport.init(allocator, url);
             return http.transport();
         },
     }
@@ -302,7 +304,7 @@ test "StdioTransport initialization" {
 
 test "HttpTransport initialization" {
     const allocator = std.testing.allocator;
-    var transport_impl = HttpTransport.init(allocator, "http://localhost:3000");
+    var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
     defer transport_impl.deinit();
 
     try std.testing.expectEqualStrings("http://localhost:3000", transport_impl.endpoint);
@@ -310,7 +312,7 @@ test "HttpTransport initialization" {
 
 test "HttpTransport session ID" {
     const allocator = std.testing.allocator;
-    var transport_impl = HttpTransport.init(allocator, "http://localhost:3000");
+    var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
     defer transport_impl.deinit();
 
     try transport_impl.setSessionId("test-session-123");

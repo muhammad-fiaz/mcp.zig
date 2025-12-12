@@ -71,7 +71,10 @@ fn run() !void {
     server.enableLogging();
 
     // Run the server
-    try server.run();
+    try server.run(.stdio);
+
+    // To run with HTTP (prints url):
+    // try server.run(.{ .http = .{ .port = 8080, .host = "localhost" } });
 }
 
 fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
