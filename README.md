@@ -1,6 +1,7 @@
 <div align="center">
-
-# mcp.zig
+<img width="1536" height="1024" alt="Edit the uploaded tr" src="https://github.com/user-attachments/assets/8dcba27d-190b-4f84-b866-2c8bd2e13473" />
+    
+# MCP.zig
 
 <a href="https://muhammad-fiaz.github.io/mcp.zig/"><img src="https://img.shields.io/badge/docs-muhammad--fiaz.github.io-blue" alt="Documentation"></a>
 <a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.15.0+-orange.svg?logo=zig" alt="Zig Version"></a>
