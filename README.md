@@ -1,5 +1,5 @@
 <div align="center">
-<img width="1536" height="1024" alt="Edit the uploaded tr" src="https://github.com/user-attachments/assets/8dcba27d-190b-4f84-b866-2c8bd2e13473" />
+<img alt="logo" src="https://github.com/user-attachments/assets/09fa609c-22fd-4076-9849-dbd9800f8c03" />
     
 # MCP.zig
 
