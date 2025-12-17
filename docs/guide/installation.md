@@ -16,7 +16,7 @@ The recommended way to use mcp.zig is through Zig's built-in package manager.
 Run the following command to add mcp.zig to your project:
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 This will automatically update your `build.zig.zon` with the dependency and correct hash.
