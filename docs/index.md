@@ -78,7 +78,7 @@ For the official MCP specification and documentation, visit [modelcontextprotoco
 Run the following command to add mcp.zig to your project:
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 ### Create a Simple Server
