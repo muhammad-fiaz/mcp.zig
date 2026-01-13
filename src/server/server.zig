@@ -776,9 +776,15 @@ pub const Server = struct {
     /// Send a response message
     fn sendResponse(self: *Self, message: jsonrpc.Message) !void {
         if (self.transport) |t| {
-            const json = try jsonrpc.serializeMessage(self.allocator, message);
+            const json = jsonrpc.serializeMessage(self.allocator, message) catch {
+                self.logError("Failed to serialize response");
+                return; // Log but don't crash - response is lost but server continues
+            };
             defer self.allocator.free(json);
-            t.send(json) catch {};
+            t.send(json) catch {
+                self.logError("Failed to send response");
+                return; // Log but don't crash - response is lost but server continues
+            };
         }
     }
 
