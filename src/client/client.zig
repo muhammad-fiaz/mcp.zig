@@ -155,7 +155,10 @@ pub const Client = struct {
         defer self.allocator.free(json);
 
         if (self.transport) |t| {
-            t.send(json) catch {};
+            t.send(json) catch {
+                std.log.err("Failed to send request", .{});
+                return; // Log but don't crash - request is lost but client continues
+            };
         }
     }
 
