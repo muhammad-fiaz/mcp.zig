@@ -58,7 +58,7 @@ const report = mcp.report;
 
 ## Version
 
-Current version: **0.0.1**
+Current version: **0.0.2**
 
 Protocol version: **2025-11-25**
 

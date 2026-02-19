@@ -17,7 +17,7 @@
 <a href="https://github.com/sponsors/muhammad-fiaz"><img src="https://img.shields.io/badge/Sponsor-💖-pink?style=social&logo=github" alt="GitHub Sponsors"></a>
 <a href="https://hits.sh/github.com/muhammad-fiaz/mcp.zig/"><img src="https://hits.sh/github.com/muhammad-fiaz/mcp.zig.svg?label=Visitors&extraCount=0&color=green" alt="Repo Visitors"></a>
 
-<p><em>A comprehensive Model Context Protocol (MCP) library for Zig — bringing MCP support to the Zig ecosystem.</em></p>
+<p><em>A Model Context Protocol (MCP) library for the Zig ecosystem.</em></p>
 
 <b>📚 <a href="https://muhammad-fiaz.github.io/mcp.zig/">Documentation</a> |
 <a href="https://muhammad-fiaz.github.io/mcp.zig/api/">API Reference</a> |
@@ -65,12 +65,14 @@ For the official MCP specification and resources, visit:
 
 ### Installation
 
-### Installation
-
 Run the following command to add mcp.zig to your project:
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.1.tar.gz
+# Latest development branch
+zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
+
+# Or specific release
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.2.tar.gz
 ```
 
 Then in your `build.zig`:

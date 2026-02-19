@@ -1,6 +1,6 @@
 {
   "name": "mcp-zig-docs",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Documentation for mcp.zig - Model Context Protocol for Zig",
   "type": "module",
   "scripts": {
