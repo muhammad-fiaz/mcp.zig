@@ -43,6 +43,12 @@ zig build
 ./zig-out/bin/calculator-server
 ```
 
+To use custom HTTP transport, switch the run line in `examples/simple_server.zig` from stdio to HTTP and set your host/domain and port, for example:
+
+```zig
+try server.run(.{ .http = .{ .host = "api.example.com", .port = 8443 } });
+```
+
 ## Testing with an AI Client
 
 You can test your MCP server with Claude Desktop or other MCP-compatible AI clients.
@@ -72,13 +78,20 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 For HTTP transport mode:
 
 ```bash
-./zig-out/bin/example-server
-# switch run line in source to HTTP mode:
+# switch run line in source from stdio to HTTP mode and set host/port:
 # try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+./zig-out/bin/example-server
 
 curl -X POST http://localhost:8080 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+```
+
+PowerShell:
+
+```powershell
+$body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8080 -ContentType 'application/json' -Body $body
 ```
 
 ## Project Structure

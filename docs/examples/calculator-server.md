@@ -22,8 +22,12 @@ All tools expect numeric arguments:
 ```bash
 zig build
 ./zig-out/bin/calculator-server
-# To use HTTP mode, switch run call in source to:
-# try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+```
+
+The calculator example runs over stdio by default (CI/GitHub Actions friendly). To test with `curl`/HTTP, switch the run mode in `examples/calculator_server.zig` to:
+
+```zig
+try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
 ```
 
 ## HTTP Request Example

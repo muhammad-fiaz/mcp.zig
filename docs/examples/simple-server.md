@@ -108,8 +108,7 @@ fn run() !void {
 fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
 
-    var buf: [256]u8 = undefined;
-    const greeting = std.fmt.bufPrint(&buf, "Hello, {s}! Welcome to MCP.", .{name}) catch "Hello!";
+    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
 
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }
@@ -151,10 +150,25 @@ Initialize over stdio:
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}' | ./zig-out/bin/example-server
 ```
 
-Call greet tool:
+Call greet tool over stdio:
 
 ```bash
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Alice"}}}' | ./zig-out/bin/example-server
+```
+
+To test HTTP mode, switch `server.run(.stdio)` to HTTP in the source and then run:
+
+```bash
+curl -X POST http://localhost:8080 \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+```
+
+PowerShell HTTP initialize (HTTP mode):
+
+```powershell
+$body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8080 -ContentType 'application/json' -Body $body
 ```
 
 ## Expected Output Pattern

@@ -147,8 +147,9 @@ pub const ToolBuilder = struct {
 
 /// Creates a tool result containing a single text content item.
 pub fn textResult(allocator: std.mem.Allocator, text: []const u8) !ToolResult {
+    const owned_text = try allocator.dupe(u8, text);
     const content = try allocator.alloc(types.ContentBlock, 1);
-    content[0] = .{ .text = .{ .text = text } };
+    content[0] = .{ .text = .{ .text = owned_text } };
     return .{ .content = content };
 }
 
@@ -189,10 +190,10 @@ pub fn structuredResult(allocator: std.mem.Allocator, structured: std.json.Value
     defer out.deinit(allocator);
     try jsonrpc.serializeValue(allocator, &out, structured);
     const text_json = try out.toOwnedSlice(allocator);
-    
+
     const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .text = .{ .text = text_json } };
-    
+
     return .{
         .content = content,
         .structuredContent = structured,

@@ -1,6 +1,6 @@
 # Client API
 
-The `Client` struct is used to connect to MCP servers.
+The `Client` struct is used to connect to MCP servers and send MCP requests.
 
 ## Constructor
 
@@ -41,7 +41,7 @@ defer client.deinit();
 pub fn deinit(self: *Client) void
 ```
 
-Clean up client resources.
+Clean up client resources and pending state.
 
 ---
 
@@ -78,6 +78,18 @@ pub fn enableElicitation(self: *Client) void
 ```
 
 Enable the elicitation capability (both form and URL modes) for handling server-initiated user input requests.
+
+### `Client.enableElicitationForm`
+
+```zig
+pub fn enableElicitationForm(self: *Client) void
+```
+
+### `Client.enableElicitationUrl`
+
+```zig
+pub fn enableElicitationUrl(self: *Client) void
+```
 
 ### `Client.enableTasks`
 
@@ -149,6 +161,86 @@ Enabled capabilities.
 
 ---
 
+## Connection Management
+
+### `Client.connectStdio`
+
+```zig
+pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
+```
+
+### `Client.connectHttp`
+
+```zig
+pub fn connectHttp(self: *Client, url: []const u8) !void
+```
+
+### `Client.setAuthorizationToken`
+
+```zig
+pub fn setAuthorizationToken(self: *Client, token: []const u8) !void
+```
+
+Set bearer token before calling `connectHttp` when your HTTP server requires authorization.
+
+### `Client.disconnect`
+
+```zig
+pub fn disconnect(self: *Client) void
+```
+
+## Request APIs
+
+All request APIs currently send protocol requests and return `!void`.
+
+### Tools
+
+```zig
+pub fn listTools(self: *Client) !void
+pub fn callTool(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
+```
+
+### Resources
+
+```zig
+pub fn listResources(self: *Client) !void
+pub fn readResource(self: *Client, uri: []const u8) !void
+pub fn subscribeResource(self: *Client, uri: []const u8) !void
+pub fn unsubscribeResource(self: *Client, uri: []const u8) !void
+pub fn listResourceTemplates(self: *Client) !void
+```
+
+### Prompts
+
+```zig
+pub fn listPrompts(self: *Client) !void
+pub fn getPrompt(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
+```
+
+### Completion / Logging / Health
+
+```zig
+pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !void
+pub fn setLogLevel(self: *Client, level: []const u8) !void
+pub fn ping(self: *Client) !void
+```
+
+### Tasks
+
+```zig
+pub fn getTask(self: *Client, taskId: []const u8) !void
+pub fn getTaskResult(self: *Client, taskId: []const u8) !void
+pub fn listTasks(self: *Client) !void
+pub fn cancelTask(self: *Client, taskId: []const u8) !void
+```
+
+### Notifications
+
+```zig
+pub fn notifyInitialized(self: *Client) !void
+pub fn notifyRootsChanged(self: *Client) !void
+```
+
 ## Complete Example
 
 ```zig
@@ -169,7 +261,7 @@ pub fn main() !void {
     defer client.deinit();
 
     // Enable capabilities
-    client.enableRoots();
+    client.enableRoots(true);
     client.enableSampling();
 
     // Configure roots
@@ -235,74 +327,8 @@ Disconnects from the server and closes the active transport.
 /// Request the list of available tools
 pub fn listTools(self: *Client) !void
 
-/// Invoke a tool on the server with optional arguments
-pub fn callTool(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
-```
-
-### Resources
-
-```zig
+    // Request operations are currently fire-and-handle-later style
+    try client.listTools();
+    try client.callTool("hello", null);
 /// Request the list of available resources
 pub fn listResources(self: *Client) !void
-
-/// Read a specific resource's contents by URI
-pub fn readResource(self: *Client, uri: []const u8) !void
-
-/// Request available resource templates
-pub fn listResourceTemplates(self: *Client) !void
-
-/// Subscribe to a resource for updates
-pub fn subscribeResource(self: *Client, uri: []const u8) !void
-
-/// Unsubscribe from a resource's updates
-pub fn unsubscribeResource(self: *Client, uri: []const u8) !void
-```
-
-### Prompts
-
-```zig
-/// Request the list of available prompts
-pub fn listPrompts(self: *Client) !void
-
-/// Fetch a prompt by name with optional arguments
-pub fn getPrompt(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
-```
-
-### Tasks
-
-```zig
-/// Retrieve task status and metadata
-pub fn getTask(self: *Client, taskId: []const u8) !void
-
-/// Get the result payload of a completed task
-pub fn getTaskResult(self: *Client, taskId: []const u8) !void
-
-/// List all available tasks
-pub fn listTasks(self: *Client) !void
-
-/// Request cancellation of a running task
-pub fn cancelTask(self: *Client, taskId: []const u8) !void
-```
-
-### Utilities
-
-```zig
-/// Request autocomplete suggestions for a given reference and argument
-pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !void
-
-/// Update the remote server's active log level
-pub fn setLogLevel(self: *Client, level: []const u8) !void
-
-/// Ping the server to check connection health
-pub fn ping(self: *Client) !void
-```
-
-### Notifications
-
-```zig
-/// Notify the server that initialization was completed successfully
-pub fn notifyInitialized(self: *Client) !void
-
-/// Push a list-changed signal to the server when local roots change
-pub fn notifyRootsChanged(self: *Client) !void
-```

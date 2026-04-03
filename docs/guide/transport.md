@@ -81,8 +81,8 @@ The response body contains the JSON-RPC response.
 
 ### Example Pattern
 
-Server examples default to `stdio` and include commented HTTP run lines.
-To run over HTTP, switch the run call to `server.run(.{ .http = .{ .host = "localhost", .port = 8080 } })`.
+Most examples default to `stdio` and include optional HTTP run lines.
+`examples/simple_server.zig` is currently configured for HTTP mode and can be switched back to `stdio` if needed.
 
 ## Custom Transports
 
@@ -165,11 +165,11 @@ const http_transport = mcp.transport.HttpTransport.init(
 ```zig
 const message = transport.receive() catch |err| {
     switch (err) {
-        error.Timeout => {
-            // Handle timeout
-        },
         error.ConnectionClosed => {
             // Handle disconnect
+        },
+        error.EndOfStream => {
+            // Handle graceful end of input
         },
         else => return err,
     }

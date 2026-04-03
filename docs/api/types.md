@@ -217,10 +217,13 @@ Used in initialize requests for server/client info.
 
 ```zig
 pub const ServerCapabilities = struct {
+    experimental: ?std.json.Value = null,
+    completions: ?CompletionsCapability = null,
     tools: ?ToolsCapability = null,
     resources: ?ResourcesCapability = null,
     prompts: ?PromptsCapability = null,
     logging: ?LoggingCapability = null,
+    tasks: ?ServerTasksCapability = null,
 };
 ```
 
@@ -228,9 +231,11 @@ pub const ServerCapabilities = struct {
 
 ```zig
 pub const ClientCapabilities = struct {
+    experimental: ?std.json.Value = null,
     roots: ?RootsCapability = null,
     sampling: ?SamplingCapability = null,
     elicitation: ?ElicitationCapability = null,
+    tasks: ?ClientTasksCapability = null,
 };
 ```
 
@@ -271,10 +276,10 @@ pub const SchemaType = enum {
 
 ## Log Levels
 
-### `LogLevel`
+### `LoggingLevel`
 
 ```zig
-pub const LogLevel = enum {
+pub const LoggingLevel = enum {
     debug,
     info,
     notice,

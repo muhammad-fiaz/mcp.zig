@@ -231,7 +231,9 @@ pub const Server = struct {
     }
 
     fn runHttp(self: *Self, config: HttpRunConfig) !void {
-        const address = std.net.Address.resolveIp(config.host, config.port) catch {
+        const bind_host = if (std.mem.eql(u8, config.host, "localhost")) "127.0.0.1" else config.host;
+
+        const address = std.net.Address.resolveIp(bind_host, config.port) catch {
             return error.AddressResolutionError;
         };
 
@@ -261,27 +263,55 @@ pub const Server = struct {
         var connection_writer = connection.stream.writer(&send_buffer);
         var server: http.Server = .init(connection_reader.interface(), &connection_writer.interface);
 
-        while (true) {
-            var request = server.receiveHead() catch |err| switch (err) {
-                error.HttpConnectionClosing => return,
-                else => return err,
-            };
+        var request = server.receiveHead() catch |err| switch (err) {
+            error.HttpConnectionClosing => return,
+            else => return err,
+        };
 
-            if (request.head.method != .POST) {
-                try request.respond("Method Not Allowed", .{
-                    .status = .method_not_allowed,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain" },
-                    },
-                });
-                continue;
-            }
-
-            try self.handleHttpJsonRpcRequest(&request);
+        if (request.head.method != .POST) {
+            try request.respond("Method Not Allowed", .{
+                .status = .method_not_allowed,
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/plain" },
+                },
+            });
+            return;
         }
+
+        try self.handleHttpJsonRpcRequest(&request);
     }
 
     fn handleHttpJsonRpcRequest(self: *Self, request: *http.Server.Request) !void {
+        const content_length = request.head.content_length orelse {
+            try request.respond("Content-Length required", .{
+                .status = .bad_request,
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/plain" },
+                },
+            });
+            return;
+        };
+
+        if (content_length == 0) {
+            try request.respond("Empty JSON-RPC payload", .{
+                .status = .bad_request,
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/plain" },
+                },
+            });
+            return;
+        }
+
+        if (content_length > max_http_body_size) {
+            try request.respond("Request body too large", .{
+                .status = .bad_request,
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/plain" },
+                },
+            });
+            return;
+        }
+
         var read_buffer: [2048]u8 = undefined;
         var body_reader = request.readerExpectContinue(&read_buffer) catch {
             try request.respond("Invalid request body", .{
@@ -293,53 +323,16 @@ pub const Server = struct {
             return;
         };
 
-        var body = std.ArrayList(u8){};
-        defer body.deinit(self.allocator);
-        const writer = body.writer(self.allocator);
-
-        var buf: [4096]u8 = undefined;
-        while (true) {
-            const n = body_reader.readSliceShort(&buf) catch {
-                try request.respond("Failed to read request body", .{
-                    .status = .bad_request,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain" },
-                    },
-                });
-                return;
-            };
-            if (n == 0) break;
-
-            if (body.items.len + n > max_http_body_size) {
-                try request.respond("Request body too large", .{
-                    .status = .bad_request,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain" },
-                    },
-                });
-                return;
-            }
-
-            writer.writeAll(buf[0..n]) catch {
-                try request.respond("Out of memory", .{
-                    .status = .internal_server_error,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain" },
-                    },
-                });
-                return;
-            };
-        }
-
-        if (body.items.len == 0) {
-            try request.respond("Empty JSON-RPC payload", .{
+        const body_items = body_reader.readAlloc(self.allocator, content_length) catch {
+            try request.respond("Failed to read request body", .{
                 .status = .bad_request,
                 .extra_headers = &.{
                     .{ .name = "Content-Type", .value = "text/plain" },
                 },
             });
             return;
-        }
+        };
+        defer self.allocator.free(body_items);
 
         var request_transport = HttpRequestTransport.init(self.allocator);
         defer request_transport.deinit();
@@ -348,7 +341,7 @@ pub const Server = struct {
         self.transport = request_transport.transport();
         defer self.transport = previous_transport;
 
-        self.handleMessage(body.items) catch {
+        self.handleMessage(body_items) catch {
             const internal_error = jsonrpc.createParseError(.{ .string = "Internal server error" });
             const json = jsonrpc.serializeMessage(self.allocator, .{ .error_response = internal_error }) catch {
                 try request.respond("Internal server error", .{

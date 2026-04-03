@@ -91,8 +91,7 @@ fn run() !void {
 fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
 
-    var buf: [256]u8 = undefined;
-    const greeting = std.fmt.bufPrint(&buf, "Hello, {s}! Welcome to MCP.", .{name}) catch "Hello!";
+    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
 
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }

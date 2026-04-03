@@ -91,7 +91,7 @@ pub const ErrorResponse = struct {
 ### `jsonrpc.parseMessage`
 
 ```zig
-pub fn parseMessage(allocator: Allocator, data: []const u8) !Message
+pub fn parseMessage(allocator: std.mem.Allocator, data: []const u8) ParseError!ParsedMessage
 ```
 
 Parse a JSON-RPC message from a string.
@@ -99,7 +99,10 @@ Parse a JSON-RPC message from a string.
 **Example:**
 
 ```zig
-const message = try mcp.jsonrpc.parseMessage(allocator, json_string);
+const parsed = try mcp.jsonrpc.parseMessage(allocator, json_string);
+defer parsed.deinit();
+
+const message = parsed.message;
 
 switch (message) {
     .request => |req| { /* handle request */ },
@@ -116,7 +119,7 @@ switch (message) {
 ### `jsonrpc.serializeMessage`
 
 ```zig
-pub fn serializeMessage(allocator: Allocator, message: Message) ![]u8
+pub fn serializeMessage(allocator: std.mem.Allocator, message: Message) ![]u8
 ```
 
 Serialize a message to JSON.
@@ -226,6 +229,9 @@ pub const ErrorCode = struct {
     pub const METHOD_NOT_FOUND = -32601;
     pub const INVALID_PARAMS = -32602;
     pub const INTERNAL_ERROR = -32603;
+    pub const SERVER_NOT_INITIALIZED = -32002;
+    pub const REQUEST_CANCELLED = -32800;
+    pub const CONTENT_TOO_LARGE = -32801;
 };
 ```
 
@@ -252,10 +258,11 @@ pub const Transport = struct {
 
 ```zig
 pub const StdioTransport = struct {
-    pub fn init(allocator: Allocator) StdioTransport;
+    pub fn init(allocator: std.mem.Allocator) StdioTransport;
     pub fn deinit(self: *StdioTransport) void;
-    pub fn send(self: *StdioTransport, data: []const u8) !void;
-    pub fn receive(self: *StdioTransport) !?[]const u8;
+    pub fn send(self: *StdioTransport, data: []const u8) Transport.SendError!void;
+    pub fn receive(self: *StdioTransport) Transport.ReceiveError!?[]const u8;
+    pub fn transport(self: *StdioTransport) Transport;
 };
 ```
 
@@ -263,11 +270,21 @@ pub const StdioTransport = struct {
 
 ```zig
 pub const HttpTransport = struct {
-    pub fn init(allocator: Allocator, endpoint: []const u8) HttpTransport;
+    pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) !HttpTransport;
     pub fn deinit(self: *HttpTransport) void;
+    pub fn send(self: *HttpTransport, message: []const u8) Transport.SendError!void;
+    pub fn receive(self: *HttpTransport) Transport.ReceiveError!?[]const u8;
     pub fn setSessionId(self: *HttpTransport, id: []const u8) !void;
+    pub fn setAuthorizationToken(self: *HttpTransport, token: []const u8) !void;
+    pub fn transport(self: *HttpTransport) Transport;
 };
 ```
+
+HTTP mode details:
+
+- Clients send JSON-RPC with `POST /` and `Content-Type: application/json`.
+- Server responses may include `MCP-Session-Id` for session continuity.
+- Request bodies should include a valid `Content-Length`.
 
 ---
 
@@ -298,9 +315,10 @@ pub fn main() !void {
 
     // Parse a response
     const response_json = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}";
-    const message = try mcp.jsonrpc.parseMessage(allocator, response_json);
+    const parsed = try mcp.jsonrpc.parseMessage(allocator, response_json);
+    defer parsed.deinit();
 
-    switch (message) {
+    switch (parsed.message) {
         .response => |resp| {
             std.debug.print("Got response for ID: {any}\n", .{resp.id});
         },
