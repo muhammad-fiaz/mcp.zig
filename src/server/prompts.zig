@@ -1,4 +1,4 @@
-//! MCP Prompts Module
+//! MCP Prompts Module (Spec 2025-11-25)
 //!
 //! Provides the Prompt primitive for MCP servers. Prompts are reusable templates
 //! that help structure interactions with LLMs, allowing servers to expose
@@ -14,6 +14,7 @@ pub const Prompt = struct {
     description: ?[]const u8 = null,
     arguments: ?[]const PromptArgument = null,
     icons: ?[]const types.Icon = null,
+    _meta: ?std.json.Value = null,
     handler: *const fn (allocator: std.mem.Allocator, args: ?std.json.Value) PromptError![]const PromptMessage,
     user_data: ?*anyopaque = null,
 };
@@ -21,14 +22,15 @@ pub const Prompt = struct {
 /// Argument specification for a prompt.
 pub const PromptArgument = struct {
     name: []const u8,
+    title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     required: bool = false,
 };
 
 /// Message in a prompt result.
 pub const PromptMessage = struct {
-    role: []const u8,
-    content: types.ContentItem,
+    role: types.Role,
+    content: types.ContentBlock,
 };
 
 /// Errors that can occur during prompt operations.
@@ -77,6 +79,12 @@ pub const PromptBuilder = struct {
         return self;
     }
 
+    /// Adds an argument specification with a title to the prompt.
+    pub fn addArgumentWithTitle(self: *PromptBuilder, name: []const u8, arg_title: ?[]const u8, desc: ?[]const u8, required: bool) !*PromptBuilder {
+        try self.args_list.append(self.allocator, .{ .name = name, .title = arg_title, .description = desc, .required = required });
+        return self;
+    }
+
     /// Sets the prompt handler function.
     pub fn handler(self: *PromptBuilder, h: *const fn (std.mem.Allocator, ?std.json.Value) PromptError![]const PromptMessage) *PromptBuilder {
         self.prompt.handler = h;
@@ -110,12 +118,12 @@ pub fn getStringArg(args: ?std.json.Value, key: []const u8) ?[]const u8 {
 
 /// Creates a user message with the given text content.
 pub fn userMessage(text: []const u8) PromptMessage {
-    return .{ .role = "user", .content = .{ .text = .{ .text = text } } };
+    return .{ .role = .user, .content = .{ .text = .{ .text = text } } };
 }
 
 /// Creates an assistant message with the given text content.
 pub fn assistantMessage(text: []const u8) PromptMessage {
-    return .{ .role = "assistant", .content = .{ .text = .{ .text = text } } };
+    return .{ .role = .assistant, .content = .{ .text = .{ .text = text } } };
 }
 
 test "PromptBuilder" {
@@ -132,5 +140,10 @@ test "PromptBuilder" {
 
 test "userMessage" {
     const msg = userMessage("Hello");
-    try std.testing.expectEqualStrings("user", msg.role);
+    try std.testing.expectEqual(types.Role.user, msg.role);
+}
+
+test "assistantMessage" {
+    const msg = assistantMessage("Hi there");
+    try std.testing.expectEqual(types.Role.assistant, msg.role);
 }

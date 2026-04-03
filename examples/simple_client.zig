@@ -38,6 +38,8 @@ fn run() !void {
 
     // Enable capabilities
     client.enableSampling();
+    client.enableElicitation();
+    client.enableTasks();
     client.enableRoots(true);
 
     // Add some roots

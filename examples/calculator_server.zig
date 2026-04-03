@@ -31,6 +31,11 @@ fn run() !void {
         .name = "add",
         .description = "Add two numbers",
         .title = "Addition",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = addHandler,
     });
 
@@ -38,6 +43,11 @@ fn run() !void {
         .name = "subtract",
         .description = "Subtract two numbers",
         .title = "Subtraction",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = subtractHandler,
     });
 
@@ -45,6 +55,11 @@ fn run() !void {
         .name = "multiply",
         .description = "Multiply two numbers",
         .title = "Multiplication",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = multiplyHandler,
     });
 
@@ -52,10 +67,17 @@ fn run() !void {
         .name = "divide",
         .description = "Divide two numbers",
         .title = "Division",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
+        .execution = .{ .taskSupport = "optional" },
         .handler = divideHandler,
     });
 
     server.enableLogging();
+    server.enableTasks();
     try server.run(.stdio);
 }
 

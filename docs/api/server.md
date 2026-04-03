@@ -124,8 +124,14 @@ Register a tool with the server.
 pub const Tool = struct {
     name: []const u8,
     description: ?[]const u8 = null,
-    handler: *const fn(Allocator, ?json.Value) ToolError!ToolResult,
-    input_schema: ?json.Value = null,
+    title: ?[]const u8 = null,
+    inputSchema: ?types.InputSchema = null,
+    outputSchema: ?types.OutputSchema = null,
+    execution: ?types.ToolExecution = null,
+    icons: ?[]const types.Icon = null,
+    annotations: ?ToolAnnotations = null,
+    handler: *const fn (allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
+    user_data: ?*anyopaque = null,
 };
 ```
 
@@ -157,9 +163,15 @@ Register a resource with the server.
 pub const Resource = struct {
     uri: []const u8,
     name: []const u8,
-    mimeType: ?[]const u8 = null,
+    title: ?[]const u8 = null,
     description: ?[]const u8 = null,
-    handler: *const fn(Allocator, []const u8) ResourceError![]ResourceContent,
+    mimeType: ?[]const u8 = null,
+    icons: ?[]const types.Icon = null,
+    annotations: ?types.Annotations = null,
+    size: ?u64 = null,
+    _meta: ?std.json.Value = null,
+    handler: *const fn (allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
+    user_data: ?*anyopaque = null,
 };
 ```
 
@@ -191,7 +203,10 @@ pub const Prompt = struct {
     title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     arguments: ?[]const PromptArgument = null,
-    handler: *const fn(Allocator, ?json.Value) PromptError![]PromptMessage,
+    icons: ?[]const types.Icon = null,
+    _meta: ?std.json.Value = null,
+    handler: *const fn (allocator: std.mem.Allocator, args: ?std.json.Value) PromptError![]const PromptMessage,
+    user_data: ?*anyopaque = null,
 };
 ```
 

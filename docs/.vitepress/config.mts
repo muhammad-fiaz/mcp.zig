@@ -39,7 +39,7 @@ export default defineConfig({
         target: '_blank'
       },
       {
-        text: 'v0.0.1',
+        text: 'v0.0.3',
         items: [
           { text: 'Contributing', link: '/contributing' },
           { text: 'GitHub Releases', link: 'https://github.com/muhammad-fiaz/mcp.zig/releases' }

@@ -1,4 +1,4 @@
-//! MCP Resources Module
+//! MCP Resources Module (Spec 2025-11-25)
 //!
 //! Provides the Resource primitive for MCP servers. Resources are read-only
 //! data sources that provide contextual information to AI applications,
@@ -11,10 +11,13 @@ const types = @import("../protocol/types.zig");
 pub const Resource = struct {
     uri: []const u8,
     name: []const u8,
+    title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     mimeType: ?[]const u8 = null,
     icons: ?[]const types.Icon = null,
+    annotations: ?types.Annotations = null,
     size: ?u64 = null,
+    _meta: ?std.json.Value = null,
     handler: *const fn (allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
     user_data: ?*anyopaque = null,
 };
@@ -25,6 +28,7 @@ pub const ResourceContent = struct {
     mimeType: ?[]const u8 = null,
     text: ?[]const u8 = null,
     blob: ?[]const u8 = null,
+    _meta: ?std.json.Value = null,
 };
 
 /// Resource template for dynamic resources with URI parameters.
@@ -35,6 +39,8 @@ pub const ResourceTemplate = struct {
     description: ?[]const u8 = null,
     mimeType: ?[]const u8 = null,
     icons: ?[]const types.Icon = null,
+    annotations: ?types.Annotations = null,
+    _meta: ?std.json.Value = null,
 };
 
 /// Errors that can occur during resource operations.
@@ -60,6 +66,12 @@ pub const ResourceBuilder = struct {
         };
     }
 
+    /// Sets the resource display title.
+    pub fn title(self: *ResourceBuilder, t: []const u8) *ResourceBuilder {
+        self.resource.title = t;
+        return self;
+    }
+
     /// Sets the resource description.
     pub fn description(self: *ResourceBuilder, desc: []const u8) *ResourceBuilder {
         self.resource.description = desc;
@@ -69,6 +81,18 @@ pub const ResourceBuilder = struct {
     /// Sets the resource MIME type.
     pub fn mimeType(self: *ResourceBuilder, mime: []const u8) *ResourceBuilder {
         self.resource.mimeType = mime;
+        return self;
+    }
+
+    /// Sets the resource size in bytes.
+    pub fn size(self: *ResourceBuilder, s: u64) *ResourceBuilder {
+        self.resource.size = s;
+        return self;
+    }
+
+    /// Sets the resource annotations.
+    pub fn annotations(self: *ResourceBuilder, ann: types.Annotations) *ResourceBuilder {
+        self.resource.annotations = ann;
         return self;
     }
 
@@ -109,6 +133,10 @@ pub fn detectMimeType(path: []const u8) []const u8 {
     if (std.mem.eql(u8, ext, ".md")) return "text/markdown";
     if (std.mem.eql(u8, ext, ".png")) return "image/png";
     if (std.mem.eql(u8, ext, ".jpg")) return "image/jpeg";
+    if (std.mem.eql(u8, ext, ".svg")) return "image/svg+xml";
+    if (std.mem.eql(u8, ext, ".webp")) return "image/webp";
+    if (std.mem.eql(u8, ext, ".wav")) return "audio/wav";
+    if (std.mem.eql(u8, ext, ".mp3")) return "audio/mpeg";
     return "application/octet-stream";
 }
 
@@ -117,6 +145,21 @@ test "ResourceBuilder" {
     var builder = ResourceBuilder.init(allocator, "file:///test.txt", "Test");
     const resource = builder.description("A test").mimeType("text/plain").build();
     try std.testing.expectEqualStrings("file:///test.txt", resource.uri);
+}
+
+test "ResourceBuilder with title and annotations" {
+    const allocator = std.testing.allocator;
+    var builder = ResourceBuilder.init(allocator, "file:///data.json", "Data");
+    const resource = builder
+        .title("Data File")
+        .description("JSON data file")
+        .mimeType("application/json")
+        .size(1024)
+        .annotations(.{ .priority = 0.8 })
+        .build();
+    try std.testing.expectEqualStrings("Data File", resource.title.?);
+    try std.testing.expectEqual(@as(u64, 1024), resource.size.?);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.8), resource.annotations.?.priority.?, 0.001);
 }
 
 test "getUriScheme" {

@@ -35,6 +35,11 @@ fn run() !void {
         .name = "get_alerts",
         .description = "Get weather alerts for a US state",
         .title = "Get Weather Alerts",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = getAlertsHandler,
     });
 
@@ -43,6 +48,11 @@ fn run() !void {
         .name = "get_forecast",
         .description = "Get weather forecast for a location",
         .title = "Get Weather Forecast",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = getForecastHandler,
     });
 
@@ -64,9 +74,10 @@ fn run() !void {
         .mimeType = "application/json",
     });
 
-    // Enable logging and completions
+    // Enable logging, completions, and tasks
     server.enableLogging();
     server.enableCompletions();
+    server.enableTasks();
 
     // Run the server
     try server.run(.stdio);

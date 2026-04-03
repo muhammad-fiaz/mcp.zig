@@ -1,8 +1,8 @@
-//! MCP Server Implementation
+//! MCP Server Implementation (Spec 2025-11-25)
 //!
 //! Provides the main MCP Server that handles client connections, protocol
 //! negotiation, capability advertisement, and request routing for tools,
-//! resources, and prompts.
+//! resources, prompts, tasks, and all standard MCP methods.
 
 const std = @import("std");
 const protocol = @import("../protocol/protocol.zig");
@@ -15,35 +15,22 @@ const prompts_mod = @import("prompts.zig");
 
 /// Configuration for an MCP Server
 pub const ServerConfig = struct {
-    /// Server name
     name: []const u8,
-    /// Server version
     version: []const u8,
-    /// Optional display title
     title: ?[]const u8 = null,
-    /// Optional description
     description: ?[]const u8 = null,
-    /// Optional icons
     icons: ?[]const types.Icon = null,
-    /// Optional website URL
     websiteUrl: ?[]const u8 = null,
-    /// Optional instructions for clients
     instructions: ?[]const u8 = null,
-    /// Allocator to use
     allocator: std.mem.Allocator = std.heap.page_allocator,
 };
 
 /// Current state of the server
 pub const ServerState = enum {
-    /// Server is not yet initialized
     uninitialized,
-    /// Server is initializing (received initialize, not yet confirmed)
     initializing,
-    /// Server is ready to handle requests
     ready,
-    /// Server is shutting down
     shutting_down,
-    /// Server has stopped
     stopped,
 };
 
@@ -52,36 +39,21 @@ pub const Server = struct {
     config: ServerConfig,
     allocator: std.mem.Allocator,
     state: ServerState = .uninitialized,
-
-    // Registered features
     tools: std.StringHashMap(tools_mod.Tool),
     resources: std.StringHashMap(resources_mod.Resource),
     resource_templates: std.StringHashMap(resources_mod.ResourceTemplate),
     prompts: std.StringHashMap(prompts_mod.Prompt),
-
-    // Capabilities
     capabilities: types.ServerCapabilities = .{},
-
-    // Client info (set during initialization)
     client_info: ?types.Implementation = null,
     client_capabilities: ?types.ClientCapabilities = null,
-
-    // Transport
     transport: ?transport_mod.Transport = null,
     stdio_transport: ?*transport_mod.StdioTransport = null,
-
-    // Request ID counter
     next_request_id: i64 = 1,
-
-    // Pending requests (for tracking responses)
     pending_requests: std.AutoHashMap(i64, PendingRequest),
-
-    // Log level
     log_level: protocol.LogLevel = .info,
 
     const Self = @This();
 
-    /// Pending request information
     pub const PendingRequest = struct {
         method: []const u8,
         timestamp: i64,
@@ -118,26 +90,26 @@ pub const Server = struct {
     /// Add a tool to the server
     pub fn addTool(self: *Self, tool: tools_mod.Tool) !void {
         try self.tools.put(tool.name, tool);
-        // Update capabilities
         self.capabilities.tools = .{ .listChanged = true };
     }
 
     /// Add a resource to the server
     pub fn addResource(self: *Self, resource: resources_mod.Resource) !void {
         try self.resources.put(resource.uri, resource);
-        // Update capabilities
         self.capabilities.resources = .{ .listChanged = true, .subscribe = false };
     }
 
     /// Add a resource template to the server
     pub fn addResourceTemplate(self: *Self, template: resources_mod.ResourceTemplate) !void {
         try self.resource_templates.put(template.name, template);
+        if (self.capabilities.resources == null) {
+            self.capabilities.resources = .{};
+        }
     }
 
     /// Add a prompt to the server
     pub fn addPrompt(self: *Self, prompt: prompts_mod.Prompt) !void {
         try self.prompts.put(prompt.name, prompt);
-        // Update capabilities
         self.capabilities.prompts = .{ .listChanged = true };
     }
 
@@ -149,6 +121,19 @@ pub const Server = struct {
     /// Enable completion capability
     pub fn enableCompletions(self: *Self) void {
         self.capabilities.completions = .{};
+    }
+
+    /// Enable task-augmented tools/call support
+    pub fn enableTasks(self: *Self) void {
+        self.capabilities.tasks = .{
+            .list = .{},
+            .cancel = .{},
+            .requests = .{
+                .tools = .{
+                    .call = .{},
+                },
+            },
+        };
     }
 
     /// Options for running the server
@@ -191,7 +176,6 @@ pub const Server = struct {
     /// Main message processing loop
     fn messageLoop(self: *Self) !void {
         while (self.state != .stopped and self.state != .shutting_down) {
-            // Receive next message
             const message_data = self.transport.?.receive() catch |err| {
                 switch (err) {
                     error.EndOfStream => {
@@ -206,8 +190,6 @@ pub const Server = struct {
             };
 
             if (message_data) |data| {
-                // url is required by transport and must handle its own lifetime or leak for server duration
-                // defer self.allocator.free(url);
                 try self.handleMessage(data);
             }
         }
@@ -217,9 +199,7 @@ pub const Server = struct {
 
     /// Handle an incoming message
     fn handleMessage(self: *Self, data: []const u8) !void {
-        // Parse the JSON-RPC message
         const parsed_message = jsonrpc.parseMessage(self.allocator, data) catch {
-            // Send parse error response
             const error_response = jsonrpc.createParseError(null);
             try self.sendResponse(.{ .error_response = error_response });
             return;
@@ -236,13 +216,11 @@ pub const Server = struct {
 
     /// Handle an incoming request
     fn handleRequest(self: *Self, request: jsonrpc.Request) !void {
-        // Log request
         var buf: [256]u8 = undefined;
         if (std.fmt.bufPrint(&buf, "Received request: {s}", .{request.method})) |msg| {
             self.log(msg);
         } else |_| {}
 
-        // Check if server is initialized (except for initialize request)
         if (self.state == .uninitialized and !std.mem.eql(u8, request.method, "initialize")) {
             const error_response = jsonrpc.createErrorResponse(
                 request.id,
@@ -254,7 +232,6 @@ pub const Server = struct {
             return;
         }
 
-        // Route request to appropriate handler
         if (std.mem.eql(u8, request.method, "initialize")) {
             try self.handleInitialize(request);
         } else if (std.mem.eql(u8, request.method, "ping")) {
@@ -269,6 +246,10 @@ pub const Server = struct {
             try self.handleResourcesRead(request);
         } else if (std.mem.eql(u8, request.method, "resources/templates/list")) {
             try self.handleResourceTemplatesList(request);
+        } else if (std.mem.eql(u8, request.method, "resources/subscribe")) {
+            try self.handleSubscribe(request);
+        } else if (std.mem.eql(u8, request.method, "resources/unsubscribe")) {
+            try self.handleUnsubscribe(request);
         } else if (std.mem.eql(u8, request.method, "prompts/list")) {
             try self.handlePromptsList(request);
         } else if (std.mem.eql(u8, request.method, "prompts/get")) {
@@ -277,8 +258,15 @@ pub const Server = struct {
             try self.handleSetLogLevel(request);
         } else if (std.mem.eql(u8, request.method, "completion/complete")) {
             try self.handleCompletion(request);
+        } else if (std.mem.eql(u8, request.method, "tasks/get")) {
+            try self.handleTasksGet(request);
+        } else if (std.mem.eql(u8, request.method, "tasks/result")) {
+            try self.handleTasksResult(request);
+        } else if (std.mem.eql(u8, request.method, "tasks/list")) {
+            try self.handleTasksList(request);
+        } else if (std.mem.eql(u8, request.method, "tasks/cancel")) {
+            try self.handleTasksCancel(request);
         } else {
-            // Method not found
             const error_response = jsonrpc.createMethodNotFound(request.id, request.method);
             try self.sendResponse(.{ .error_response = error_response });
         }
@@ -288,12 +276,10 @@ pub const Server = struct {
     fn handleInitialize(self: *Self, request: jsonrpc.Request) !void {
         self.state = .initializing;
 
-        // Parse client info from params
         if (request.params) |params| {
             if (params == .object) {
                 const obj = params.object;
 
-                // Extract client info
                 if (obj.get("clientInfo")) |client_info_val| {
                     if (client_info_val == .object) {
                         const ci = client_info_val.object;
@@ -306,36 +292,47 @@ pub const Server = struct {
             }
         }
 
-        // Build response
         var result = std.json.ObjectMap.init(self.allocator);
         defer result.deinit();
 
         try result.put("protocolVersion", .{ .string = protocol.VERSION });
 
-        // Build capabilities object
         var caps = std.json.ObjectMap.init(self.allocator);
-        if (self.capabilities.tools != null) {
+        if (self.capabilities.tools) |t| {
             var tools_cap = std.json.ObjectMap.init(self.allocator);
-            try tools_cap.put("listChanged", .{ .bool = true });
+            try tools_cap.put("listChanged", .{ .bool = t.listChanged });
             try caps.put("tools", .{ .object = tools_cap });
         }
-        if (self.capabilities.resources != null) {
+        if (self.capabilities.resources) |r| {
             var res_cap = std.json.ObjectMap.init(self.allocator);
-            try res_cap.put("listChanged", .{ .bool = true });
-            try res_cap.put("subscribe", .{ .bool = false });
+            try res_cap.put("listChanged", .{ .bool = r.listChanged });
+            try res_cap.put("subscribe", .{ .bool = r.subscribe });
             try caps.put("resources", .{ .object = res_cap });
         }
-        if (self.capabilities.prompts != null) {
+        if (self.capabilities.prompts) |p| {
             var prompts_cap = std.json.ObjectMap.init(self.allocator);
-            try prompts_cap.put("listChanged", .{ .bool = true });
+            try prompts_cap.put("listChanged", .{ .bool = p.listChanged });
             try caps.put("prompts", .{ .object = prompts_cap });
         }
         if (self.capabilities.logging != null) {
             try caps.put("logging", .{ .object = std.json.ObjectMap.init(self.allocator) });
         }
+        if (self.capabilities.completions != null) {
+            try caps.put("completions", .{ .object = std.json.ObjectMap.init(self.allocator) });
+        }
+        if (self.capabilities.tasks != null) {
+            var tasks_cap = std.json.ObjectMap.init(self.allocator);
+            try tasks_cap.put("list", .{ .object = std.json.ObjectMap.init(self.allocator) });
+            try tasks_cap.put("cancel", .{ .object = std.json.ObjectMap.init(self.allocator) });
+            var requests_cap = std.json.ObjectMap.init(self.allocator);
+            var tools_req = std.json.ObjectMap.init(self.allocator);
+            try tools_req.put("call", .{ .object = std.json.ObjectMap.init(self.allocator) });
+            try requests_cap.put("tools", .{ .object = tools_req });
+            try tasks_cap.put("requests", .{ .object = requests_cap });
+            try caps.put("tasks", .{ .object = tasks_cap });
+        }
         try result.put("capabilities", .{ .object = caps });
 
-        // Build server info
         var server_info = std.json.ObjectMap.init(self.allocator);
         try server_info.put("name", .{ .string = self.config.name });
         try server_info.put("version", .{ .string = self.config.version });
@@ -344,6 +341,9 @@ pub const Server = struct {
         }
         if (self.config.description) |d| {
             try server_info.put("description", .{ .string = d });
+        }
+        if (self.config.websiteUrl) |u| {
+            try server_info.put("websiteUrl", .{ .string = u });
         }
         try result.put("serverInfo", .{ .object = server_info });
 
@@ -379,10 +379,27 @@ pub const Server = struct {
                 try tool_obj.put("title", .{ .string = t });
             }
 
-            // Add input schema
             var input_schema = std.json.ObjectMap.init(self.allocator);
             try input_schema.put("type", .{ .string = "object" });
             try tool_obj.put("inputSchema", .{ .object = input_schema });
+
+            if (entry.value_ptr.annotations) |ann| {
+                var ann_obj = std.json.ObjectMap.init(self.allocator);
+                if (ann.title) |t| try ann_obj.put("title", .{ .string = t });
+                try ann_obj.put("readOnlyHint", .{ .bool = ann.readOnlyHint });
+                try ann_obj.put("destructiveHint", .{ .bool = ann.destructiveHint });
+                try ann_obj.put("idempotentHint", .{ .bool = ann.idempotentHint });
+                try ann_obj.put("openWorldHint", .{ .bool = ann.openWorldHint });
+                try tool_obj.put("annotations", .{ .object = ann_obj });
+            }
+
+            if (entry.value_ptr.execution) |exec| {
+                var exec_obj = std.json.ObjectMap.init(self.allocator);
+                if (exec.taskSupport) |ts| {
+                    try exec_obj.put("taskSupport", .{ .string = ts });
+                }
+                try tool_obj.put("execution", .{ .object = exec_obj });
+            }
 
             try tools_array.append(.{ .object = tool_obj });
         }
@@ -396,7 +413,6 @@ pub const Server = struct {
 
     /// Handle tools/call request
     fn handleToolsCall(self: *Self, request: jsonrpc.Request) !void {
-        // Parse tool name and arguments from params
         var tool_name: []const u8 = "";
         var arguments: ?std.json.Value = null;
 
@@ -411,11 +427,8 @@ pub const Server = struct {
             }
         }
 
-        // Find the tool
         if (self.tools.get(tool_name)) |tool| {
-            // Execute the tool
             const tool_result = tool.handler(self.allocator, arguments) catch |err| {
-                // Return error result
                 var content_array = std.json.Array.init(self.allocator);
                 var text_obj = std.json.ObjectMap.init(self.allocator);
                 try text_obj.put("type", .{ .string = "text" });
@@ -431,7 +444,6 @@ pub const Server = struct {
                 return;
             };
 
-            // Build success response
             var content_array = std.json.Array.init(self.allocator);
             for (tool_result.content) |content_item| {
                 var item_obj = std.json.ObjectMap.init(self.allocator);
@@ -445,9 +457,26 @@ pub const Server = struct {
                         try item_obj.put("data", .{ .string = img.data });
                         try item_obj.put("mimeType", .{ .string = img.mimeType });
                     },
+                    .audio => |aud| {
+                        try item_obj.put("type", .{ .string = "audio" });
+                        try item_obj.put("data", .{ .string = aud.data });
+                        try item_obj.put("mimeType", .{ .string = aud.mimeType });
+                    },
+                    .resource_link => |link| {
+                        try item_obj.put("type", .{ .string = "resource_link" });
+                        try item_obj.put("uri", .{ .string = link.uri });
+                        try item_obj.put("name", .{ .string = link.name });
+                        if (link.title) |t| try item_obj.put("title", .{ .string = t });
+                        if (link.description) |d| try item_obj.put("description", .{ .string = d });
+                        if (link.mimeType) |m| try item_obj.put("mimeType", .{ .string = m });
+                    },
                     .resource => |res| {
                         try item_obj.put("type", .{ .string = "resource" });
-                        try item_obj.put("uri", .{ .string = res.resource.uri });
+                        var res_obj = std.json.ObjectMap.init(self.allocator);
+                        try res_obj.put("uri", .{ .string = res.resource.uri });
+                        if (res.resource.text) |text| try res_obj.put("text", .{ .string = text });
+                        if (res.resource.mimeType) |mime| try res_obj.put("mimeType", .{ .string = mime });
+                        try item_obj.put("resource", .{ .object = res_obj });
                     },
                 }
                 try content_array.append(.{ .object = item_obj });
@@ -456,11 +485,13 @@ pub const Server = struct {
             var result = std.json.ObjectMap.init(self.allocator);
             try result.put("content", .{ .array = content_array });
             try result.put("isError", .{ .bool = tool_result.is_error });
+            if (tool_result.structuredContent) |sc| {
+                try result.put("structuredContent", sc);
+            }
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
             try self.sendResponse(.{ .response = response });
         } else {
-            // Tool not found
             const error_response = jsonrpc.createInvalidParams(request.id, "Tool not found");
             try self.sendResponse(.{ .error_response = error_response });
         }
@@ -475,11 +506,17 @@ pub const Server = struct {
             var resource_obj = std.json.ObjectMap.init(self.allocator);
             try resource_obj.put("uri", .{ .string = entry.value_ptr.uri });
             try resource_obj.put("name", .{ .string = entry.value_ptr.name });
+            if (entry.value_ptr.title) |t| {
+                try resource_obj.put("title", .{ .string = t });
+            }
             if (entry.value_ptr.description) |desc| {
                 try resource_obj.put("description", .{ .string = desc });
             }
             if (entry.value_ptr.mimeType) |mime| {
                 try resource_obj.put("mimeType", .{ .string = mime });
+            }
+            if (entry.value_ptr.size) |s| {
+                try resource_obj.put("size", .{ .integer = @intCast(s) });
             }
             try resources_array.append(.{ .object = resource_obj });
         }
@@ -518,6 +555,9 @@ pub const Server = struct {
             if (content.text) |text| {
                 try content_obj.put("text", .{ .string = text });
             }
+            if (content.blob) |blob| {
+                try content_obj.put("blob", .{ .string = blob });
+            }
             if (content.mimeType) |mime| {
                 try content_obj.put("mimeType", .{ .string = mime });
             }
@@ -543,6 +583,9 @@ pub const Server = struct {
             var template_obj = std.json.ObjectMap.init(self.allocator);
             try template_obj.put("uriTemplate", .{ .string = entry.value_ptr.uriTemplate });
             try template_obj.put("name", .{ .string = entry.value_ptr.name });
+            if (entry.value_ptr.title) |t| {
+                try template_obj.put("title", .{ .string = t });
+            }
             if (entry.value_ptr.description) |desc| {
                 try template_obj.put("description", .{ .string = desc });
             }
@@ -555,6 +598,24 @@ pub const Server = struct {
         var result = std.json.ObjectMap.init(self.allocator);
         try result.put("resourceTemplates", .{ .array = templates_array });
 
+        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        try self.sendResponse(.{ .response = response });
+    }
+
+    /// Handle resources/subscribe request
+    fn handleSubscribe(self: *Self, request: jsonrpc.Request) !void {
+        _ = request.params;
+        var result = std.json.ObjectMap.init(self.allocator);
+        defer result.deinit();
+        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        try self.sendResponse(.{ .response = response });
+    }
+
+    /// Handle resources/unsubscribe request
+    fn handleUnsubscribe(self: *Self, request: jsonrpc.Request) !void {
+        _ = request.params;
+        var result = std.json.ObjectMap.init(self.allocator);
+        defer result.deinit();
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
     }
@@ -574,12 +635,14 @@ pub const Server = struct {
                 try prompt_obj.put("title", .{ .string = t });
             }
 
-            // Add arguments if present
             if (entry.value_ptr.arguments) |args| {
                 var args_array = std.json.Array.init(self.allocator);
                 for (args) |arg| {
                     var arg_obj = std.json.ObjectMap.init(self.allocator);
                     try arg_obj.put("name", .{ .string = arg.name });
+                    if (arg.title) |t| {
+                        try arg_obj.put("title", .{ .string = t });
+                    }
                     if (arg.description) |d| {
                         try arg_obj.put("description", .{ .string = d });
                     }
@@ -625,10 +688,36 @@ pub const Server = struct {
             var messages_array = std.json.Array.init(self.allocator);
             for (messages) |msg| {
                 var msg_obj = std.json.ObjectMap.init(self.allocator);
-                try msg_obj.put("role", .{ .string = msg.role });
+                try msg_obj.put("role", .{ .string = msg.role.toString() });
                 var content_obj = std.json.ObjectMap.init(self.allocator);
-                try content_obj.put("type", .{ .string = "text" });
-                try content_obj.put("text", .{ .string = msg.content.asText() orelse "" });
+                switch (msg.content) {
+                    .text => |text| {
+                        try content_obj.put("type", .{ .string = "text" });
+                        try content_obj.put("text", .{ .string = text.text });
+                    },
+                    .image => |img| {
+                        try content_obj.put("type", .{ .string = "image" });
+                        try content_obj.put("data", .{ .string = img.data });
+                        try content_obj.put("mimeType", .{ .string = img.mimeType });
+                    },
+                    .audio => |aud| {
+                        try content_obj.put("type", .{ .string = "audio" });
+                        try content_obj.put("data", .{ .string = aud.data });
+                        try content_obj.put("mimeType", .{ .string = aud.mimeType });
+                    },
+                    .resource_link => |link| {
+                        try content_obj.put("type", .{ .string = "resource_link" });
+                        try content_obj.put("uri", .{ .string = link.uri });
+                        try content_obj.put("name", .{ .string = link.name });
+                    },
+                    .resource => |res| {
+                        try content_obj.put("type", .{ .string = "resource" });
+                        var res_inner = std.json.ObjectMap.init(self.allocator);
+                        try res_inner.put("uri", .{ .string = res.resource.uri });
+                        if (res.resource.text) |text| try res_inner.put("text", .{ .string = text });
+                        try content_obj.put("resource", .{ .object = res_inner });
+                    },
+                }
                 try msg_obj.put("content", .{ .object = content_obj });
                 try messages_array.append(.{ .object = msg_obj });
             }
@@ -658,10 +747,18 @@ pub const Server = struct {
                             self.log_level = .debug;
                         } else if (std.mem.eql(u8, level_str, "info")) {
                             self.log_level = .info;
+                        } else if (std.mem.eql(u8, level_str, "notice")) {
+                            self.log_level = .notice;
                         } else if (std.mem.eql(u8, level_str, "warning")) {
                             self.log_level = .warning;
                         } else if (std.mem.eql(u8, level_str, "error")) {
                             self.log_level = .@"error";
+                        } else if (std.mem.eql(u8, level_str, "critical")) {
+                            self.log_level = .critical;
+                        } else if (std.mem.eql(u8, level_str, "alert")) {
+                            self.log_level = .alert;
+                        } else if (std.mem.eql(u8, level_str, "emergency")) {
+                            self.log_level = .emergency;
                         }
                     }
                 }
@@ -675,9 +772,7 @@ pub const Server = struct {
 
     /// Handle completion/complete request
     fn handleCompletion(self: *Self, request: jsonrpc.Request) !void {
-        // Return empty completion for now
         var completion = std.json.ObjectMap.init(self.allocator);
-
         const values_array = std.json.Array.init(self.allocator);
         try completion.put("values", .{ .array = values_array });
         try completion.put("hasMore", .{ .bool = false });
@@ -689,9 +784,36 @@ pub const Server = struct {
         try self.sendResponse(.{ .response = response });
     }
 
-    // ========================================================================
-    // Notification Handling
-    // ========================================================================
+    /// Handle tasks/get request
+    fn handleTasksGet(self: *Self, request: jsonrpc.Request) !void {
+        _ = request.params;
+        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/get");
+        try self.sendResponse(.{ .error_response = error_response });
+    }
+
+    /// Handle tasks/result request
+    fn handleTasksResult(self: *Self, request: jsonrpc.Request) !void {
+        _ = request.params;
+        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/result");
+        try self.sendResponse(.{ .error_response = error_response });
+    }
+
+    /// Handle tasks/list request
+    fn handleTasksList(self: *Self, request: jsonrpc.Request) !void {
+        var result = std.json.ObjectMap.init(self.allocator);
+        const tasks_array = std.json.Array.init(self.allocator);
+        try result.put("tasks", .{ .array = tasks_array });
+
+        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        try self.sendResponse(.{ .response = response });
+    }
+
+    /// Handle tasks/cancel request
+    fn handleTasksCancel(self: *Self, request: jsonrpc.Request) !void {
+        _ = request.params;
+        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/cancel");
+        try self.sendResponse(.{ .error_response = error_response });
+    }
 
     /// Handle incoming notifications
     fn handleNotification(self: *Self, notification: jsonrpc.Notification) !void {
@@ -699,24 +821,23 @@ pub const Server = struct {
             self.state = .ready;
             self.log("Server initialized and ready");
         } else if (std.mem.eql(u8, notification.method, "notifications/cancelled")) {
-            // Handle cancellation
             if (notification.params) |params| {
                 if (params == .object) {
                     if (params.object.get("requestId")) |req_id| {
                         _ = req_id;
-                        // Cancel the request if possible
                     }
                 }
             }
+        } else if (std.mem.eql(u8, notification.method, "notifications/roots/list_changed")) {
+            self.log("Roots list changed");
         }
     }
 
     /// Handle incoming response to a request we sent
     fn handleResponse(self: *Self, response: jsonrpc.Response) void {
-        // Find and remove pending request
         const id = switch (response.id) {
             .integer => |i| i,
-            .string => return, // We only use integer IDs
+            .string => return,
         };
         _ = self.pending_requests.remove(id);
     }
@@ -732,10 +853,6 @@ pub const Server = struct {
         }
         self.logError(err.@"error".message);
     }
-
-    // ========================================================================
-    // Server-initiated Messages
-    // ========================================================================
 
     /// Send a notification to the client
     pub fn sendNotification(self: *Self, method: []const u8, params: ?std.json.Value) !void {
@@ -754,6 +871,20 @@ pub const Server = struct {
         try self.sendNotification("notifications/message", .{ .object = params });
     }
 
+    /// Send a progress notification
+    pub fn sendProgress(self: *Self, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void {
+        var params = std.json.ObjectMap.init(self.allocator);
+        try params.put("progressToken", token);
+        try params.put("progress", .{ .float = prog });
+        if (total) |t| {
+            try params.put("total", .{ .float = t });
+        }
+        if (message) |m| {
+            try params.put("message", .{ .string = m });
+        }
+        try self.sendNotification("notifications/progress", .{ .object = params });
+    }
+
     /// Notify clients that tools have changed
     pub fn notifyToolsChanged(self: *Self) !void {
         try self.sendNotification("notifications/tools/list_changed", null);
@@ -764,33 +895,32 @@ pub const Server = struct {
         try self.sendNotification("notifications/resources/list_changed", null);
     }
 
+    /// Notify clients that a resource has been updated
+    pub fn notifyResourceUpdated(self: *Self, uri: []const u8) !void {
+        var params = std.json.ObjectMap.init(self.allocator);
+        try params.put("uri", .{ .string = uri });
+        try self.sendNotification("notifications/resources/updated", .{ .object = params });
+    }
+
     /// Notify clients that prompts have changed
     pub fn notifyPromptsChanged(self: *Self) !void {
         try self.sendNotification("notifications/prompts/list_changed", null);
     }
-
-    // ========================================================================
-    // Transport
-    // ========================================================================
 
     /// Send a response message
     fn sendResponse(self: *Self, message: jsonrpc.Message) !void {
         if (self.transport) |t| {
             const json = jsonrpc.serializeMessage(self.allocator, message) catch {
                 self.logError("Failed to serialize response");
-                return; // Log but don't crash - response is lost but server continues
+                return;
             };
             defer self.allocator.free(json);
             t.send(json) catch {
                 self.logError("Failed to send response");
-                return; // Log but don't crash - response is lost but server continues
+                return;
             };
         }
     }
-
-    // ========================================================================
-    // Logging (to stderr for STDIO transport)
-    // ========================================================================
 
     fn log(self: *Self, message: []const u8) void {
         if (self.stdio_transport) |t| {
@@ -806,10 +936,6 @@ pub const Server = struct {
         }
     }
 };
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 test "Server initialization" {
     var server = Server.init(.{
@@ -843,4 +969,64 @@ test "Server add tool" {
 
     try server.addTool(tool);
     try std.testing.expect(server.tools.contains("test_tool"));
+    try std.testing.expect(server.capabilities.tools != null);
+}
+
+test "Server add resource" {
+    var server = Server.init(.{
+        .name = "test-server",
+        .version = "1.0.0",
+        .allocator = std.testing.allocator,
+    });
+    defer server.deinit();
+
+    try server.addResource(.{
+        .uri = "file:///test",
+        .name = "Test",
+        .handler = struct {
+            fn handler(_: std.mem.Allocator, uri: []const u8) !resources_mod.ResourceContent {
+                return .{ .uri = uri };
+            }
+        }.handler,
+    });
+    try std.testing.expect(server.resources.contains("file:///test"));
+    try std.testing.expect(server.capabilities.resources != null);
+}
+
+test "Server add prompt" {
+    var server = Server.init(.{
+        .name = "test-server",
+        .version = "1.0.0",
+        .allocator = std.testing.allocator,
+    });
+    defer server.deinit();
+
+    try server.addPrompt(.{
+        .name = "test_prompt",
+        .description = "A test prompt",
+        .handler = struct {
+            fn handler(_: std.mem.Allocator, _: ?std.json.Value) ![]const prompts_mod.PromptMessage {
+                return &.{};
+            }
+        }.handler,
+    });
+    try std.testing.expect(server.prompts.contains("test_prompt"));
+    try std.testing.expect(server.capabilities.prompts != null);
+}
+
+test "Server enable capabilities" {
+    var server = Server.init(.{
+        .name = "test-server",
+        .version = "1.0.0",
+        .allocator = std.testing.allocator,
+    });
+    defer server.deinit();
+
+    server.enableLogging();
+    server.enableCompletions();
+    server.enableTasks();
+
+    try std.testing.expect(server.capabilities.logging != null);
+    try std.testing.expect(server.capabilities.completions != null);
+    try std.testing.expect(server.capabilities.tasks != null);
 }

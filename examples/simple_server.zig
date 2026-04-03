@@ -36,6 +36,11 @@ fn run() !void {
         .name = "greet",
         .description = "Greet a user by name",
         .title = "Greeting Tool",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = greetHandler,
     });
 
@@ -44,6 +49,11 @@ fn run() !void {
         .name = "echo",
         .description = "Echo back the input message",
         .title = "Echo Tool",
+        .annotations = .{
+            .readOnlyHint = true,
+            .idempotentHint = true,
+            .destructiveHint = false,
+        },
         .handler = echoHandler,
     });
 
@@ -69,6 +79,7 @@ fn run() !void {
 
     // Enable logging
     server.enableLogging();
+    server.enableTasks();
 
     // Run the server
     try server.run(.stdio);
@@ -88,7 +99,13 @@ fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.T
 
 fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
-    return mcp.tools.textResult(allocator, message) catch return mcp.tools.ToolError.OutOfMemory;
+    
+    // Demonstrate structured result
+    var obj = std.json.ObjectMap.init(allocator);
+    obj.put("echo", .{ .string = message }) catch {};
+    obj.put("timestamp", .{ .integer = std.time.timestamp() }) catch {};
+    
+    return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
 fn aboutHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {

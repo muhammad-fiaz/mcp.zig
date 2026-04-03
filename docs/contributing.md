@@ -28,6 +28,10 @@ zig build
 
 ```bash
 zig build test
+# Cross-target compile validation (without executing foreign binaries)
+zig build test-compile -Dtarget=x86_64-linux
+zig build test-compile -Dtarget=x86_64-windows
+zig build test-compile -Dtarget=x86_64-macos
 ```
 
 ### 4. Make Your Changes
@@ -116,7 +120,7 @@ test(client): add connection tests
 
 ### Prerequisites
 
-- Zig 0.15.0+
+- Zig 0.15.2+
 - Git
 - (Optional) Node.js 20+ for docs
 
