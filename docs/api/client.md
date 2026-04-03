@@ -207,7 +207,7 @@ Connect to a server using the STDIO transport.
 pub fn connectHttp(self: *Client, url: []const u8) !void
 ```
 
-Connect to a server via HTTP/SSE.
+Connect to a server via HTTP transport.
 
 ### `Client.setAuthorizationToken`
 

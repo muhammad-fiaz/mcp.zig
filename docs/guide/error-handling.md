@@ -47,7 +47,7 @@ fn myToolHandler(
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
     // Missing required argument
-    const input = mcp.tools.getStringArg(args, "input") orelse {
+    const input = mcp.tools.getString(args, "input") orelse {
         return error.InvalidArguments;
     };
 
@@ -61,7 +61,7 @@ fn myToolHandler(
         return error.OutOfMemory;
     };
 
-    return .{ .content = &.{mcp.Content.createText(output)} };
+    return mcp.tools.textResult(allocator, output);
 }
 ```
 
@@ -79,7 +79,7 @@ return error.InvalidArguments;
 
 ```zig
 return .{
-    .content = &.{mcp.Content.createText("File not found")},
+    .content = &.{.{ .text = .{ .text = "File not found" } }},
     .isError = true,
 };
 ```
@@ -208,9 +208,9 @@ fn processFileHandler(
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
     // 1. Validate arguments
-    const path = mcp.tools.getStringArg(args, "path") orelse {
+    const path = mcp.tools.getString(args, "path") orelse {
         return .{
-            .content = &.{mcp.Content.createText("Error: 'path' argument is required")},
+            .content = &.{.{ .text = .{ .text = "Error: 'path' argument is required" } }},
             .isError = true,
         };
     };
@@ -218,7 +218,7 @@ fn processFileHandler(
     // 2. Check file exists
     std.fs.accessAbsolute(path, .{}) catch {
         return .{
-            .content = &.{mcp.Content.createText("Error: File not found at specified path")},
+            .content = &.{.{ .text = .{ .text = "Error: File not found at specified path" } }},
             .isError = true,
         };
     };
@@ -235,7 +235,7 @@ fn processFileHandler(
             else => "Error: Failed to read file",
         };
         return .{
-            .content = &.{mcp.Content.createText(message)},
+            .content = &.{.{ .text = .{ .text = message } }},
             .isError = true,
         };
     };
@@ -249,7 +249,7 @@ fn processFileHandler(
     );
 
     return .{
-        .content = &.{mcp.Content.createText(result)},
+        .content = &.{.{ .text = .{ .text = result } }},
     };
 }
 ```

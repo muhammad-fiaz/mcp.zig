@@ -30,7 +30,7 @@ fn greetHandler(
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
-    const name = mcp.tools.getStringArg(args, "name") orelse "World";
+    const name = mcp.tools.getString(args, "name") orelse "World";
 
     const message = try std.fmt.allocPrint(
         allocator,
@@ -38,9 +38,7 @@ fn greetHandler(
         .{name},
     );
 
-    return mcp.tools.ToolResult{
-        .content = &.{mcp.Content.createText(message)},
-    };
+    return mcp.tools.textResult(allocator, message);
 }
 ```
 
@@ -59,7 +57,7 @@ try server.addTool(.{
     .name = "greet",
     .description = "Greet a person",
     .handler = greetHandler,
-    .input_schema = try schema.build(),
+    .inputSchema = try schema.build(),
 });
 ```
 
@@ -68,7 +66,7 @@ try server.addTool(.{
 ### Get String Argument
 
 ```zig
-const value = mcp.tools.getStringArg(args, "key");
+const value = mcp.tools.getString(args, "key");
 if (value) |v| {
     // Use v
 }
@@ -77,7 +75,7 @@ if (value) |v| {
 ### Get Number Argument
 
 ```zig
-const value = mcp.tools.getNumberArg(args, "key");
+const value = mcp.tools.getFloat(args, "key");
 if (value) |v| {
     // Use v (f64)
 }
@@ -86,7 +84,7 @@ if (value) |v| {
 ### Get Boolean Argument
 
 ```zig
-const value = mcp.tools.getBoolArg(args, "key");
+const value = mcp.tools.getBoolean(args, "key");
 if (value) |v| {
     // Use v
 }
@@ -97,38 +95,29 @@ if (value) |v| {
 ### Text Content
 
 ```zig
-return .{
-    .content = &.{mcp.Content.createText("Hello, World!")},
-};
+return mcp.tools.textResult(allocator, "Hello, World!");
 ```
 
 ### Image Content
 
 ```zig
-return .{
-    .content = &.{mcp.Content.createImage(base64_data, "image/png")},
-};
+return mcp.tools.imageResult(allocator, base64_data, "image/png");
 ```
 
 ### Multiple Content Items
 
 ```zig
-return .{
-    .content = &.{
-        mcp.Content.createText("Result:"),
-        mcp.Content.createText("Item 1"),
-        mcp.Content.createText("Item 2"),
-    },
-};
+const content = try allocator.alloc(mcp.types.ContentBlock, 3);
+content[0] = .{ .text = .{ .text = "Result:" } };
+content[1] = .{ .text = .{ .text = "Item 1" } };
+content[2] = .{ .text = .{ .text = "Item 2" } };
+return .{ .content = content };
 ```
 
 ### Indicating Errors
 
 ```zig
-return .{
-    .content = &.{mcp.Content.createText("Error occurred")},
-    .isError = true,
-};
+return mcp.tools.errorResult(allocator, "Error occurred");
 ```
 
 ## Error Handling
@@ -201,15 +190,15 @@ fn calculateHandler(
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
-    const operation = mcp.tools.getStringArg(args, "operation") orelse {
+    const operation = mcp.tools.getString(args, "operation") orelse {
         return error.InvalidArguments;
     };
 
-    const a = mcp.tools.getNumberArg(args, "a") orelse {
+    const a = mcp.tools.getFloat(args, "a") orelse {
         return error.InvalidArguments;
     };
 
-    const b = mcp.tools.getNumberArg(args, "b") orelse {
+    const b = mcp.tools.getFloat(args, "b") orelse {
         return error.InvalidArguments;
     };
 
@@ -230,9 +219,7 @@ fn calculateHandler(
         .{result},
     );
 
-    return .{
-        .content = &.{mcp.Content.createText(message)},
-    };
+    return mcp.tools.textResult(allocator, message);
 }
 ```
 

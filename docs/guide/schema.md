@@ -56,7 +56,7 @@ _ = try schema.addEnum(
 );
 
 // Build the schema
-const input_schema = try schema.build();
+const inputSchema = try schema.build();
 ```
 
 ### Using with Tools
@@ -66,7 +66,7 @@ try server.addTool(.{
     .name = "create_user",
     .description = "Create a new user",
     .handler = createUserHandler,
-    .input_schema = try schema.build(),
+    .inputSchema = try schema.build(),
 });
 ```
 
@@ -140,8 +140,6 @@ pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
         .allocator = allocator,
     });
 
-    server.enableTools();
-
     // Build input schema
     var schema = mcp.schema.InputSchemaBuilder.init(allocator);
 
@@ -160,7 +158,7 @@ pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
         .name = "register_user",
         .description = "Register a new user account",
         .handler = registerHandler,
-        .input_schema = try schema.build(),
+        .inputSchema = try schema.build(),
     });
 
     return server;
@@ -171,15 +169,15 @@ fn registerHandler(
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
     // Arguments are already validated against schema by client
-    const username = mcp.tools.getStringArg(args, "username") orelse {
+    const username = mcp.tools.getString(args, "username") orelse {
         return error.InvalidArguments;
     };
 
-    const email = mcp.tools.getStringArg(args, "email") orelse {
+    const email = mcp.tools.getString(args, "email") orelse {
         return error.InvalidArguments;
     };
 
-    const plan = mcp.tools.getStringArg(args, "plan") orelse "free";
+    const plan = mcp.tools.getString(args, "plan") orelse "free";
 
     const message = try std.fmt.allocPrint(
         allocator,
@@ -187,7 +185,7 @@ fn registerHandler(
         .{ username, email, plan },
     );
 
-    return .{ .content = &.{mcp.Content.createText(message)} };
+    return mcp.tools.textResult(allocator, message);
 }
 ```
 

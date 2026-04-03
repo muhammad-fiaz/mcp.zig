@@ -128,9 +128,6 @@ fn run() !void {
     });
     defer server.deinit();
 
-    // Enable tools capability
-    server.enableTools();
-
     // Add a tool
     try server.addTool(.{
         .name = "greet",

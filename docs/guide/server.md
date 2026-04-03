@@ -157,9 +157,7 @@ fn echoHandler(
     const text = mcp.tools.getString(args, "text") orelse "No input";
     const result = try std.fmt.allocPrint(allocator, "Echo: {s}", .{text});
 
-    return .{
-        .content = &.{mcp.Content.createText(result)},
-    };
+    return mcp.tools.textResult(allocator, result);
 }
 ```
 

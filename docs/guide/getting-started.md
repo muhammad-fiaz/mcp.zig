@@ -96,9 +96,7 @@ fn helloHandler(
 
     const message = try std.fmt.allocPrint(allocator, "Hello, {s}!", .{name});
 
-    return mcp.tools.ToolResult{
-        .content = &.{mcp.Content.createText(message)},
-    };
+    return mcp.tools.textResult(allocator, message);
 }
 ```
 

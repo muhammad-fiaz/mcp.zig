@@ -130,8 +130,6 @@ pub fn main() !void {
     });
     defer server.deinit();
 
-    server.enablePrompts(true);
-
     // Simple prompt
     try server.addPrompt(.{
         .name = "explain",

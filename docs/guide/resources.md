@@ -126,11 +126,8 @@ fn profileHandler(
 Enable resource subscriptions for real-time updates:
 
 ```zig
-// Enable with subscription support
-server.enableResources(true);
-
 // Resource changed notification
-try server.notifyResourceChanged("file:///data.json");
+try server.notifyResourceUpdated("file:///data.json");
 ```
 
 ## Complete Example
@@ -150,8 +147,6 @@ pub fn main() !void {
         .allocator = allocator,
     });
     defer server.deinit();
-
-    server.enableResources(true);
 
     // Static file resource
     try server.addResource(.{

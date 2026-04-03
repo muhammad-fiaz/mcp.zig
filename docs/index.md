@@ -109,9 +109,6 @@ fn run() !void {
     });
     defer server.deinit();
 
-    // Enable capabilities
-    server.enableTools();
-
     // Register a tool
     try server.addTool(.{
         .name = "greet",
