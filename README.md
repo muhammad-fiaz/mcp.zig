@@ -330,7 +330,7 @@ If you find this project helpful, consider supporting its development:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Resources
 
