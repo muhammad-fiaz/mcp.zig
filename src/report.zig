@@ -86,6 +86,8 @@ fn fetchLatestTag(allocator: std.mem.Allocator) ![]const u8 {
 /// Returns a thread handle so callers can optionally join during shutdown.
 /// Fails silently on errors (no internet, api limits, etc).
 pub fn checkForUpdates(allocator: std.mem.Allocator) ?std.Thread {
+    if (builtin.is_test) return null;
+
     update_check_mutex.lock();
     defer update_check_mutex.unlock();
 
