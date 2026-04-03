@@ -339,7 +339,7 @@ fn serializeRequestId(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), 
     }
 }
 
-fn serializeValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: std.json.Value) !void {
+pub fn serializeValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: std.json.Value) !void {
     switch (value) {
         .null => try buffer.appendSlice(allocator, "null"),
         .bool => |b| try buffer.appendSlice(allocator, if (b) "true" else "false"),

@@ -28,8 +28,10 @@ pub const ErrorCode = enum(i32) {
     invalid_params = -32602,
     internal_error = -32603,
     server_not_initialized = -32002,
+    url_elicitation_required = -32042,
     request_cancelled = -32800,
     content_too_large = -32801,
+    user_rejected = -1,
 
     /// Returns the integer value of this error code.
     pub fn toInt(self: ErrorCode) i32 {
@@ -45,8 +47,10 @@ pub const ErrorCode = enum(i32) {
             .invalid_params => "Invalid params",
             .internal_error => "Internal error",
             .server_not_initialized => "Server not initialized",
+            .url_elicitation_required => "URL Elicitation Required",
             .request_cancelled => "Request cancelled",
             .content_too_large => "Content too large",
+            .user_rejected => "User rejected",
         };
     }
 };

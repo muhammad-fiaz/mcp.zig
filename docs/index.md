@@ -82,7 +82,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Or specific release
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/v0.0.2.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/v0.0.3.tar.gz
 ```
 
 ### Create a Simple Server

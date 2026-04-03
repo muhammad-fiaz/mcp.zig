@@ -1,4 +1,4 @@
-//! MCP Roots Module
+//! MCP Roots Module (Spec 2025-11-25)
 //!
 //! Provides types and utilities for filesystem roots. Roots define the
 //! boundaries within which a server may operate on the client's filesystem,
@@ -12,6 +12,7 @@ pub const Root = types.Root;
 
 /// Result of listing available roots.
 pub const RootsListResult = struct {
+    _meta: ?std.json.Value = null,
     roots: []const Root,
 };
 
@@ -22,18 +23,30 @@ pub fn fileRoot(path: []const u8, name: ?[]const u8) Root {
     return .{ .uri = uri, .name = name };
 }
 
+/// Creates a root with a pre-formed URI.
+pub fn root(uri: []const u8, name: ?[]const u8) Root {
+    return .{ .uri = uri, .name = name };
+}
+
 /// Validates that a URI is a valid root URI (file:// scheme).
 pub fn isValidRootUri(uri: []const u8) bool {
     return std.mem.startsWith(u8, uri, "file://");
 }
 
 test "fileRoot" {
-    const root = fileRoot("/home/user/project", "Project");
-    try std.testing.expect(std.mem.startsWith(u8, root.uri, "file://"));
-    try std.testing.expectEqualStrings("Project", root.name.?);
+    const r = fileRoot("/home/user/project", "Project");
+    try std.testing.expect(std.mem.startsWith(u8, r.uri, "file://"));
+    try std.testing.expectEqualStrings("Project", r.name.?);
+}
+
+test "root" {
+    const r = root("file:///tmp", "Temp");
+    try std.testing.expectEqualStrings("file:///tmp", r.uri);
+    try std.testing.expectEqualStrings("Temp", r.name.?);
 }
 
 test "isValidRootUri" {
     try std.testing.expect(isValidRootUri("file:///home/user"));
     try std.testing.expect(!isValidRootUri("http://example.com"));
+    try std.testing.expect(!isValidRootUri(""));
 }

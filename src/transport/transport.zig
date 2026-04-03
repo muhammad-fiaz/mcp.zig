@@ -177,6 +177,7 @@ pub const HttpTransport = struct {
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     session_id: ?[]const u8 = null,
+    authorization_token: ?[]const u8 = null,
     protocol_version: []const u8 = "2025-11-25",
     is_closed: bool = false,
     pending_responses: std.ArrayList([]const u8),
@@ -202,6 +203,9 @@ pub const HttpTransport = struct {
         self.pending_responses.deinit(self.allocator);
         if (self.session_id) |sid| {
             self.allocator.free(sid);
+        }
+        if (self.authorization_token) |token| {
+            self.allocator.free(token);
         }
     }
 
@@ -232,6 +236,14 @@ pub const HttpTransport = struct {
             self.allocator.free(old);
         }
         self.session_id = try self.allocator.dupe(u8, session_id);
+    }
+
+    /// Sets the authorization token for Bearer auth (OAuth 2.1).
+    pub fn setAuthorizationToken(self: *Self, token: []const u8) !void {
+        if (self.authorization_token) |old| {
+            self.allocator.free(old);
+        }
+        self.authorization_token = try self.allocator.dupe(u8, token);
     }
 
     /// Returns a Transport interface for this HTTP transport.
@@ -284,6 +296,9 @@ pub fn createTransport(
             const url = options.url orelse return error.MissingUrl;
             const http = try allocator.create(HttpTransport);
             http.* = try HttpTransport.init(allocator, url);
+            if (options.authorization_token) |token| {
+                try http.setAuthorizationToken(token);
+            }
             return http.transport();
         },
     }
@@ -292,6 +307,7 @@ pub fn createTransport(
 /// Options for transport creation.
 pub const TransportOptions = struct {
     url: ?[]const u8 = null,
+    authorization_token: ?[]const u8 = null,
 };
 
 test "StdioTransport initialization" {

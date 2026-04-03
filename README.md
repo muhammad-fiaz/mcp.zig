@@ -4,7 +4,8 @@
 # MCP.zig
 
 <a href="https://muhammad-fiaz.github.io/mcp.zig/"><img src="https://img.shields.io/badge/docs-muhammad--fiaz.github.io-blue" alt="Documentation"></a>
-<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.15.0+-orange.svg?logo=zig" alt="Zig Version"></a>
+<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.15.2+-orange.svg?logo=zig" alt="Zig Version"></a>
+<a href="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml"><img src="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig"><img src="https://img.shields.io/github/stars/muhammad-fiaz/mcp.zig" alt="GitHub stars"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/issues"><img src="https://img.shields.io/github/issues/muhammad-fiaz/mcp.zig" alt="GitHub issues"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/pulls"><img src="https://img.shields.io/github/issues-pr/muhammad-fiaz/mcp.zig" alt="GitHub pull requests"></a>
@@ -46,7 +47,9 @@ The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-
 ## ✨ Features
 
 - 🛠️ **Server Framework** - Build MCP servers that expose tools, resources, and prompts
-- 🔌 **Client Framework** - Create MCP clients that connect to servers
+- 🔌 **Client Framework** - Create MCP clients with full support for roots, sampling, and elicitation
+- 🚀 **Tasks System** - Advanced support for long-running, interactive tasks
+- 📦 **Rich Content** - Full support for text, images, audio, and embedded resources
 - 📡 **Transport Layer** - STDIO and HTTP transport support
 - 📋 **Full Protocol Support** - JSON-RPC 2.0, capability negotiation, lifecycle management
 - ⚡ **Native Performance** - Written in pure Zig for optimal performance
@@ -72,7 +75,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Or specific release
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.2.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
 ```
 
 Then in your `build.zig`:
@@ -133,7 +136,7 @@ fn greetHandler(
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
     const message = try std.fmt.allocPrint(allocator, "Hello, {s}!", .{name});
-    return .{ .content = &.{mcp.Content.createText(message)} };
+    return mcp.tools.textResult(allocator, message);
 }
 ```
 
@@ -188,9 +191,9 @@ Run examples:
 zig build
 
 # Run examples
-./zig-out/bin/example-server
-./zig-out/bin/weather-server
-./zig-out/bin/calculator-server
+zig build run-server
+zig build run-weather
+zig build run-calc
 ```
 
 ## 🏗️ Architecture
@@ -283,6 +286,14 @@ Run the test suite:
 zig build test
 ```
 
+Compile tests for a target without executing them (useful for cross-target validation):
+
+```bash
+zig build test-compile -Dtarget=x86_64-linux
+zig build test-compile -Dtarget=x86_64-windows
+zig build test-compile -Dtarget=x86_64-macos
+```
+
 ## 📖 Protocol Version
 
 This library implements MCP protocol version **2025-11-25**.
@@ -290,6 +301,8 @@ This library implements MCP protocol version **2025-11-25**.
 | Version    | Status        |
 | ---------- | ------------- |
 | 2025-11-25 | ✅ Supported  |
+| 2025-06-18 | ✅ Compatible |
+| 2025-03-26 | ✅ Compatible |
 | 2024-11-05 | ✅ Compatible |
 
 

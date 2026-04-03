@@ -26,12 +26,14 @@ const id2: mcp.types.RequestId = .{ .string = "request-001" };
 
 ## Content
 
-### `Content`
+### `ContentBlock`
 
 ```zig
-pub const Content = union(enum) {
+pub const ContentBlock = union(enum) {
     text: TextContent,
     image: ImageContent,
+    audio: AudioContent,
+    resource_link: ResourceLink,
     resource: EmbeddedResource,
 };
 ```
@@ -42,7 +44,10 @@ Content types for tool results and messages.
 
 ```zig
 pub const TextContent = struct {
+    type: []const u8 = "text",
     text: []const u8,
+    annotations: ?Annotations = null,
+    _meta: ?std.json.Value = null,
 };
 ```
 
@@ -50,26 +55,65 @@ pub const TextContent = struct {
 
 ```zig
 pub const ImageContent = struct {
+    type: []const u8 = "image",
     data: []const u8,
     mimeType: []const u8,
+    annotations: ?Annotations = null,
+    _meta: ?std.json.Value = null,
+};
+```
+
+### `AudioContent`
+
+```zig
+pub const AudioContent = struct {
+    type: []const u8 = "audio",
+    data: []const u8,
+    mimeType: []const u8,
+    annotations: ?Annotations = null,
+    _meta: ?std.json.Value = null,
+};
+```
+
+### `ResourceLink`
+
+```zig
+pub const ResourceLink = struct {
+    type: []const u8 = "resource_link",
+    icons: ?[]const Icon = null,
+    name: []const u8,
+    title: ?[]const u8 = null,
+    uri: []const u8,
+    description: ?[]const u8 = null,
+    mimeType: ?[]const u8 = null,
+    annotations: ?Annotations = null,
+    size: ?u64 = null,
+    _meta: ?std.json.Value = null,
 };
 ```
 
 ### Helper Functions
 
-```zig
-/// Create a text content item
-pub fn createText(content: []const u8) Content
+Instead of constructing contents manually, tools should utilize the helper functions:
 
-/// Create an image content item
-pub fn createImage(data: []const u8, mimeType: []const u8) Content
+```zig
+/// Create a text result
+pub fn textResult(allocator: std.mem.Allocator, text: []const u8) !ToolResult
+
+/// Create an image result
+pub fn imageResult(allocator: std.mem.Allocator, data: []const u8, mimeType: []const u8) !ToolResult
+
+/// Create an audio result
+pub fn audioResult(allocator: std.mem.Allocator, data: []const u8, mimeType: []const u8) !ToolResult
+
+/// Create a resource link result
+pub fn resourceLinkResult(allocator: std.mem.Allocator, name: []const u8, uri: []const u8) !ToolResult
 ```
 
 **Example:**
 
 ```zig
-const text = mcp.Content.createText("Hello, World!");
-const image = mcp.Content.createImage(base64_data, "image/png");
+return mcp.tools.textResult(allocator, "Hello, World!");
 ```
 
 ---
@@ -80,8 +124,9 @@ const image = mcp.Content.createImage(base64_data, "image/png");
 
 ```zig
 pub const ToolResult = struct {
-    content: []const ContentItem,
-    isError: bool = false,
+    content: []const ContentBlock,
+    structuredContent: ?std.json.Value = null,
+    is_error: bool = false,
 };
 ```
 
@@ -250,30 +295,7 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 pub fn main() !void {
-    // Create content items
-    const text_content = mcp.Content.createText("Hello!");
-    const image_content = mcp.Content.createImage("base64...", "image/png");
-
-    // Create a root
-    const root: mcp.types.Root = .{
-        .uri = "file:///home/user/project",
-        .name = "My Project",
-    };
-
-    // Create implementation info
-    const impl: mcp.types.Implementation = .{
-        .name = "my-app",
-        .version = "1.0.0",
-    };
-
     std.debug.print("Root: {s}\n", .{root.uri});
     std.debug.print("Implementation: {s} v{s}\n", .{ impl.name, impl.version });
-
-    // Use content
-    switch (text_content) {
-        .text => |t| std.debug.print("Text: {s}\n", .{t.text}),
-        .image => |i| std.debug.print("Image: {s}\n", .{i.mimeType}),
-        else => {},
-    }
 }
 ```

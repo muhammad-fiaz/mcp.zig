@@ -1,4 +1,4 @@
-//! MCP Tools Module
+//! MCP Tools Module (Spec 2025-11-25)
 //!
 //! Provides the Tool primitive for MCP servers. Tools are executable functions
 //! that AI applications can invoke to perform actions such as file operations,
@@ -7,6 +7,7 @@
 const std = @import("std");
 const types = @import("../protocol/types.zig");
 const schema = @import("../protocol/schema.zig");
+const jsonrpc = @import("../protocol/jsonrpc.zig");
 
 /// A tool that can be exposed by an MCP server.
 pub const Tool = struct {
@@ -14,6 +15,8 @@ pub const Tool = struct {
     description: ?[]const u8 = null,
     title: ?[]const u8 = null,
     inputSchema: ?types.InputSchema = null,
+    outputSchema: ?types.OutputSchema = null,
+    execution: ?types.ToolExecution = null,
     icons: ?[]const types.Icon = null,
     annotations: ?ToolAnnotations = null,
     handler: *const fn (allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
@@ -21,17 +24,24 @@ pub const Tool = struct {
 };
 
 /// Annotations describing tool behavior characteristics for client display and safety.
+/// NOTE: all properties are hints, not guarantees.
 pub const ToolAnnotations = struct {
-    destructive: bool = false,
-    readOnly: bool = false,
-    idempotent: bool = false,
-    requiresConfirmation: bool = false,
-    cost: ?[]const u8 = null,
+    /// A human-readable title for the tool.
+    title: ?[]const u8 = null,
+    /// If true, the tool does not modify its environment. Default: false.
+    readOnlyHint: bool = false,
+    /// If true, the tool may perform destructive updates. Default: true.
+    destructiveHint: bool = true,
+    /// If true, calling repeatedly with same args has no additional effect. Default: false.
+    idempotentHint: bool = false,
+    /// If true, this tool may interact with an "open world". Default: true.
+    openWorldHint: bool = true,
 };
 
 /// Result of a tool execution.
 pub const ToolResult = struct {
-    content: []const types.ContentItem,
+    content: []const types.ContentBlock,
+    structuredContent: ?std.json.Value = null,
     is_error: bool = false,
 };
 
@@ -88,7 +98,7 @@ pub const ToolBuilder = struct {
         if (self.tool.annotations == null) {
             self.tool.annotations = .{};
         }
-        self.tool.annotations.?.destructive = true;
+        self.tool.annotations.?.destructiveHint = true;
         return self;
     }
 
@@ -97,7 +107,7 @@ pub const ToolBuilder = struct {
         if (self.tool.annotations == null) {
             self.tool.annotations = .{};
         }
-        self.tool.annotations.?.readOnly = true;
+        self.tool.annotations.?.readOnlyHint = true;
         return self;
     }
 
@@ -106,16 +116,22 @@ pub const ToolBuilder = struct {
         if (self.tool.annotations == null) {
             self.tool.annotations = .{};
         }
-        self.tool.annotations.?.idempotent = true;
+        self.tool.annotations.?.idempotentHint = true;
         return self;
     }
 
-    /// Marks the tool as requiring user confirmation before execution.
-    pub fn requireConfirmation(self: *Self) *Self {
+    /// Marks the tool as interacting with an open world.
+    pub fn openWorld(self: *Self) *Self {
         if (self.tool.annotations == null) {
             self.tool.annotations = .{};
         }
-        self.tool.annotations.?.requiresConfirmation = true;
+        self.tool.annotations.?.openWorldHint = true;
+        return self;
+    }
+
+    /// Sets task support for the tool execution.
+    pub fn taskSupport(self: *Self, support: []const u8) *Self {
+        self.tool.execution = .{ .taskSupport = support };
         return self;
     }
 
@@ -131,14 +147,14 @@ pub const ToolBuilder = struct {
 
 /// Creates a tool result containing a single text content item.
 pub fn textResult(allocator: std.mem.Allocator, text: []const u8) !ToolResult {
-    const content = try allocator.alloc(types.ContentItem, 1);
+    const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .text = .{ .text = text } };
     return .{ .content = content };
 }
 
 /// Creates an error result containing a message.
 pub fn errorResult(allocator: std.mem.Allocator, message: []const u8) !ToolResult {
-    const content = try allocator.alloc(types.ContentItem, 1);
+    const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .text = .{ .text = message } };
     return .{
         .content = content,
@@ -148,9 +164,39 @@ pub fn errorResult(allocator: std.mem.Allocator, message: []const u8) !ToolResul
 
 /// Creates a tool result containing an image.
 pub fn imageResult(allocator: std.mem.Allocator, data: []const u8, mimeType: []const u8) !ToolResult {
-    const content = try allocator.alloc(types.ContentItem, 1);
+    const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .image = .{ .data = data, .mimeType = mimeType } };
     return .{ .content = content };
+}
+
+/// Creates a tool result containing audio.
+pub fn audioResult(allocator: std.mem.Allocator, data: []const u8, mimeType: []const u8) !ToolResult {
+    const content = try allocator.alloc(types.ContentBlock, 1);
+    content[0] = .{ .audio = .{ .data = data, .mimeType = mimeType } };
+    return .{ .content = content };
+}
+
+/// Creates a tool result containing a resource link.
+pub fn resourceLinkResult(allocator: std.mem.Allocator, name: []const u8, uri: []const u8) !ToolResult {
+    const content = try allocator.alloc(types.ContentBlock, 1);
+    content[0] = .{ .resource_link = .{ .name = name, .uri = uri } };
+    return .{ .content = content };
+}
+
+/// Creates a tool result with structured JSON content and a text fallback.
+pub fn structuredResult(allocator: std.mem.Allocator, structured: std.json.Value) !ToolResult {
+    var out: std.ArrayList(u8) = .{};
+    defer out.deinit(allocator);
+    try jsonrpc.serializeValue(allocator, &out, structured);
+    const text_json = try out.toOwnedSlice(allocator);
+    
+    const content = try allocator.alloc(types.ContentBlock, 1);
+    content[0] = .{ .text = .{ .text = text_json } };
+    
+    return .{
+        .content = content,
+        .structuredContent = structured,
+    };
 }
 
 /// Extracts a string argument from tool arguments by key.
@@ -240,12 +286,11 @@ pub fn getObject(args: ?std.json.Value, key: []const u8) ?std.json.ObjectMap {
 }
 
 /// Validates a tool name according to MCP naming conventions.
-/// Names must be alphanumeric with underscores, starting with a letter.
+/// Names must be alphanumeric with underscores, hyphens, or dots. Max length 128.
 pub fn isValidToolName(name: []const u8) bool {
-    if (name.len == 0 or name.len > 64) return false;
-    if (!std.ascii.isAlphabetic(name[0])) return false;
-    for (name[1..]) |c| {
-        if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
+    if (name.len == 0 or name.len > 128) return false;
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-' and c != '.') return false;
     }
     return true;
 }
@@ -262,17 +307,30 @@ test "ToolBuilder" {
 
     try std.testing.expectEqualStrings("test_tool", tool.name);
     try std.testing.expectEqualStrings("A test tool", tool.description.?);
-    try std.testing.expect(tool.annotations.?.readOnly);
+    try std.testing.expect(tool.annotations.?.readOnlyHint);
+}
+
+test "ToolBuilder with task support" {
+    const allocator = std.testing.allocator;
+
+    var builder = ToolBuilder.init(allocator, "long_tool");
+    const tool = builder
+        .description("A long-running tool")
+        .taskSupport("optional")
+        .build();
+
+    try std.testing.expectEqualStrings("optional", tool.execution.?.taskSupport.?);
 }
 
 test "isValidToolName" {
     try std.testing.expect(isValidToolName("my_tool"));
     try std.testing.expect(isValidToolName("getThing"));
     try std.testing.expect(isValidToolName("calculate_sum_123"));
+    try std.testing.expect(isValidToolName("123tool"));
+    try std.testing.expect(isValidToolName("my-tool"));
+    try std.testing.expect(isValidToolName("domain.tool.action"));
 
     try std.testing.expect(!isValidToolName(""));
-    try std.testing.expect(!isValidToolName("123tool"));
-    try std.testing.expect(!isValidToolName("my-tool"));
     try std.testing.expect(!isValidToolName("my tool"));
 }
 

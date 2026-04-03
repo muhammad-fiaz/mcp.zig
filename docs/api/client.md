@@ -50,10 +50,10 @@ Clean up client resources.
 ### `Client.enableRoots`
 
 ```zig
-pub fn enableRoots(self: *Client) void
+pub fn enableRoots(self: *Client, listChanged: bool) void
 ```
 
-Enable the roots capability. Allows the client to provide filesystem roots to the server.
+Enable the roots capability. Allows the client to provide filesystem roots to the server. `listChanged` indicates whether the client will send notifications when roots change.
 
 ### `Client.enableSampling`
 
@@ -62,6 +62,30 @@ pub fn enableSampling(self: *Client) void
 ```
 
 Enable the sampling capability. Allows the server to request LLM completions.
+
+### `Client.enableSamplingAdvanced`
+
+```zig
+pub fn enableSamplingAdvanced(self: *Client, context: bool, tools_support: bool) void
+```
+
+Enable the sampling capability with advanced configuration (context inclusion and tool use).
+
+### `Client.enableElicitation`
+
+```zig
+pub fn enableElicitation(self: *Client) void
+```
+
+Enable the elicitation capability (both form and URL modes) for handling server-initiated user input requests.
+
+### `Client.enableTasks`
+
+```zig
+pub fn enableTasks(self: *Client) void
+```
+
+Enable the tasks capability for managing long-running operations.
 
 ---
 
@@ -166,48 +190,119 @@ pub fn main() !void {
 }
 ```
 
+## Connection Management
+
+### `Client.connectStdio`
+
+```zig
+pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
+```
+
+Connect to a server using the STDIO transport. 
+*Note: Full sub-process spawning may require platform-specific tuning in real usage. Currently stubbed in simple scenarios.*
+
+### `Client.connectHttp`
+
+```zig
+pub fn connectHttp(self: *Client, url: []const u8) !void
+```
+
+Connect to a server via HTTP/SSE.
+
+### `Client.setAuthorizationToken`
+
+```zig
+pub fn setAuthorizationToken(self: *Client, token: []const u8) !void
+```
+
+Sets the authorization token for Bearer auth (OAuth 2.1 support) before making HTTP connections. Call this before `connectHttp`.
+
+### `Client.disconnect`
+
+```zig
+pub fn disconnect(self: *Client) void
+```
+
+Disconnects from the server and closes the active transport.
+
 ---
 
-## Future API (Planned)
+## Server Queries and Interactions
 
-The following methods are planned for future releases:
-
-### `Client.connect`
+### Tools
 
 ```zig
-pub fn connect(self: *Client, options: ConnectOptions) !void
+/// Request the list of available tools
+pub fn listTools(self: *Client) !void
+
+/// Invoke a tool on the server with optional arguments
+pub fn callTool(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
 ```
 
-Connect to an MCP server.
-
-### `Client.listTools`
+### Resources
 
 ```zig
-pub fn listTools(self: *Client) ![]Tool
+/// Request the list of available resources
+pub fn listResources(self: *Client) !void
+
+/// Read a specific resource's contents by URI
+pub fn readResource(self: *Client, uri: []const u8) !void
+
+/// Request available resource templates
+pub fn listResourceTemplates(self: *Client) !void
+
+/// Subscribe to a resource for updates
+pub fn subscribeResource(self: *Client, uri: []const u8) !void
+
+/// Unsubscribe from a resource's updates
+pub fn unsubscribeResource(self: *Client, uri: []const u8) !void
 ```
 
-Get available tools from the server.
-
-### `Client.callTool`
+### Prompts
 
 ```zig
-pub fn callTool(self: *Client, name: []const u8, args: ?json.Value) !ToolResult
+/// Request the list of available prompts
+pub fn listPrompts(self: *Client) !void
+
+/// Fetch a prompt by name with optional arguments
+pub fn getPrompt(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
 ```
 
-Execute a tool on the server.
-
-### `Client.listResources`
+### Tasks
 
 ```zig
-pub fn listResources(self: *Client) ![]Resource
+/// Retrieve task status and metadata
+pub fn getTask(self: *Client, taskId: []const u8) !void
+
+/// Get the result payload of a completed task
+pub fn getTaskResult(self: *Client, taskId: []const u8) !void
+
+/// List all available tasks
+pub fn listTasks(self: *Client) !void
+
+/// Request cancellation of a running task
+pub fn cancelTask(self: *Client, taskId: []const u8) !void
 ```
 
-Get available resources from the server.
-
-### `Client.readResource`
+### Utilities
 
 ```zig
-pub fn readResource(self: *Client, uri: []const u8) ![]ResourceContent
+/// Request autocomplete suggestions for a given reference and argument
+pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !void
+
+/// Update the remote server's active log level
+pub fn setLogLevel(self: *Client, level: []const u8) !void
+
+/// Ping the server to check connection health
+pub fn ping(self: *Client) !void
 ```
 
-Read a resource from the server.
+### Notifications
+
+```zig
+/// Notify the server that initialization was completed successfully
+pub fn notifyInitialized(self: *Client) !void
+
+/// Push a list-changed signal to the server when local roots change
+pub fn notifyRootsChanged(self: *Client) !void
+```

@@ -31,7 +31,7 @@ Run the following command in your project directory:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Or specific release
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.2.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
 ```
 
 Then in your `build.zig`:

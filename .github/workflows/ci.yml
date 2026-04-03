@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native-tests:
+    name: Native Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run unit tests
+        run: zig build test
+
+      - name: Build library and examples
+        run: zig build
+
+  cross-target-compile:
+    name: Cross-target Compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-linux, x86_64-windows, x86_64-macos]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Compile library and examples
+        run: zig build -Dtarget=${{ matrix.target }}
+
+      - name: Compile unit tests (no execution)
+        run: zig build test-compile -Dtarget=${{ matrix.target }}

@@ -40,6 +40,9 @@ pub fn build(b: *std.Build) void {
         .root_module = test_mod,
     });
 
+    const compile_unit_tests = b.step("test-compile", "Compile unit tests without running");
+    compile_unit_tests.dependOn(&unit_tests.step);
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
