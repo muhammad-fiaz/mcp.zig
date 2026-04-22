@@ -291,7 +291,7 @@ To ensure your application is running the latest version of mcp.zig, you can ena
 
 ```zig
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
 
     // Check for updates in background
