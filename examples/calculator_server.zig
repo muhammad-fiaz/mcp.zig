@@ -3,19 +3,16 @@
 //! A simple calculator MCP server with arithmetic operations.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     var server = mcp.Server.init(.{
         .name = "calculator-server",
         .version = "1.0.0",
@@ -23,6 +20,7 @@ fn run() !void {
         .description = "Perform arithmetic operations",
         .instructions = "Use add, subtract, multiply, or divide tools with 'a' and 'b' number arguments.",
         .allocator = allocator,
+        .io = io,
     });
     defer server.deinit();
 

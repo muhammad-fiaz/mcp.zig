@@ -7,19 +7,15 @@ const std = @import("std");
 
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Check for updates in background
-    if (mcp.report.checkForUpdates(allocator)) |t| t.detach();
+    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
     // Create server
     var server = mcp.Server.init(.{
@@ -29,6 +25,7 @@ fn run() !void {
         .description = "A simple example MCP server",
         .instructions = "This server provides basic greeting and echo tools.",
         .allocator = allocator,
+        .io = io,
     });
     defer server.deinit();
 
@@ -103,7 +100,7 @@ fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.To
     // Demonstrate structured result
     var obj: std.json.ObjectMap = .empty;
     obj.put(allocator, "echo", .{ .string = message }) catch {};
-    obj.put(allocator, "timestamp", .{ .integer = std.time.timestamp() }) catch {};
+    obj.put(allocator, "timestamp", .{ .integer = 0 }) catch {};
 
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }

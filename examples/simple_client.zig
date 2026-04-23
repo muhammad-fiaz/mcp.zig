@@ -4,23 +4,16 @@
 //! that connects to a server.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa, init.minimal.args.vector) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Get command line args for server path
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
+fn run(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args.Vector) !void {
     if (args.len < 2) {
         std.debug.print("Usage: {s} <server-command>\n", .{args[0]});
         std.debug.print("Example: {s} zig-out/bin/example-server\n", .{args[0]});
@@ -28,11 +21,12 @@ fn run() !void {
     }
 
     // Create client
-    var client = mcp.Client.init(.{
+    var client: mcp.Client = .init(.{
         .name = "simple-client",
         .version = "1.0.0",
         .title = "Simple MCP Client",
         .allocator = allocator,
+        .io = io,
     });
     defer client.deinit();
 

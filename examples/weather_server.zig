@@ -4,21 +4,18 @@
 //! demonstrating how to create a practical MCP server.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
 const NWS_API_BASE = "https://api.weather.gov";
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create weather server
     var server = mcp.Server.init(.{
         .name = "weather-server",
@@ -27,6 +24,7 @@ fn run() !void {
         .description = "Get weather alerts and forecasts for US locations",
         .instructions = "Use get_alerts to check weather alerts for a US state, or get_forecast to get the forecast for a location.",
         .allocator = allocator,
+        .io = io,
     });
     defer server.deinit();
 
