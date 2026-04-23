@@ -24,25 +24,20 @@ const mcp = @import("mcp");
 
 const NWS_API_BASE = "https://api.weather.gov";
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create weather server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "weather-server",
         .version = "1.0.0",
         .title = "Weather Server",
         .description = "Get weather alerts and forecasts for US locations",
         .instructions = "Use get_alerts to check weather alerts for a US state, or get_forecast to get the forecast for a location.",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -96,10 +91,10 @@ fn run() !void {
     server.enableTasks();
 
     // Run the server
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
 fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

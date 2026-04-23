@@ -7,10 +7,9 @@ The Server is the main runtime component for exposing MCP capabilities to AI cli
 ```zig
 const mcp = @import("mcp");
 
-var server = mcp.Server.init(.{
+var server: mcp.Server = .init(allocator, .{
     .name = "my-server",
     .version = "1.0.0",
-    .allocator = allocator,
 });
 defer server.deinit();
 ```
@@ -21,7 +20,6 @@ defer server.deinit();
 | --- | --- | --- |
 | name | []const u8 | Server name (required) |
 | version | []const u8 | Server version (required) |
-| allocator | std.mem.Allocator | Memory allocator |
 | title | ?[]const u8 | Human-readable title |
 | description | ?[]const u8 | Server description |
 | instructions | ?[]const u8 | Optional server usage instructions |
@@ -47,7 +45,7 @@ server.enableTasks();
 For command-line tools and local processes:
 
 ```zig
-try server.run(.stdio);
+try server.run(io, allocator, .stdio);
 ```
 
 ### HTTP Transport
@@ -55,13 +53,13 @@ try server.run(.stdio);
 For remote access:
 
 ```zig
-try server.run(.{ .http = .{ .host = "127.0.0.1", .port = 8080 } });
+try server.run(io, allocator, .{ .http = .{ .host = "127.0.0.1", .port = 8080 } });
 ```
 
 You can also bind custom domains/hosts and ports:
 
 ```zig
-try server.run(.{ .http = .{ .host = "api.example.com", .port = 8443 } });
+try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8443 } });
 ```
 
 The HTTP mode accepts JSON-RPC POST requests at the root path.
@@ -119,22 +117,17 @@ fn toolHandler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var server = mcp.Server.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var server: mcp.Server = .init(allocator, .{
         .name = "demo-server",
         .version = "1.0.0",
         .description = "A demo MCP server",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -147,7 +140,7 @@ fn run() !void {
 
     // Run
     server.enableLogging();
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 
 fn echoHandler(

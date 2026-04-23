@@ -299,7 +299,11 @@ pub const LoggingLevel = enum {
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
+}
+
+fn run(_: std.Io, _: std.mem.Allocator) !void {
     std.debug.print("Root: {s}\n", .{root.uri});
     std.debug.print("Implementation: {s} v{s}\n", .{ impl.name, impl.version });
 }

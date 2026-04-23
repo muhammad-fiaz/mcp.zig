@@ -5,7 +5,7 @@
 ## Constructor
 
 ```zig
-pub fn init(config: ServerConfig) Server
+pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Server
 ```
 
 Important `ServerConfig` fields:
@@ -14,7 +14,6 @@ Important `ServerConfig` fields:
 | --- | --- | --- |
 | `name` | `[]const u8` | Required server name |
 | `version` | `[]const u8` | Required server version |
-| `allocator` | `std.mem.Allocator` | Memory allocator |
 | `title` | `?[]const u8` | Optional human-readable title |
 | `description` | `?[]const u8` | Optional description |
 | `instructions` | `?[]const u8` | Optional usage instructions |
@@ -23,7 +22,7 @@ Important `ServerConfig` fields:
 
 ```zig
 pub fn deinit(self: *Server) void
-pub fn run(self: *Server, options: RunOptions) !void
+pub fn run(self: *Server, io: std.Io, allocator: std.mem.Allocator, options: RunOptions) !void
 pub fn runWithTransport(self: *Server, t: mcp.transport.Transport) !void
 ```
 
@@ -74,18 +73,14 @@ pub fn notifyPromptsChanged(self: *Server) !void
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| mcp.reportError(err);
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
 }
 
-fn run() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    var server = mcp.Server.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var server: mcp.Server = .init(allocator, .{
         .name = "api-example-server",
         .version = "1.0.0",
-        .allocator = gpa.allocator(),
     });
     defer server.deinit();
 
@@ -93,13 +88,13 @@ fn run() !void {
         .name = "ping",
         .description = "Returns pong",
         .handler = struct {
-            fn handler(allocator: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
-                return mcp.tools.textResult(allocator, "pong") catch return mcp.tools.ToolError.OutOfMemory;
+            fn handler(alloc: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+                return mcp.tools.textResult(alloc, "pong") catch return mcp.tools.ToolError.OutOfMemory;
             }
         }.handler,
     });
 
     server.enableLogging();
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 ```

@@ -124,7 +124,7 @@ MCP supports multiple transport mechanisms:
 For local process communication (most common):
 
 ```zig
-try server.run(.stdio);
+try server.run(io, allocator, .stdio);
 ```
 
 ### HTTP
@@ -132,7 +132,7 @@ try server.run(.stdio);
 For remote communication:
 
 ```zig
-try server.run(.{ .http = .{ .port = 8080 } });
+try server.run(io, allocator, .{ .http = .{ .port = 8080 } });
 ```
 
 ## Learn More

@@ -294,9 +294,11 @@ HTTP mode details:
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
+}
 
+fn run(_: std.Io, allocator: std.mem.Allocator) !void {
     // Create a request
     const request = mcp.jsonrpc.createRequest(
         .{ .integer = 1 },

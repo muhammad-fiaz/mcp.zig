@@ -91,21 +91,16 @@ zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/v0.0
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var server = mcp.Server.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var server: mcp.Server = .init(allocator, .{
         .name = "my-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -117,7 +112,7 @@ fn run() !void {
     });
 
     // Run with STDIO transport
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 ```
 

@@ -16,13 +16,13 @@ The most common transport for local MCP servers.
 ### Server Side
 
 ```zig
-try server.run(.stdio);
+try server.run(io, allocator, .stdio);
 ```
 
 ### Client Side
 
 ```zig
-try client.connectStdio("./my-server", &.{});
+try client.connectStdio(io, allocator, "./my-server", &.{});
 ```
 
 ### How It Works
@@ -46,19 +46,19 @@ For remote MCP servers or web-based integration.
 ### Server Side
 
 ```zig
-try server.run(.{ .http = .{ .port = 8080 } });
+try server.run(io, allocator, .{ .http = .{ .port = 8080 } });
 ```
 
 Custom host/domain and port:
 
 ```zig
-try server.run(.{ .http = .{ .host = "api.example.com", .port = 8443 } });
+try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8443 } });
 ```
 
 ### Client Side
 
 ```zig
-try client.connectHttp("http://localhost:8080");
+try client.connectHttp(io, allocator, "http://localhost:8080");
 ```
 
 ### Endpoints
@@ -90,17 +90,11 @@ Implement the `Transport` interface for custom transports:
 
 ```zig
 const MyTransport = struct {
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) MyTransport {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn send(self: *MyTransport, message: []const u8) !void {
+    pub fn send(self: *MyTransport, io: std.Io, allocator: std.mem.Allocator, message: []const u8) !void {
         // Send the message
     }
 
-    pub fn receive(self: *MyTransport) !?[]const u8 {
+    pub fn receive(self: *MyTransport, io: std.Io, allocator: std.mem.Allocator) !?[]const u8 {
         // Receive a message
     }
 
@@ -182,16 +176,17 @@ const message = transport.receive() catch |err| {
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
+        mcp.reportError(err);
+    };
+}
 
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "multi-transport-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -203,10 +198,10 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, mode, "http")) {
         std.debug.print("Starting HTTP server on port 8080...\n", .{});
-        try server.run(.{ .http = .{ .port = 8080 } });
+        try server.run(io, allocator, .{ .http = .{ .port = 8080 } });
     } else {
         std.debug.print("Starting STDIO server...\n", .{});
-        try server.run(.stdio);
+        try server.run(io, allocator, .stdio);
     }
 }
 ```
