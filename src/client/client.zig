@@ -6,11 +6,12 @@
 //! Supports task-augmented requests, sampling, elicitation, and roots.
 
 const std = @import("std");
-const protocol = @import("../protocol/protocol.zig");
+
 const jsonrpc = @import("../protocol/jsonrpc.zig");
+const protocol = @import("../protocol/protocol.zig");
 const types = @import("../protocol/types.zig");
-const transport_mod = @import("../transport/transport.zig");
 const report = @import("../report.zig");
+const transport_mod = @import("../transport/transport.zig");
 
 /// Configuration options for creating an MCP client.
 pub const ClientConfig = struct {
@@ -163,55 +164,55 @@ pub const Client = struct {
 
     /// Sends the initialize request to begin the MCP handshake.
     fn initialize(self: *Self) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        defer params.deinit();
+        var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
 
-        try params.put("protocolVersion", .{ .string = protocol.VERSION });
+        try params.put(self.allocator, "protocolVersion", .{ .string = protocol.VERSION });
 
-        var caps = std.json.ObjectMap.init(self.allocator);
+        var caps: std.json.ObjectMap = .empty;
         if (self.capabilities.sampling != null) {
-            var sampling_cap = std.json.ObjectMap.init(self.allocator);
+            var sampling_cap: std.json.ObjectMap = .empty;
             if (self.capabilities.sampling.?.context != null) {
-                try sampling_cap.put("context", .{ .object = std.json.ObjectMap.init(self.allocator) });
+                try sampling_cap.put(self.allocator, "context", .{ .object = .empty });
             }
             if (self.capabilities.sampling.?.tools != null) {
-                try sampling_cap.put("tools", .{ .object = std.json.ObjectMap.init(self.allocator) });
+                try sampling_cap.put(self.allocator, "tools", .{ .object = .empty });
             }
-            try caps.put("sampling", .{ .object = sampling_cap });
+            try caps.put(self.allocator, "sampling", .{ .object = sampling_cap });
         }
         if (self.capabilities.roots) |r| {
-            var roots_cap = std.json.ObjectMap.init(self.allocator);
-            try roots_cap.put("listChanged", .{ .bool = r.listChanged });
-            try caps.put("roots", .{ .object = roots_cap });
+            var roots_cap: std.json.ObjectMap = .empty;
+            try roots_cap.put(self.allocator, "listChanged", .{ .bool = r.listChanged });
+            try caps.put(self.allocator, "roots", .{ .object = roots_cap });
         }
         if (self.capabilities.elicitation) |e| {
-            var elicit_cap = std.json.ObjectMap.init(self.allocator);
+            var elicit_cap: std.json.ObjectMap = .empty;
             if (e.form != null) {
-                try elicit_cap.put("form", .{ .object = std.json.ObjectMap.init(self.allocator) });
+                try elicit_cap.put(self.allocator, "form", .{ .object = .empty });
             }
             if (e.url != null) {
-                try elicit_cap.put("url", .{ .object = std.json.ObjectMap.init(self.allocator) });
+                try elicit_cap.put(self.allocator, "url", .{ .object = .empty });
             }
-            try caps.put("elicitation", .{ .object = elicit_cap });
+            try caps.put(self.allocator, "elicitation", .{ .object = elicit_cap });
         }
         if (self.capabilities.tasks != null) {
-            var tasks_cap = std.json.ObjectMap.init(self.allocator);
-            try tasks_cap.put("list", .{ .object = std.json.ObjectMap.init(self.allocator) });
-            try tasks_cap.put("cancel", .{ .object = std.json.ObjectMap.init(self.allocator) });
-            try caps.put("tasks", .{ .object = tasks_cap });
+            var tasks_cap: std.json.ObjectMap = .empty;
+            try tasks_cap.put(self.allocator, "list", .{ .object = .empty });
+            try tasks_cap.put(self.allocator, "cancel", .{ .object = .empty });
+            try caps.put(self.allocator, "tasks", .{ .object = tasks_cap });
         }
-        try params.put("capabilities", .{ .object = caps });
+        try params.put(self.allocator, "capabilities", .{ .object = caps });
 
-        var client_info = std.json.ObjectMap.init(self.allocator);
-        try client_info.put("name", .{ .string = self.config.name });
-        try client_info.put("version", .{ .string = self.config.version });
+        var client_info: std.json.ObjectMap = .empty;
+        try client_info.put(self.allocator, "name", .{ .string = self.config.name });
+        try client_info.put(self.allocator, "version", .{ .string = self.config.version });
         if (self.config.title) |t| {
-            try client_info.put("title", .{ .string = t });
+            try client_info.put(self.allocator, "title", .{ .string = t });
         }
         if (self.config.description) |d| {
-            try client_info.put("description", .{ .string = d });
+            try client_info.put(self.allocator, "description", .{ .string = d });
         }
-        try params.put("clientInfo", .{ .object = client_info });
+        try params.put(self.allocator, "clientInfo", .{ .object = client_info });
 
         try self.sendRequest("initialize", .{ .object = params });
     }
@@ -256,10 +257,10 @@ pub const Client = struct {
 
     /// Invokes a tool on the server with optional arguments.
     pub fn callTool(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("name", .{ .string = name });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
-            try params.put("arguments", args);
+            try params.put(self.allocator, "arguments", args);
         }
         try self.sendRequest("tools/call", .{ .object = params });
     }
@@ -271,22 +272,22 @@ pub const Client = struct {
 
     /// Reads a resource from the server by URI.
     pub fn readResource(self: *Self, uri: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("uri", .{ .string = uri });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendRequest("resources/read", .{ .object = params });
     }
 
     /// Subscribes to updates for a resource URI.
     pub fn subscribeResource(self: *Self, uri: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("uri", .{ .string = uri });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendRequest("resources/subscribe", .{ .object = params });
     }
 
     /// Unsubscribes from updates for a resource URI.
     pub fn unsubscribeResource(self: *Self, uri: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("uri", .{ .string = uri });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendRequest("resources/unsubscribe", .{ .object = params });
     }
 
@@ -302,26 +303,26 @@ pub const Client = struct {
 
     /// Fetches a prompt from the server with optional arguments.
     pub fn getPrompt(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("name", .{ .string = name });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
-            try params.put("arguments", args);
+            try params.put(self.allocator, "arguments", args);
         }
         try self.sendRequest("prompts/get", .{ .object = params });
     }
 
     /// Requests argument completion suggestions.
     pub fn complete(self: *Self, ref: std.json.Value, argument: std.json.Value) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("ref", ref);
-        try params.put("argument", argument);
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "ref", ref);
+        try params.put(self.allocator, "argument", argument);
         try self.sendRequest("completion/complete", .{ .object = params });
     }
 
     /// Sets the log level on the server.
     pub fn setLogLevel(self: *Self, level: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("level", .{ .string = level });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "level", .{ .string = level });
         try self.sendRequest("logging/setLevel", .{ .object = params });
     }
 
@@ -332,15 +333,15 @@ pub const Client = struct {
 
     /// Gets the status and metadata of a task.
     pub fn getTask(self: *Self, taskId: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("taskId", .{ .string = taskId });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/get", .{ .object = params });
     }
 
     /// Gets the result payload of a completed task.
     pub fn getTaskResult(self: *Self, taskId: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("taskId", .{ .string = taskId });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/result", .{ .object = params });
     }
 
@@ -351,8 +352,8 @@ pub const Client = struct {
 
     /// Cancels a running task.
     pub fn cancelTask(self: *Self, taskId: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("taskId", .{ .string = taskId });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/cancel", .{ .object = params });
     }
 

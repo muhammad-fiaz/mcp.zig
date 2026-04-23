@@ -339,13 +339,13 @@ test "isValidToolName" {
 test "argument extraction" {
     const allocator = std.testing.allocator;
 
-    var obj = std.json.ObjectMap.init(allocator);
-    defer obj.deinit();
+    var obj: std.json.ObjectMap = .empty;
+    defer obj.deinit(allocator);
 
-    try obj.put("name", .{ .string = "test" });
-    try obj.put("count", .{ .integer = 42 });
-    try obj.put("enabled", .{ .bool = true });
-    try obj.put("value", .{ .float = 3.14 });
+    try obj.put(allocator, "name", .{ .string = "test" });
+    try obj.put(allocator, "count", .{ .integer = 42 });
+    try obj.put(allocator, "enabled", .{ .bool = true });
+    try obj.put(allocator, "value", .{ .float = 3.14 });
 
     const value = std.json.Value{ .object = obj };
 

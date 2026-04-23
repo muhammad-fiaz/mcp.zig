@@ -4,6 +4,7 @@
 //! with tools, resources, and prompts.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
 pub fn main() void {
@@ -100,9 +101,9 @@ fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.To
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
 
     // Demonstrate structured result
-    var obj = std.json.ObjectMap.init(allocator);
-    obj.put("echo", .{ .string = message }) catch {};
-    obj.put("timestamp", .{ .integer = std.time.timestamp() }) catch {};
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(allocator, "echo", .{ .string = message }) catch {};
+    obj.put(allocator, "timestamp", .{ .integer = std.time.timestamp() }) catch {};
 
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }

@@ -48,23 +48,23 @@ pub const Schema = struct {
 
     /// Converts this schema to a JSON value for serialization.
     pub fn toJson(self: Schema, allocator: std.mem.Allocator) !std.json.Value {
-        var obj = std.json.ObjectMap.init(allocator);
-        errdefer obj.deinit();
+        var obj: std.json.ObjectMap = .empty;
+        errdefer obj.deinit(allocator);
 
         if (self.type) |t| {
-            try obj.put("type", .{ .string = t.toString() });
+            try obj.put(allocator, "type", .{ .string = t.toString() });
         }
 
         if (self.description) |desc| {
-            try obj.put("description", .{ .string = desc });
+            try obj.put(allocator, "description", .{ .string = desc });
         }
 
         if (self.title) |t| {
-            try obj.put("title", .{ .string = t });
+            try obj.put(allocator, "title", .{ .string = t });
         }
 
         if (self.properties) |props| {
-            try obj.put("properties", .{ .object = props });
+            try obj.put(allocator, "properties", .{ .object = props });
         }
 
         if (self.required) |req| {
@@ -72,7 +72,7 @@ pub const Schema = struct {
             for (req) |name| {
                 try arr.append(.{ .string = name });
             }
-            try obj.put("required", .{ .array = arr });
+            try obj.put(allocator, "required", .{ .array = arr });
         }
 
         return .{ .object = obj };
@@ -306,29 +306,29 @@ pub const InputSchemaBuilder = struct {
 
     /// Builds the final input schema as a JSON value.
     pub fn build(self: *InputSchemaBuilder) !std.json.Value {
-        var obj = std.json.ObjectMap.init(self.allocator);
-        errdefer obj.deinit();
+        var obj: std.json.ObjectMap = .empty;
+        errdefer obj.deinit(self.allocator);
 
-        try obj.put("type", .{ .string = "object" });
+        try obj.put(self.allocator, "type", .{ .string = "object" });
 
-        var props = std.json.ObjectMap.init(self.allocator);
+        var props: std.json.ObjectMap = .empty;
         var iter = self.properties.iterator();
         while (iter.next()) |entry| {
-            var prop_obj = std.json.ObjectMap.init(self.allocator);
-            try prop_obj.put("type", .{ .string = entry.value_ptr.type });
+            var prop_obj: std.json.ObjectMap = .empty;
+            try prop_obj.put(self.allocator, "type", .{ .string = entry.value_ptr.type });
             if (entry.value_ptr.description) |desc| {
-                try prop_obj.put("description", .{ .string = desc });
+                try prop_obj.put(self.allocator, "description", .{ .string = desc });
             }
-            try props.put(entry.key_ptr.*, .{ .object = prop_obj });
+            try props.put(self.allocator, entry.key_ptr.*, .{ .object = prop_obj });
         }
-        try obj.put("properties", .{ .object = props });
+        try obj.put(self.allocator, "properties", .{ .object = props });
 
         if (self.required_fields.items.len > 0) {
             var req = std.json.Array.init(self.allocator);
             for (self.required_fields.items) |name| {
                 try req.append(.{ .string = name });
             }
-            try obj.put("required", .{ .array = req });
+            try obj.put(self.allocator, "required", .{ .array = req });
         }
 
         return .{ .object = obj };

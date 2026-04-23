@@ -6,13 +6,14 @@
 
 const std = @import("std");
 const http = std.http;
-const protocol = @import("../protocol/protocol.zig");
+
 const jsonrpc = @import("../protocol/jsonrpc.zig");
+const protocol = @import("../protocol/protocol.zig");
 const types = @import("../protocol/types.zig");
 const transport_mod = @import("../transport/transport.zig");
-const tools_mod = @import("tools.zig");
-const resources_mod = @import("resources.zig");
 const prompts_mod = @import("prompts.zig");
+const resources_mod = @import("resources.zig");
+const tools_mod = @import("tools.zig");
 
 const HttpRequestTransport = struct {
     allocator: std.mem.Allocator,
@@ -511,63 +512,63 @@ pub const Server = struct {
             }
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
+        var result: std.json.ObjectMap = .empty;
+        defer result.deinit(self.allocator);
 
-        try result.put("protocolVersion", .{ .string = protocol.VERSION });
+        try result.put(self.allocator, "protocolVersion", .{ .string = protocol.VERSION });
 
-        var caps = std.json.ObjectMap.init(self.allocator);
+        var caps: std.json.ObjectMap = .empty;
         if (self.capabilities.tools) |t| {
-            var tools_cap = std.json.ObjectMap.init(self.allocator);
-            try tools_cap.put("listChanged", .{ .bool = t.listChanged });
-            try caps.put("tools", .{ .object = tools_cap });
+            var tools_cap: std.json.ObjectMap = .empty;
+            try tools_cap.put(self.allocator, "listChanged", .{ .bool = t.listChanged });
+            try caps.put(self.allocator, "tools", .{ .object = tools_cap });
         }
         if (self.capabilities.resources) |r| {
-            var res_cap = std.json.ObjectMap.init(self.allocator);
-            try res_cap.put("listChanged", .{ .bool = r.listChanged });
-            try res_cap.put("subscribe", .{ .bool = r.subscribe });
-            try caps.put("resources", .{ .object = res_cap });
+            var res_cap: std.json.ObjectMap = .empty;
+            try res_cap.put(self.allocator, "listChanged", .{ .bool = r.listChanged });
+            try res_cap.put(self.allocator, "subscribe", .{ .bool = r.subscribe });
+            try caps.put(self.allocator, "resources", .{ .object = res_cap });
         }
         if (self.capabilities.prompts) |p| {
-            var prompts_cap = std.json.ObjectMap.init(self.allocator);
-            try prompts_cap.put("listChanged", .{ .bool = p.listChanged });
-            try caps.put("prompts", .{ .object = prompts_cap });
+            var prompts_cap: std.json.ObjectMap = .empty;
+            try prompts_cap.put(self.allocator, "listChanged", .{ .bool = p.listChanged });
+            try caps.put(self.allocator, "prompts", .{ .object = prompts_cap });
         }
         if (self.capabilities.logging != null) {
-            try caps.put("logging", .{ .object = std.json.ObjectMap.init(self.allocator) });
+            try caps.put(self.allocator, "logging", .{ .object = .empty });
         }
         if (self.capabilities.completions != null) {
-            try caps.put("completions", .{ .object = std.json.ObjectMap.init(self.allocator) });
+            try caps.put(self.allocator, "completions", .{ .object = .empty });
         }
         if (self.capabilities.tasks != null) {
-            var tasks_cap = std.json.ObjectMap.init(self.allocator);
-            try tasks_cap.put("list", .{ .object = std.json.ObjectMap.init(self.allocator) });
-            try tasks_cap.put("cancel", .{ .object = std.json.ObjectMap.init(self.allocator) });
-            var requests_cap = std.json.ObjectMap.init(self.allocator);
-            var tools_req = std.json.ObjectMap.init(self.allocator);
-            try tools_req.put("call", .{ .object = std.json.ObjectMap.init(self.allocator) });
-            try requests_cap.put("tools", .{ .object = tools_req });
-            try tasks_cap.put("requests", .{ .object = requests_cap });
-            try caps.put("tasks", .{ .object = tasks_cap });
+            var tasks_cap: std.json.ObjectMap = .empty;
+            try tasks_cap.put(self.allocator, "list", .{ .object = .empty });
+            try tasks_cap.put(self.allocator, "cancel", .{ .object = .empty });
+            var requests_cap: std.json.ObjectMap = .empty;
+            var tools_req: std.json.ObjectMap = .empty;
+            try tools_req.put(self.allocator, "call", .{ .object = .empty });
+            try requests_cap.put(self.allocator, "tools", .{ .object = tools_req });
+            try tasks_cap.put(self.allocator, "requests", .{ .object = requests_cap });
+            try caps.put(self.allocator, "tasks", .{ .object = tasks_cap });
         }
-        try result.put("capabilities", .{ .object = caps });
+        try result.put(self.allocator, "capabilities", .{ .object = caps });
 
-        var server_info = std.json.ObjectMap.init(self.allocator);
-        try server_info.put("name", .{ .string = self.config.name });
-        try server_info.put("version", .{ .string = self.config.version });
+        var server_info: std.json.ObjectMap = .empty;
+        try server_info.put(self.allocator, "name", .{ .string = self.config.name });
+        try server_info.put(self.allocator, "version", .{ .string = self.config.version });
         if (self.config.title) |t| {
-            try server_info.put("title", .{ .string = t });
+            try server_info.put(self.allocator, "title", .{ .string = t });
         }
         if (self.config.description) |d| {
-            try server_info.put("description", .{ .string = d });
+            try server_info.put(self.allocator, "description", .{ .string = d });
         }
         if (self.config.websiteUrl) |u| {
-            try server_info.put("websiteUrl", .{ .string = u });
+            try server_info.put(self.allocator, "websiteUrl", .{ .string = u });
         }
-        try result.put("serverInfo", .{ .object = server_info });
+        try result.put(self.allocator, "serverInfo", .{ .object = server_info });
 
         if (self.config.instructions) |inst| {
-            try result.put("instructions", .{ .string = inst });
+            try result.put(self.allocator, "instructions", .{ .string = inst });
         }
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
@@ -576,8 +577,8 @@ pub const Server = struct {
 
     /// Handle ping request
     fn handlePing(self: *Self, request: jsonrpc.Request) !void {
-        var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
+        var result: std.json.ObjectMap = .empty;
+        defer result.deinit(self.allocator);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -589,42 +590,42 @@ pub const Server = struct {
 
         var iter = self.tools.iterator();
         while (iter.next()) |entry| {
-            var tool_obj = std.json.ObjectMap.init(self.allocator);
-            try tool_obj.put("name", .{ .string = entry.value_ptr.name });
+            var tool_obj: std.json.ObjectMap = .empty;
+            try tool_obj.put(self.allocator, "name", .{ .string = entry.value_ptr.name });
             if (entry.value_ptr.description) |desc| {
-                try tool_obj.put("description", .{ .string = desc });
+                try tool_obj.put(self.allocator, "description", .{ .string = desc });
             }
             if (entry.value_ptr.title) |t| {
-                try tool_obj.put("title", .{ .string = t });
+                try tool_obj.put(self.allocator, "title", .{ .string = t });
             }
 
-            var input_schema = std.json.ObjectMap.init(self.allocator);
-            try input_schema.put("type", .{ .string = "object" });
-            try tool_obj.put("inputSchema", .{ .object = input_schema });
+            var input_schema: std.json.ObjectMap = .empty;
+            try input_schema.put(self.allocator, "type", .{ .string = "object" });
+            try tool_obj.put(self.allocator, "inputSchema", .{ .object = input_schema });
 
             if (entry.value_ptr.annotations) |ann| {
-                var ann_obj = std.json.ObjectMap.init(self.allocator);
-                if (ann.title) |t| try ann_obj.put("title", .{ .string = t });
-                try ann_obj.put("readOnlyHint", .{ .bool = ann.readOnlyHint });
-                try ann_obj.put("destructiveHint", .{ .bool = ann.destructiveHint });
-                try ann_obj.put("idempotentHint", .{ .bool = ann.idempotentHint });
-                try ann_obj.put("openWorldHint", .{ .bool = ann.openWorldHint });
-                try tool_obj.put("annotations", .{ .object = ann_obj });
+                var ann_obj: std.json.ObjectMap = .empty;
+                if (ann.title) |t| try ann_obj.put(self.allocator, "title", .{ .string = t });
+                try ann_obj.put(self.allocator, "readOnlyHint", .{ .bool = ann.readOnlyHint });
+                try ann_obj.put(self.allocator, "destructiveHint", .{ .bool = ann.destructiveHint });
+                try ann_obj.put(self.allocator, "idempotentHint", .{ .bool = ann.idempotentHint });
+                try ann_obj.put(self.allocator, "openWorldHint", .{ .bool = ann.openWorldHint });
+                try tool_obj.put(self.allocator, "annotations", .{ .object = ann_obj });
             }
 
             if (entry.value_ptr.execution) |exec| {
-                var exec_obj = std.json.ObjectMap.init(self.allocator);
+                var exec_obj: std.json.ObjectMap = .empty;
                 if (exec.taskSupport) |ts| {
-                    try exec_obj.put("taskSupport", .{ .string = ts });
+                    try exec_obj.put(self.allocator, "taskSupport", .{ .string = ts });
                 }
-                try tool_obj.put("execution", .{ .object = exec_obj });
+                try tool_obj.put(self.allocator, "execution", .{ .object = exec_obj });
             }
 
             try tools_array.append(.{ .object = tool_obj });
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        try result.put("tools", .{ .array = tools_array });
+        var result: std.json.ObjectMap = .empty;
+        try result.put(self.allocator, "tools", .{ .array = tools_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -649,14 +650,14 @@ pub const Server = struct {
         if (self.tools.get(tool_name)) |tool| {
             const tool_result = tool.handler(self.allocator, arguments) catch |err| {
                 var content_array = std.json.Array.init(self.allocator);
-                var text_obj = std.json.ObjectMap.init(self.allocator);
-                try text_obj.put("type", .{ .string = "text" });
-                try text_obj.put("text", .{ .string = @errorName(err) });
+                var text_obj: std.json.ObjectMap = .empty;
+                try text_obj.put(self.allocator, "type", .{ .string = "text" });
+                try text_obj.put(self.allocator, "text", .{ .string = @errorName(err) });
                 try content_array.append(.{ .object = text_obj });
 
-                var result = std.json.ObjectMap.init(self.allocator);
-                try result.put("content", .{ .array = content_array });
-                try result.put("isError", .{ .bool = true });
+                var result: std.json.ObjectMap = .empty;
+                try result.put(self.allocator, "content", .{ .array = content_array });
+                try result.put(self.allocator, "isError", .{ .bool = true });
 
                 const response = jsonrpc.createResponse(request.id, .{ .object = result });
                 try self.sendResponse(.{ .response = response });
@@ -665,47 +666,47 @@ pub const Server = struct {
 
             var content_array = std.json.Array.init(self.allocator);
             for (tool_result.content) |content_item| {
-                var item_obj = std.json.ObjectMap.init(self.allocator);
+                var item_obj: std.json.ObjectMap = .empty;
                 switch (content_item) {
                     .text => |text| {
-                        try item_obj.put("type", .{ .string = "text" });
-                        try item_obj.put("text", .{ .string = text.text });
+                        try item_obj.put(self.allocator, "type", .{ .string = "text" });
+                        try item_obj.put(self.allocator, "text", .{ .string = text.text });
                     },
                     .image => |img| {
-                        try item_obj.put("type", .{ .string = "image" });
-                        try item_obj.put("data", .{ .string = img.data });
-                        try item_obj.put("mimeType", .{ .string = img.mimeType });
+                        try item_obj.put(self.allocator, "type", .{ .string = "image" });
+                        try item_obj.put(self.allocator, "data", .{ .string = img.data });
+                        try item_obj.put(self.allocator, "mimeType", .{ .string = img.mimeType });
                     },
                     .audio => |aud| {
-                        try item_obj.put("type", .{ .string = "audio" });
-                        try item_obj.put("data", .{ .string = aud.data });
-                        try item_obj.put("mimeType", .{ .string = aud.mimeType });
+                        try item_obj.put(self.allocator, "type", .{ .string = "audio" });
+                        try item_obj.put(self.allocator, "data", .{ .string = aud.data });
+                        try item_obj.put(self.allocator, "mimeType", .{ .string = aud.mimeType });
                     },
                     .resource_link => |link| {
-                        try item_obj.put("type", .{ .string = "resource_link" });
-                        try item_obj.put("uri", .{ .string = link.uri });
-                        try item_obj.put("name", .{ .string = link.name });
-                        if (link.title) |t| try item_obj.put("title", .{ .string = t });
-                        if (link.description) |d| try item_obj.put("description", .{ .string = d });
-                        if (link.mimeType) |m| try item_obj.put("mimeType", .{ .string = m });
+                        try item_obj.put(self.allocator, "type", .{ .string = "resource_link" });
+                        try item_obj.put(self.allocator, "uri", .{ .string = link.uri });
+                        try item_obj.put(self.allocator, "name", .{ .string = link.name });
+                        if (link.title) |t| try item_obj.put(self.allocator, "title", .{ .string = t });
+                        if (link.description) |d| try item_obj.put(self.allocator, "description", .{ .string = d });
+                        if (link.mimeType) |m| try item_obj.put(self.allocator, "mimeType", .{ .string = m });
                     },
                     .resource => |res| {
-                        try item_obj.put("type", .{ .string = "resource" });
-                        var res_obj = std.json.ObjectMap.init(self.allocator);
-                        try res_obj.put("uri", .{ .string = res.resource.uri });
-                        if (res.resource.text) |text| try res_obj.put("text", .{ .string = text });
-                        if (res.resource.mimeType) |mime| try res_obj.put("mimeType", .{ .string = mime });
-                        try item_obj.put("resource", .{ .object = res_obj });
+                        try item_obj.put(self.allocator, "type", .{ .string = "resource" });
+                        var res_obj: std.json.ObjectMap = .empty;
+                        try res_obj.put(self.allocator, "uri", .{ .string = res.resource.uri });
+                        if (res.resource.text) |text| try res_obj.put(self.allocator, "text", .{ .string = text });
+                        if (res.resource.mimeType) |mime| try res_obj.put(self.allocator, "mimeType", .{ .string = mime });
+                        try item_obj.put(self.allocator, "resource", .{ .object = res_obj });
                     },
                 }
                 try content_array.append(.{ .object = item_obj });
             }
 
-            var result = std.json.ObjectMap.init(self.allocator);
-            try result.put("content", .{ .array = content_array });
-            try result.put("isError", .{ .bool = tool_result.is_error });
+            var result: std.json.ObjectMap = .empty;
+            try result.put(self.allocator, "content", .{ .array = content_array });
+            try result.put(self.allocator, "isError", .{ .bool = tool_result.is_error });
             if (tool_result.structuredContent) |sc| {
-                try result.put("structuredContent", sc);
+                try result.put(self.allocator, "structuredContent", sc);
             }
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
@@ -722,26 +723,26 @@ pub const Server = struct {
 
         var iter = self.resources.iterator();
         while (iter.next()) |entry| {
-            var resource_obj = std.json.ObjectMap.init(self.allocator);
-            try resource_obj.put("uri", .{ .string = entry.value_ptr.uri });
-            try resource_obj.put("name", .{ .string = entry.value_ptr.name });
+            var resource_obj: std.json.ObjectMap = .empty;
+            try resource_obj.put(self.allocator, "uri", .{ .string = entry.value_ptr.uri });
+            try resource_obj.put(self.allocator, "name", .{ .string = entry.value_ptr.name });
             if (entry.value_ptr.title) |t| {
-                try resource_obj.put("title", .{ .string = t });
+                try resource_obj.put(self.allocator, "title", .{ .string = t });
             }
             if (entry.value_ptr.description) |desc| {
-                try resource_obj.put("description", .{ .string = desc });
+                try resource_obj.put(self.allocator, "description", .{ .string = desc });
             }
             if (entry.value_ptr.mimeType) |mime| {
-                try resource_obj.put("mimeType", .{ .string = mime });
+                try resource_obj.put(self.allocator, "mimeType", .{ .string = mime });
             }
             if (entry.value_ptr.size) |s| {
-                try resource_obj.put("size", .{ .integer = @intCast(s) });
+                try resource_obj.put(self.allocator, "size", .{ .integer = @intCast(s) });
             }
             try resources_array.append(.{ .object = resource_obj });
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        try result.put("resources", .{ .array = resources_array });
+        var result: std.json.ObjectMap = .empty;
+        try result.put(self.allocator, "resources", .{ .array = resources_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -769,21 +770,21 @@ pub const Server = struct {
             };
 
             var contents_array = std.json.Array.init(self.allocator);
-            var content_obj = std.json.ObjectMap.init(self.allocator);
-            try content_obj.put("uri", .{ .string = uri });
+            var content_obj: std.json.ObjectMap = .empty;
+            try content_obj.put(self.allocator, "uri", .{ .string = uri });
             if (content.text) |text| {
-                try content_obj.put("text", .{ .string = text });
+                try content_obj.put(self.allocator, "text", .{ .string = text });
             }
             if (content.blob) |blob| {
-                try content_obj.put("blob", .{ .string = blob });
+                try content_obj.put(self.allocator, "blob", .{ .string = blob });
             }
             if (content.mimeType) |mime| {
-                try content_obj.put("mimeType", .{ .string = mime });
+                try content_obj.put(self.allocator, "mimeType", .{ .string = mime });
             }
             try contents_array.append(.{ .object = content_obj });
 
-            var result = std.json.ObjectMap.init(self.allocator);
-            try result.put("contents", .{ .array = contents_array });
+            var result: std.json.ObjectMap = .empty;
+            try result.put(self.allocator, "contents", .{ .array = contents_array });
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
             try self.sendResponse(.{ .response = response });
@@ -799,23 +800,23 @@ pub const Server = struct {
 
         var iter = self.resource_templates.iterator();
         while (iter.next()) |entry| {
-            var template_obj = std.json.ObjectMap.init(self.allocator);
-            try template_obj.put("uriTemplate", .{ .string = entry.value_ptr.uriTemplate });
-            try template_obj.put("name", .{ .string = entry.value_ptr.name });
+            var template_obj: std.json.ObjectMap = .empty;
+            try template_obj.put(self.allocator, "uriTemplate", .{ .string = entry.value_ptr.uriTemplate });
+            try template_obj.put(self.allocator, "name", .{ .string = entry.value_ptr.name });
             if (entry.value_ptr.title) |t| {
-                try template_obj.put("title", .{ .string = t });
+                try template_obj.put(self.allocator, "title", .{ .string = t });
             }
             if (entry.value_ptr.description) |desc| {
-                try template_obj.put("description", .{ .string = desc });
+                try template_obj.put(self.allocator, "description", .{ .string = desc });
             }
             if (entry.value_ptr.mimeType) |mime| {
-                try template_obj.put("mimeType", .{ .string = mime });
+                try template_obj.put(self.allocator, "mimeType", .{ .string = mime });
             }
             try templates_array.append(.{ .object = template_obj });
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        try result.put("resourceTemplates", .{ .array = templates_array });
+        var result: std.json.ObjectMap = .empty;
+        try result.put(self.allocator, "resourceTemplates", .{ .array = templates_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -824,8 +825,8 @@ pub const Server = struct {
     /// Handle resources/subscribe request
     fn handleSubscribe(self: *Self, request: jsonrpc.Request) !void {
         _ = request.params;
-        var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
+        var result: std.json.ObjectMap = .empty;
+        defer result.deinit(self.allocator);
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
     }
@@ -833,8 +834,8 @@ pub const Server = struct {
     /// Handle resources/unsubscribe request
     fn handleUnsubscribe(self: *Self, request: jsonrpc.Request) !void {
         _ = request.params;
-        var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
+        var result: std.json.ObjectMap = .empty;
+        defer result.deinit(self.allocator);
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
     }
@@ -845,37 +846,37 @@ pub const Server = struct {
 
         var iter = self.prompts.iterator();
         while (iter.next()) |entry| {
-            var prompt_obj = std.json.ObjectMap.init(self.allocator);
-            try prompt_obj.put("name", .{ .string = entry.value_ptr.name });
+            var prompt_obj: std.json.ObjectMap = .empty;
+            try prompt_obj.put(self.allocator, "name", .{ .string = entry.value_ptr.name });
             if (entry.value_ptr.description) |desc| {
-                try prompt_obj.put("description", .{ .string = desc });
+                try prompt_obj.put(self.allocator, "description", .{ .string = desc });
             }
             if (entry.value_ptr.title) |t| {
-                try prompt_obj.put("title", .{ .string = t });
+                try prompt_obj.put(self.allocator, "title", .{ .string = t });
             }
 
             if (entry.value_ptr.arguments) |args| {
                 var args_array = std.json.Array.init(self.allocator);
                 for (args) |arg| {
-                    var arg_obj = std.json.ObjectMap.init(self.allocator);
-                    try arg_obj.put("name", .{ .string = arg.name });
+                    var arg_obj: std.json.ObjectMap = .empty;
+                    try arg_obj.put(self.allocator, "name", .{ .string = arg.name });
                     if (arg.title) |t| {
-                        try arg_obj.put("title", .{ .string = t });
+                        try arg_obj.put(self.allocator, "title", .{ .string = t });
                     }
                     if (arg.description) |d| {
-                        try arg_obj.put("description", .{ .string = d });
+                        try arg_obj.put(self.allocator, "description", .{ .string = d });
                     }
-                    try arg_obj.put("required", .{ .bool = arg.required });
+                    try arg_obj.put(self.allocator, "required", .{ .bool = arg.required });
                     try args_array.append(.{ .object = arg_obj });
                 }
-                try prompt_obj.put("arguments", .{ .array = args_array });
+                try prompt_obj.put(self.allocator, "arguments", .{ .array = args_array });
             }
 
             try prompts_array.append(.{ .object = prompt_obj });
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        try result.put("prompts", .{ .array = prompts_array });
+        var result: std.json.ObjectMap = .empty;
+        try result.put(self.allocator, "prompts", .{ .array = prompts_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -906,45 +907,45 @@ pub const Server = struct {
 
             var messages_array = std.json.Array.init(self.allocator);
             for (messages) |msg| {
-                var msg_obj = std.json.ObjectMap.init(self.allocator);
-                try msg_obj.put("role", .{ .string = msg.role.toString() });
-                var content_obj = std.json.ObjectMap.init(self.allocator);
+                var msg_obj: std.json.ObjectMap = .empty;
+                try msg_obj.put(self.allocator, "role", .{ .string = msg.role.toString() });
+                var content_obj: std.json.ObjectMap = .empty;
                 switch (msg.content) {
                     .text => |text| {
-                        try content_obj.put("type", .{ .string = "text" });
-                        try content_obj.put("text", .{ .string = text.text });
+                        try content_obj.put(self.allocator, "type", .{ .string = "text" });
+                        try content_obj.put(self.allocator, "text", .{ .string = text.text });
                     },
                     .image => |img| {
-                        try content_obj.put("type", .{ .string = "image" });
-                        try content_obj.put("data", .{ .string = img.data });
-                        try content_obj.put("mimeType", .{ .string = img.mimeType });
+                        try content_obj.put(self.allocator, "type", .{ .string = "image" });
+                        try content_obj.put(self.allocator, "data", .{ .string = img.data });
+                        try content_obj.put(self.allocator, "mimeType", .{ .string = img.mimeType });
                     },
                     .audio => |aud| {
-                        try content_obj.put("type", .{ .string = "audio" });
-                        try content_obj.put("data", .{ .string = aud.data });
-                        try content_obj.put("mimeType", .{ .string = aud.mimeType });
+                        try content_obj.put(self.allocator, "type", .{ .string = "audio" });
+                        try content_obj.put(self.allocator, "data", .{ .string = aud.data });
+                        try content_obj.put(self.allocator, "mimeType", .{ .string = aud.mimeType });
                     },
                     .resource_link => |link| {
-                        try content_obj.put("type", .{ .string = "resource_link" });
-                        try content_obj.put("uri", .{ .string = link.uri });
-                        try content_obj.put("name", .{ .string = link.name });
+                        try content_obj.put(self.allocator, "type", .{ .string = "resource_link" });
+                        try content_obj.put(self.allocator, "uri", .{ .string = link.uri });
+                        try content_obj.put(self.allocator, "name", .{ .string = link.name });
                     },
                     .resource => |res| {
-                        try content_obj.put("type", .{ .string = "resource" });
-                        var res_inner = std.json.ObjectMap.init(self.allocator);
-                        try res_inner.put("uri", .{ .string = res.resource.uri });
-                        if (res.resource.text) |text| try res_inner.put("text", .{ .string = text });
-                        try content_obj.put("resource", .{ .object = res_inner });
+                        try content_obj.put(self.allocator, "type", .{ .string = "resource" });
+                        var res_inner: std.json.ObjectMap = .empty;
+                        try res_inner.put(self.allocator, "uri", .{ .string = res.resource.uri });
+                        if (res.resource.text) |text| try res_inner.put(self.allocator, "text", .{ .string = text });
+                        try content_obj.put(self.allocator, "resource", .{ .object = res_inner });
                     },
                 }
-                try msg_obj.put("content", .{ .object = content_obj });
+                try msg_obj.put(self.allocator, "content", .{ .object = content_obj });
                 try messages_array.append(.{ .object = msg_obj });
             }
 
-            var result = std.json.ObjectMap.init(self.allocator);
-            try result.put("messages", .{ .array = messages_array });
+            var result: std.json.ObjectMap = .empty;
+            try result.put(self.allocator, "messages", .{ .array = messages_array });
             if (prompt.description) |desc| {
-                try result.put("description", .{ .string = desc });
+                try result.put(self.allocator, "description", .{ .string = desc });
             }
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
@@ -984,20 +985,20 @@ pub const Server = struct {
             }
         }
 
-        const result = std.json.ObjectMap.init(self.allocator);
+        const result: std.json.ObjectMap = .empty;
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
     }
 
     /// Handle completion/complete request
     fn handleCompletion(self: *Self, request: jsonrpc.Request) !void {
-        var completion = std.json.ObjectMap.init(self.allocator);
+        var completion: std.json.ObjectMap = .empty;
         const values_array = std.json.Array.init(self.allocator);
-        try completion.put("values", .{ .array = values_array });
-        try completion.put("hasMore", .{ .bool = false });
+        try completion.put(self.allocator, "values", .{ .array = values_array });
+        try completion.put(self.allocator, "hasMore", .{ .bool = false });
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        try result.put("completion", .{ .object = completion });
+        var result: std.json.ObjectMap = .empty;
+        try result.put(self.allocator, "completion", .{ .object = completion });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -1019,9 +1020,9 @@ pub const Server = struct {
 
     /// Handle tasks/list request
     fn handleTasksList(self: *Self, request: jsonrpc.Request) !void {
-        var result = std.json.ObjectMap.init(self.allocator);
+        var result: std.json.ObjectMap = .empty;
         const tasks_array = std.json.Array.init(self.allocator);
-        try result.put("tasks", .{ .array = tasks_array });
+        try result.put(self.allocator, "tasks", .{ .array = tasks_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(.{ .response = response });
@@ -1083,23 +1084,23 @@ pub const Server = struct {
     pub fn sendLogMessage(self: *Self, level: protocol.LogLevel, message: []const u8) !void {
         if (@intFromEnum(level) < @intFromEnum(self.log_level)) return;
 
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("level", .{ .string = level.toString() });
-        try params.put("data", .{ .string = message });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "level", .{ .string = level.toString() });
+        try params.put(self.allocator, "data", .{ .string = message });
 
         try self.sendNotification("notifications/message", .{ .object = params });
     }
 
     /// Send a progress notification
     pub fn sendProgress(self: *Self, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("progressToken", token);
-        try params.put("progress", .{ .float = prog });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "progressToken", token);
+        try params.put(self.allocator, "progress", .{ .float = prog });
         if (total) |t| {
-            try params.put("total", .{ .float = t });
+            try params.put(self.allocator, "total", .{ .float = t });
         }
         if (message) |m| {
-            try params.put("message", .{ .string = m });
+            try params.put(self.allocator, "message", .{ .string = m });
         }
         try self.sendNotification("notifications/progress", .{ .object = params });
     }
@@ -1116,8 +1117,8 @@ pub const Server = struct {
 
     /// Notify clients that a resource has been updated
     pub fn notifyResourceUpdated(self: *Self, uri: []const u8) !void {
-        var params = std.json.ObjectMap.init(self.allocator);
-        try params.put("uri", .{ .string = uri });
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendNotification("notifications/resources/updated", .{ .object = params });
     }
 
