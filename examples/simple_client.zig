@@ -21,14 +21,12 @@ fn run(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args.Vector) 
     }
 
     // Create client
-    var client: mcp.Client = .init(.{
+    var client: mcp.Client = .init(io, allocator, .{
         .name = "simple-client",
         .version = "1.0.0",
         .title = "Simple MCP Client",
-        .allocator = allocator,
-        .io = io,
     });
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     // Enable capabilities
     client.enableSampling();
@@ -37,17 +35,17 @@ fn run(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args.Vector) 
     client.enableRoots(true);
 
     // Add some roots
-    try client.addRoot("file:///home/user/documents", "Documents");
-    try client.addRoot("file:///home/user/projects", "Projects");
+    try client.addRoot(allocator, "file:///home/user/documents", "Documents");
+    try client.addRoot(allocator, "file:///home/user/projects", "Projects");
 
     std.debug.print("MCP Client initialized\n", .{});
     std.debug.print("Client: {s} v{s}\n", .{ client.config.name, client.config.version });
     std.debug.print("Roots configured: {d}\n", .{client.roots_list.items.len});
 
     // In a real implementation, you would:
-    // 1. Connect to server: try client.connectStdio(args[1], &.{});
-    // 2. List tools: try client.listTools();
-    // 3. Call tools: try client.callTool("greet", args);
+    // 1. Connect to server: try client.connectStdio(io, allocator, args[1], &.{});
+    // 2. List tools: try client.listTools(io, allocator);
+    // 3. Call tools: try client.callTool(io, allocator, "greet", args);
     // 4. Handle responses in an event loop
 
     std.debug.print("\nTo connect to a server, run:\n", .{});

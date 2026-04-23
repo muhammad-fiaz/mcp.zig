@@ -16,8 +16,8 @@ pub const Transport = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        send: *const fn (ptr: *anyopaque, message: []const u8) SendError!void,
-        receive: *const fn (ptr: *anyopaque) ReceiveError!?[]const u8,
+        send: *const fn (ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator, message: []const u8) SendError!void,
+        receive: *const fn (ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator) ReceiveError!?[]const u8,
         close: *const fn (ptr: *anyopaque) void,
     };
 
@@ -36,13 +36,13 @@ pub const Transport = struct {
     };
 
     /// Sends a message through the transport.
-    pub fn send(self: Transport, message: []const u8) SendError!void {
-        return self.vtable.send(self.ptr, message);
+    pub fn send(self: Transport, io: std.Io, allocator: std.mem.Allocator, message: []const u8) SendError!void {
+        return self.vtable.send(self.ptr, io, allocator, message);
     }
 
     /// Receives a message from the transport (blocking).
-    pub fn receive(self: Transport) ReceiveError!?[]const u8 {
-        return self.vtable.receive(self.ptr);
+    pub fn receive(self: Transport, io: std.Io, allocator: std.mem.Allocator) ReceiveError!?[]const u8 {
+        return self.vtable.receive(self.ptr, io, allocator);
     }
 
     /// Closes the transport connection.
@@ -54,46 +54,35 @@ pub const Transport = struct {
 /// STDIO transport for local process communication.
 /// Messages are delimited by newlines and sent via stdin/stdout.
 pub const StdioTransport = struct {
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    read_buffer: std.ArrayList(u8),
+    read_buffer: std.ArrayList(u8) = .empty,
     is_closed: bool = false,
     max_message_size: usize = 4 * 1024 * 1024,
 
     const Self = @This();
 
-    /// Initializes a new STDIO transport.
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) Self {
-        return .{
-            .allocator = allocator,
-            .io = io,
-            .read_buffer = .empty,
-        };
-    }
-
     /// Releases resources held by the transport.
-    pub fn deinit(self: *Self) void {
-        self.read_buffer.deinit(self.allocator);
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.read_buffer.deinit(allocator);
     }
 
     /// Sends a JSON-RPC message to stdout with newline delimiter.
-    pub fn send(self: *Self, message: []const u8) Transport.SendError!void {
+    pub fn send(self: *Self, io: std.Io, _: std.mem.Allocator, message: []const u8) Transport.SendError!void {
         if (self.is_closed) return Transport.SendError.ConnectionClosed;
 
         const stdout = std.Io.File.stdout();
-        stdout.writeStreamingAll(self.io, message) catch return Transport.SendError.WriteError;
-        stdout.writeStreamingAll(self.io, "\n") catch return Transport.SendError.WriteError;
+        stdout.writeStreamingAll(io, message) catch return Transport.SendError.WriteError;
+        stdout.writeStreamingAll(io, "\n") catch return Transport.SendError.WriteError;
     }
 
     /// Sends a JSON-RPC message object.
-    pub fn sendMessage(self: *Self, message: jsonrpc.Message) !void {
-        const json = try jsonrpc.serializeMessage(self.allocator, message);
-        defer self.allocator.free(json);
-        try self.send(json);
+    pub fn sendMessage(self: *Self, io: std.Io, allocator: std.mem.Allocator, message: jsonrpc.Message) !void {
+        const json = try jsonrpc.serializeMessage(allocator, message);
+        defer allocator.free(json);
+        try self.send(io, allocator, json);
     }
 
     /// Receives a JSON-RPC message from stdin (reads until newline).
-    pub fn receive(self: *Self) Transport.ReceiveError!?[]const u8 {
+    pub fn receive(self: *Self, io: std.Io, allocator: std.mem.Allocator) Transport.ReceiveError!?[]const u8 {
         if (self.is_closed) return Transport.ReceiveError.ConnectionClosed;
 
         self.read_buffer.clearRetainingCapacity();
@@ -102,7 +91,7 @@ pub const StdioTransport = struct {
 
         while (true) {
             var buf: [1]u8 = undefined;
-            const bytes_read = stdin.readStreaming(self.io, &.{&buf}) catch return Transport.ReceiveError.ReadError;
+            const bytes_read = stdin.readStreaming(io, &.{&buf}) catch return Transport.ReceiveError.ReadError;
 
             if (bytes_read == 0) {
                 if (self.read_buffer.items.len == 0) {
@@ -120,14 +109,14 @@ pub const StdioTransport = struct {
                 return Transport.ReceiveError.MessageTooLarge;
             }
 
-            self.read_buffer.append(self.allocator, byte) catch return Transport.ReceiveError.OutOfMemory;
+            self.read_buffer.append(allocator, byte) catch return Transport.ReceiveError.OutOfMemory;
         }
 
         if (self.read_buffer.items.len == 0) {
             return null;
         }
 
-        const result = self.allocator.dupe(u8, self.read_buffer.items) catch {
+        const result = allocator.dupe(u8, self.read_buffer.items) catch {
             return Transport.ReceiveError.OutOfMemory;
         };
         return result;
@@ -139,10 +128,10 @@ pub const StdioTransport = struct {
     }
 
     /// Writes a message to stderr for logging.
-    pub fn writeStderr(self: *Self, message: []const u8) void {
+    pub fn writeStderr(_: *Self, io: std.Io, message: []const u8) void {
         const stderr = std.Io.File.stderr();
-        stderr.writeStreamingAll(self.io, message) catch {};
-        stderr.writeStreamingAll(self.io, "\n") catch {};
+        stderr.writeStreamingAll(io, message) catch {};
+        stderr.writeStreamingAll(io, "\n") catch {};
     }
 
     /// Returns a Transport interface for this STDIO transport.
@@ -157,14 +146,14 @@ pub const StdioTransport = struct {
         };
     }
 
-    fn sendVtable(ptr: *anyopaque, message: []const u8) Transport.SendError!void {
+    fn sendVtable(ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void {
         const self: *Self = @ptrCast(@alignCast(ptr));
-        return self.send(message);
+        return self.send(io, allocator, message);
     }
 
-    fn receiveVtable(ptr: *anyopaque) Transport.ReceiveError!?[]const u8 {
+    fn receiveVtable(ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator) Transport.ReceiveError!?[]const u8 {
         const self: *Self = @ptrCast(@alignCast(ptr));
-        return self.receive();
+        return self.receive(io, allocator);
     }
 
     fn closeVtable(ptr: *anyopaque) void {
@@ -176,13 +165,12 @@ pub const StdioTransport = struct {
 /// HTTP transport for remote server communication.
 /// Sends requests via HTTP POST and receives responses.
 pub const HttpTransport = struct {
-    allocator: std.mem.Allocator,
     endpoint: []const u8,
     session_id: ?[]const u8 = null,
     authorization_token: ?[]const u8 = null,
     protocol_version: []const u8 = "2025-11-25",
     is_closed: bool = false,
-    pending_responses: std.ArrayList([]const u8),
+    pending_responses: std.ArrayList([]const u8) = .empty,
 
     const Self = @This();
 
@@ -190,63 +178,61 @@ pub const HttpTransport = struct {
     pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) !Self {
         const owned_endpoint = try allocator.dupe(u8, endpoint);
         return .{
-            .allocator = allocator,
             .endpoint = owned_endpoint,
-            .pending_responses = .empty,
         };
     }
 
     /// Releases resources held by the transport.
-    pub fn deinit(self: *Self) void {
-        self.allocator.free(self.endpoint);
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.endpoint);
         for (self.pending_responses.items) |item| {
-            self.allocator.free(item);
+            allocator.free(item);
         }
-        self.pending_responses.deinit(self.allocator);
+        self.pending_responses.deinit(allocator);
         if (self.session_id) |sid| {
-            self.allocator.free(sid);
+            allocator.free(sid);
         }
         if (self.authorization_token) |token| {
-            self.allocator.free(token);
+            allocator.free(token);
         }
     }
 
     /// Sends a JSON-RPC message via HTTP POST.
-    pub fn send(self: *Self, message: []const u8) Transport.SendError!void {
+    pub fn send(self: *Self, _: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void {
         if (self.is_closed) return Transport.SendError.ConnectionClosed;
 
-        var client: std.http.Client = .{ .allocator = self.allocator };
+        var client: std.http.Client = .{ .allocator = allocator };
         defer client.deinit();
 
         const uri = std.Uri.parse(self.endpoint) catch return Transport.SendError.WriteError;
 
         var extra_headers: std.ArrayList(std.http.Header) = .empty;
-        defer extra_headers.deinit(self.allocator);
+        defer extra_headers.deinit(allocator);
 
-        extra_headers.append(self.allocator, .{ .name = "Content-Type", .value = "application/json" }) catch {
+        extra_headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" }) catch {
             return Transport.SendError.OutOfMemory;
         };
-        extra_headers.append(self.allocator, .{ .name = "Accept", .value = "application/json" }) catch {
+        extra_headers.append(allocator, .{ .name = "Accept", .value = "application/json" }) catch {
             return Transport.SendError.OutOfMemory;
         };
-        extra_headers.append(self.allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version }) catch {
+        extra_headers.append(allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version }) catch {
             return Transport.SendError.OutOfMemory;
         };
 
         var authorization_value: ?[]u8 = null;
-        defer if (authorization_value) |owned| self.allocator.free(owned);
+        defer if (authorization_value) |owned| allocator.free(owned);
 
         if (self.authorization_token) |token| {
-            authorization_value = std.fmt.allocPrint(self.allocator, "Bearer {s}", .{token}) catch {
+            authorization_value = std.fmt.allocPrint(allocator, "Bearer {s}", .{token}) catch {
                 return Transport.SendError.OutOfMemory;
             };
-            extra_headers.append(self.allocator, .{ .name = "Authorization", .value = authorization_value.? }) catch {
+            extra_headers.append(allocator, .{ .name = "Authorization", .value = authorization_value.? }) catch {
                 return Transport.SendError.OutOfMemory;
             };
         }
 
         if (self.session_id) |sid| {
-            extra_headers.append(self.allocator, .{ .name = "MCP-Session-Id", .value = sid }) catch {
+            extra_headers.append(allocator, .{ .name = "MCP-Session-Id", .value = sid }) catch {
                 return Transport.SendError.OutOfMemory;
             };
         }
@@ -264,15 +250,15 @@ pub const HttpTransport = struct {
         body_writer.end() catch return Transport.SendError.WriteError;
         req.connection.?.flush() catch return Transport.SendError.WriteError;
 
-        const redirect_buffer = self.allocator.alloc(u8, 8 * 1024) catch return Transport.SendError.OutOfMemory;
-        defer self.allocator.free(redirect_buffer);
+        const redirect_buffer = allocator.alloc(u8, 8 * 1024) catch return Transport.SendError.OutOfMemory;
+        defer allocator.free(redirect_buffer);
 
         var response = req.receiveHead(redirect_buffer) catch return Transport.SendError.WriteError;
 
         var header_it = response.head.iterateHeaders();
         while (header_it.next()) |header| {
             if (std.ascii.eqlIgnoreCase(header.name, "mcp-session-id")) {
-                self.setSessionId(header.value) catch return Transport.SendError.OutOfMemory;
+                self.setSessionId(allocator, header.value) catch return Transport.SendError.OutOfMemory;
             }
         }
 
@@ -280,26 +266,26 @@ pub const HttpTransport = struct {
         var reader = response.reader(&transfer_buffer);
 
         var body: std.ArrayList(u8) = .empty;
-        defer body.deinit(self.allocator);
+        defer body.deinit(allocator);
 
         var buf: [4096]u8 = undefined;
         while (true) {
             const n = reader.readSliceShort(&buf) catch return Transport.SendError.WriteError;
             if (n == 0) break;
-            body.appendSlice(self.allocator, buf[0..n]) catch return Transport.SendError.OutOfMemory;
+            body.appendSlice(allocator, buf[0..n]) catch return Transport.SendError.OutOfMemory;
         }
 
         if (body.items.len == 0) return;
 
-        const owned = self.allocator.dupe(u8, body.items) catch return Transport.SendError.OutOfMemory;
-        self.pending_responses.append(self.allocator, owned) catch {
-            self.allocator.free(owned);
+        const owned = allocator.dupe(u8, body.items) catch return Transport.SendError.OutOfMemory;
+        self.pending_responses.append(allocator, owned) catch {
+            allocator.free(owned);
             return Transport.SendError.OutOfMemory;
         };
     }
 
     /// Receives a response from the pending queue.
-    pub fn receive(self: *Self) Transport.ReceiveError!?[]const u8 {
+    pub fn receive(self: *Self, _: std.Io, _: std.mem.Allocator) Transport.ReceiveError!?[]const u8 {
         if (self.is_closed) return Transport.ReceiveError.ConnectionClosed;
 
         if (self.pending_responses.items.len > 0) {
@@ -314,19 +300,19 @@ pub const HttpTransport = struct {
     }
 
     /// Sets the session ID from the MCP-Session-Id header.
-    pub fn setSessionId(self: *Self, session_id: []const u8) !void {
+    pub fn setSessionId(self: *Self, allocator: std.mem.Allocator, session_id: []const u8) !void {
         if (self.session_id) |old| {
-            self.allocator.free(old);
+            allocator.free(old);
         }
-        self.session_id = try self.allocator.dupe(u8, session_id);
+        self.session_id = try allocator.dupe(u8, session_id);
     }
 
     /// Sets the authorization token for Bearer auth (OAuth 2.1).
-    pub fn setAuthorizationToken(self: *Self, token: []const u8) !void {
+    pub fn setAuthorizationToken(self: *Self, allocator: std.mem.Allocator, token: []const u8) !void {
         if (self.authorization_token) |old| {
-            self.allocator.free(old);
+            allocator.free(old);
         }
-        self.authorization_token = try self.allocator.dupe(u8, token);
+        self.authorization_token = try allocator.dupe(u8, token);
     }
 
     /// Returns a Transport interface for this HTTP transport.
@@ -341,14 +327,14 @@ pub const HttpTransport = struct {
         };
     }
 
-    fn sendVtable(ptr: *anyopaque, message: []const u8) Transport.SendError!void {
+    fn sendVtable(ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void {
         const self: *Self = @ptrCast(@alignCast(ptr));
-        return self.send(message);
+        return self.send(io, allocator, message);
     }
 
-    fn receiveVtable(ptr: *anyopaque) Transport.ReceiveError!?[]const u8 {
+    fn receiveVtable(ptr: *anyopaque, io: std.Io, allocator: std.mem.Allocator) Transport.ReceiveError!?[]const u8 {
         const self: *Self = @ptrCast(@alignCast(ptr));
-        return self.receive();
+        return self.receive(io, allocator);
     }
 
     fn closeVtable(ptr: *anyopaque) void {
@@ -365,25 +351,26 @@ pub const TransportType = enum {
 
 /// Creates a transport based on the specified type.
 pub fn createTransport(
-    allocator: std.mem.Allocator,
     io: std.Io,
+    allocator: std.mem.Allocator,
     transport_type: TransportType,
     options: TransportOptions,
 ) !Transport {
+    _ = io;
     switch (transport_type) {
         .stdio => {
             const stdio = try allocator.create(StdioTransport);
-            stdio.* = .init(io, allocator);
+            stdio.* = .{};
             return stdio.transport();
         },
         .http => {
             const url = options.url orelse return error.MissingUrl;
-            const http = try allocator.create(HttpTransport);
-            http.* = try .init(allocator, url);
+            const http_transport = try allocator.create(HttpTransport);
+            http_transport.* = try .init(allocator, url);
             if (options.authorization_token) |token| {
-                try http.setAuthorizationToken(token);
+                try http_transport.setAuthorizationToken(allocator, token);
             }
-            return http.transport();
+            return http_transport.transport();
         },
     }
 }
@@ -395,9 +382,8 @@ pub const TransportOptions = struct {
 };
 
 test "StdioTransport initialization" {
-    const allocator = std.testing.allocator;
-    var transport_impl: StdioTransport = .init(std.Io.failing, allocator);
-    defer transport_impl.deinit();
+    var transport_impl: StdioTransport = .{};
+    _ = &transport_impl;
 
     try std.testing.expect(!transport_impl.is_closed);
 }
@@ -405,7 +391,7 @@ test "StdioTransport initialization" {
 test "HttpTransport initialization" {
     const allocator = std.testing.allocator;
     var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
-    defer transport_impl.deinit();
+    defer transport_impl.deinit(allocator);
 
     try std.testing.expectEqualStrings("http://localhost:3000", transport_impl.endpoint);
 }
@@ -413,8 +399,8 @@ test "HttpTransport initialization" {
 test "HttpTransport session ID" {
     const allocator = std.testing.allocator;
     var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
-    defer transport_impl.deinit();
+    defer transport_impl.deinit(allocator);
 
-    try transport_impl.setSessionId("test-session-123");
+    try transport_impl.setSessionId(allocator, "test-session-123");
     try std.testing.expectEqualStrings("test-session-123", transport_impl.session_id.?);
 }

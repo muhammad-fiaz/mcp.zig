@@ -56,13 +56,11 @@ pub const ResourceError = error{
 
 /// Builder for creating resources with a fluent API.
 pub const ResourceBuilder = struct {
-    allocator: std.mem.Allocator,
     resource: Resource,
 
     /// Creates a new resource builder with the given URI and name.
-    pub fn init(allocator: std.mem.Allocator, uri: []const u8, name: []const u8) ResourceBuilder {
+    pub fn init(uri: []const u8, name: []const u8) ResourceBuilder {
         return .{
-            .allocator = allocator,
             .resource = .{ .uri = uri, .name = name, .handler = defaultHandler },
         };
     }
@@ -142,15 +140,13 @@ pub fn detectMimeType(path: []const u8) []const u8 {
 }
 
 test "ResourceBuilder" {
-    const allocator = std.testing.allocator;
-    var builder: ResourceBuilder = .init(allocator, "file:///test.txt", "Test");
+    var builder: ResourceBuilder = .init("file:///test.txt", "Test");
     const resource = builder.description("A test").mimeType("text/plain").build();
     try std.testing.expectEqualStrings("file:///test.txt", resource.uri);
 }
 
 test "ResourceBuilder with title and annotations" {
-    const allocator = std.testing.allocator;
-    var builder: ResourceBuilder = .init(allocator, "file:///data.json", "Data");
+    var builder: ResourceBuilder = .init("file:///data.json", "Data");
     const resource = builder
         .title("Data File")
         .description("JSON data file")

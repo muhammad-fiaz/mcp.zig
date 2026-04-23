@@ -40,11 +40,10 @@ pub const Config = struct {
 /// Logger instance for structured log output.
 pub const Logger = struct {
     config: Config,
-    allocator: std.mem.Allocator,
 
     /// Creates a new logger with the given configuration.
-    pub fn init(allocator: std.mem.Allocator, config: Config) Logger {
-        return .{ .config = config, .allocator = allocator };
+    pub fn init(config: Config) Logger {
+        return .{ .config = config };
     }
 
     /// Logs a debug-level message.
@@ -80,8 +79,8 @@ pub const Logger = struct {
 var global_logger: ?Logger = null;
 
 /// Initializes the global logger with the given configuration.
-pub fn initGlobal(allocator: std.mem.Allocator, config: Config) void {
-    global_logger = Logger.init(allocator, config);
+pub fn initGlobal(config: Config) void {
+    global_logger = Logger.init(config);
 }
 
 /// Logs a debug message to the global logger.

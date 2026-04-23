@@ -18,15 +18,13 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
     // Create server
-    var server: mcp.Server = .init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
         .description = "A simple example MCP server",
         .instructions = "This server provides basic greeting and echo tools.",
-        .allocator = allocator,
-        .io = io,
-    });
+        });
     defer server.deinit();
 
     // Add a greeting tool
@@ -80,10 +78,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     server.enableTasks();
 
     // Run the server
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
 fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

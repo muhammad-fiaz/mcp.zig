@@ -59,16 +59,14 @@ pub const ToolError = error{
 
 /// Builder for creating tools with a fluent API.
 pub const ToolBuilder = struct {
-    allocator: std.mem.Allocator,
     tool: Tool,
     input_builder: ?schema.InputSchemaBuilder = null,
 
     const Self = @This();
 
     /// Creates a new tool builder with the given name.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) Self {
+    pub fn init(name: []const u8) Self {
         return .{
-            .allocator = allocator,
             .tool = .{
                 .name = name,
                 .handler = defaultHandler,
@@ -298,9 +296,7 @@ pub fn isValidToolName(name: []const u8) bool {
 }
 
 test "ToolBuilder" {
-    const allocator = std.testing.allocator;
-
-    var builder: ToolBuilder = .init(allocator, "test_tool");
+    var builder: ToolBuilder = .init("test_tool");
     const tool = builder
         .description("A test tool")
         .title("Test Tool")
@@ -313,9 +309,7 @@ test "ToolBuilder" {
 }
 
 test "ToolBuilder with task support" {
-    const allocator = std.testing.allocator;
-
-    var builder: ToolBuilder = .init(allocator, "long_tool");
+    var builder: ToolBuilder = .init("long_tool");
     const tool = builder
         .description("A long-running tool")
         .taskSupport("optional")

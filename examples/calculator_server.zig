@@ -13,15 +13,13 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
-    var server: mcp.Server = .init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "calculator-server",
         .version = "1.0.0",
         .title = "Calculator Server",
         .description = "Perform arithmetic operations",
         .instructions = "Use add, subtract, multiply, or divide tools with 'a' and 'b' number arguments.",
-        .allocator = allocator,
-        .io = io,
-    });
+        });
     defer server.deinit();
 
     // Add arithmetic tools
@@ -76,10 +74,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     server.enableLogging();
     server.enableTasks();
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
 fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

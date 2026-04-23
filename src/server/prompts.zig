@@ -44,22 +44,20 @@ pub const PromptError = error{
 
 /// Builder for creating prompts with a fluent API.
 pub const PromptBuilder = struct {
-    allocator: std.mem.Allocator,
     prompt: Prompt,
     args_list: std.ArrayList(PromptArgument),
 
     /// Creates a new prompt builder with the given name.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) PromptBuilder {
+    pub fn init(name: []const u8) PromptBuilder {
         return .{
-            .allocator = allocator,
             .prompt = .{ .name = name, .handler = defaultHandler },
             .args_list = .empty,
         };
     }
 
     /// Releases resources held by the builder.
-    pub fn deinit(self: *PromptBuilder) void {
-        self.args_list.deinit(self.allocator);
+    pub fn deinit(self: *PromptBuilder, allocator: std.mem.Allocator) void {
+        self.args_list.deinit(allocator);
     }
 
     /// Sets the prompt description.
@@ -75,14 +73,14 @@ pub const PromptBuilder = struct {
     }
 
     /// Adds an argument specification to the prompt.
-    pub fn addArgument(self: *PromptBuilder, name: []const u8, desc: ?[]const u8, required: bool) !*PromptBuilder {
-        try self.args_list.append(self.allocator, .{ .name = name, .description = desc, .required = required });
+    pub fn addArgument(self: *PromptBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, required: bool) !*PromptBuilder {
+        try self.args_list.append(allocator, .{ .name = name, .description = desc, .required = required });
         return self;
     }
 
     /// Adds an argument specification with a title to the prompt.
-    pub fn addArgumentWithTitle(self: *PromptBuilder, name: []const u8, arg_title: ?[]const u8, desc: ?[]const u8, required: bool) !*PromptBuilder {
-        try self.args_list.append(self.allocator, .{ .name = name, .title = arg_title, .description = desc, .required = required });
+    pub fn addArgumentWithTitle(self: *PromptBuilder, allocator: std.mem.Allocator, name: []const u8, arg_title: ?[]const u8, desc: ?[]const u8, required: bool) !*PromptBuilder {
+        try self.args_list.append(allocator, .{ .name = name, .title = arg_title, .description = desc, .required = required });
         return self;
     }
 
@@ -129,10 +127,10 @@ pub fn assistantMessage(text: []const u8) PromptMessage {
 
 test "PromptBuilder" {
     const allocator = std.testing.allocator;
-    var builder: PromptBuilder = .init(allocator, "test_prompt");
-    defer builder.deinit();
+    var builder: PromptBuilder = .init("test_prompt");
+    defer builder.deinit(allocator);
 
-    _ = try builder.addArgument("name", "User name", true);
+    _ = try builder.addArgument(allocator, "name", "User name", true);
     const prompt = builder.description("A test prompt").build();
 
     try std.testing.expectEqualStrings("test_prompt", prompt.name);

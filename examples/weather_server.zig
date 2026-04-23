@@ -17,15 +17,13 @@ pub fn main(init: std.process.Init) void {
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create weather server
-    var server: mcp.Server = .init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "weather-server",
         .version = "1.0.0",
         .title = "Weather Server",
         .description = "Get weather alerts and forecasts for US locations",
         .instructions = "Use get_alerts to check weather alerts for a US state, or get_forecast to get the forecast for a location.",
-        .allocator = allocator,
-        .io = io,
-    });
+        });
     defer server.deinit();
 
     // Add get_alerts tool
@@ -78,10 +76,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     server.enableTasks();
 
     // Run the server
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
 fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
