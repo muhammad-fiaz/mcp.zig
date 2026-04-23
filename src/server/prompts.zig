@@ -129,7 +129,7 @@ pub fn assistantMessage(text: []const u8) PromptMessage {
 
 test "PromptBuilder" {
     const allocator = std.testing.allocator;
-    var builder = PromptBuilder.init(allocator, "test_prompt");
+    var builder: PromptBuilder = .init(allocator, "test_prompt");
     defer builder.deinit();
 
     _ = try builder.addArgument("name", "User name", true);

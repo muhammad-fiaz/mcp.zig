@@ -17,7 +17,7 @@ pub fn main(init: std.process.Init) void {
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create weather server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(.{
         .name = "weather-server",
         .version = "1.0.0",
         .title = "Weather Server",

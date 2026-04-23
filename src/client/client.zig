@@ -73,7 +73,7 @@ pub const Client = struct {
             .config = config,
             .allocator = allocator,
             .io = io,
-            .pending_requests = std.AutoHashMap(i64, PendingRequest).init(allocator),
+            .pending_requests = .init(allocator),
             .roots_list = .empty,
             .update_thread = report.checkForUpdates(io, allocator),
         };
@@ -142,7 +142,7 @@ pub const Client = struct {
         self.state = .connecting;
 
         const stdio = try self.allocator.create(transport_mod.StdioTransport);
-        stdio.* = transport_mod.StdioTransport.init(self.allocator, self.io.?);
+        stdio.* = .init(self.allocator, self.io.?);
         self.transport = stdio.transport();
 
         try self.initialize();

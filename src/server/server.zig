@@ -140,11 +140,11 @@ pub const Server = struct {
             .config = config,
             .allocator = allocator,
             .io = io,
-            .tools = std.StringHashMap(tools_mod.Tool).init(allocator),
-            .resources = std.StringHashMap(resources_mod.Resource).init(allocator),
-            .resource_templates = std.StringHashMap(resources_mod.ResourceTemplate).init(allocator),
-            .prompts = std.StringHashMap(prompts_mod.Prompt).init(allocator),
-            .pending_requests = std.AutoHashMap(i64, PendingRequest).init(allocator),
+            .tools = .init(allocator),
+            .resources = .init(allocator),
+            .resource_templates = .init(allocator),
+            .prompts = .init(allocator),
+            .pending_requests = .init(allocator),
         };
     }
 
@@ -228,7 +228,7 @@ pub const Server = struct {
             .stdio => {
                 self.log("Server listening on STDIO");
                 const stdio = try self.allocator.create(transport_mod.StdioTransport);
-                stdio.* = transport_mod.StdioTransport.init(self.io, self.allocator);
+                stdio.* = .init(self.io, self.allocator);
                 self.stdio_transport = stdio;
                 self.transport = stdio.transport();
                 try self.messageLoop();
@@ -352,7 +352,7 @@ pub const Server = struct {
         };
         defer self.allocator.free(body_items);
 
-        var request_transport = HttpRequestTransport.init(self.allocator);
+        var request_transport: HttpRequestTransport = .init(self.allocator);
         defer request_transport.deinit();
 
         const previous_transport = self.transport;
@@ -593,7 +593,7 @@ pub const Server = struct {
 
     /// Handle tools/list request
     fn handleToolsList(self: *Self, request: jsonrpc.Request) !void {
-        var tools_array = std.json.Array.init(self.allocator);
+        var tools_array: std.json.Array = .init(self.allocator);
 
         var iter = self.tools.iterator();
         while (iter.next()) |entry| {
@@ -656,7 +656,7 @@ pub const Server = struct {
 
         if (self.tools.get(tool_name)) |tool| {
             const tool_result = tool.handler(self.allocator, arguments) catch |err| {
-                var content_array = std.json.Array.init(self.allocator);
+                var content_array: std.json.Array = .init(self.allocator);
                 var text_obj: std.json.ObjectMap = .empty;
                 try text_obj.put(self.allocator, "type", .{ .string = "text" });
                 try text_obj.put(self.allocator, "text", .{ .string = @errorName(err) });
@@ -671,7 +671,7 @@ pub const Server = struct {
                 return;
             };
 
-            var content_array = std.json.Array.init(self.allocator);
+            var content_array: std.json.Array = .init(self.allocator);
             for (tool_result.content) |content_item| {
                 var item_obj: std.json.ObjectMap = .empty;
                 switch (content_item) {
@@ -726,7 +726,7 @@ pub const Server = struct {
 
     /// Handle resources/list request
     fn handleResourcesList(self: *Self, request: jsonrpc.Request) !void {
-        var resources_array = std.json.Array.init(self.allocator);
+        var resources_array: std.json.Array = .init(self.allocator);
 
         var iter = self.resources.iterator();
         while (iter.next()) |entry| {
@@ -776,7 +776,7 @@ pub const Server = struct {
                 return;
             };
 
-            var contents_array = std.json.Array.init(self.allocator);
+            var contents_array: std.json.Array = .init(self.allocator);
             var content_obj: std.json.ObjectMap = .empty;
             try content_obj.put(self.allocator, "uri", .{ .string = uri });
             if (content.text) |text| {
@@ -803,7 +803,7 @@ pub const Server = struct {
 
     /// Handle resources/templates/list request
     fn handleResourceTemplatesList(self: *Self, request: jsonrpc.Request) !void {
-        var templates_array = std.json.Array.init(self.allocator);
+        var templates_array: std.json.Array = .init(self.allocator);
 
         var iter = self.resource_templates.iterator();
         while (iter.next()) |entry| {
@@ -849,7 +849,7 @@ pub const Server = struct {
 
     /// Handle prompts/list request
     fn handlePromptsList(self: *Self, request: jsonrpc.Request) !void {
-        var prompts_array = std.json.Array.init(self.allocator);
+        var prompts_array: std.json.Array = .init(self.allocator);
 
         var iter = self.prompts.iterator();
         while (iter.next()) |entry| {
@@ -863,7 +863,7 @@ pub const Server = struct {
             }
 
             if (entry.value_ptr.arguments) |args| {
-                var args_array = std.json.Array.init(self.allocator);
+                var args_array: std.json.Array = .init(self.allocator);
                 for (args) |arg| {
                     var arg_obj: std.json.ObjectMap = .empty;
                     try arg_obj.put(self.allocator, "name", .{ .string = arg.name });
@@ -912,7 +912,7 @@ pub const Server = struct {
                 return;
             };
 
-            var messages_array = std.json.Array.init(self.allocator);
+            var messages_array: std.json.Array = .init(self.allocator);
             for (messages) |msg| {
                 var msg_obj: std.json.ObjectMap = .empty;
                 try msg_obj.put(self.allocator, "role", .{ .string = msg.role.toString() });
@@ -1000,7 +1000,7 @@ pub const Server = struct {
     /// Handle completion/complete request
     fn handleCompletion(self: *Self, request: jsonrpc.Request) !void {
         var completion: std.json.ObjectMap = .empty;
-        const values_array = std.json.Array.init(self.allocator);
+        const values_array: std.json.Array = .init(self.allocator);
         try completion.put(self.allocator, "values", .{ .array = values_array });
         try completion.put(self.allocator, "hasMore", .{ .bool = false });
 
@@ -1028,7 +1028,7 @@ pub const Server = struct {
     /// Handle tasks/list request
     fn handleTasksList(self: *Self, request: jsonrpc.Request) !void {
         var result: std.json.ObjectMap = .empty;
-        const tasks_array = std.json.Array.init(self.allocator);
+        const tasks_array: std.json.Array = .init(self.allocator);
         try result.put(self.allocator, "tasks", .{ .array = tasks_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
@@ -1165,7 +1165,7 @@ pub const Server = struct {
 };
 
 test "Server initialization" {
-    var server = Server.init(.{
+    var server: Server = .init(.{
         .name = "test-server",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
@@ -1177,14 +1177,14 @@ test "Server initialization" {
 }
 
 test "Server add tool" {
-    var server = Server.init(.{
+    var server: Server = .init(.{
         .name = "test-server",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
     });
     defer server.deinit();
 
-    const tool = tools_mod.Tool{
+    const tool: tools_mod.Tool = .{
         .name = "test_tool",
         .description = "A test tool",
         .handler = struct {
@@ -1200,7 +1200,7 @@ test "Server add tool" {
 }
 
 test "Server add resource" {
-    var server = Server.init(.{
+    var server: Server = .init(.{
         .name = "test-server",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
@@ -1221,7 +1221,7 @@ test "Server add resource" {
 }
 
 test "Server add prompt" {
-    var server = Server.init(.{
+    var server: Server = .init(.{
         .name = "test-server",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
@@ -1242,7 +1242,7 @@ test "Server add prompt" {
 }
 
 test "Server enable capabilities" {
-    var server = Server.init(.{
+    var server: Server = .init(.{
         .name = "test-server",
         .version = "1.0.0",
         .allocator = std.testing.allocator,

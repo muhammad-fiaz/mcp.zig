@@ -5,6 +5,7 @@
 //! such as files, database records, or API responses.
 
 const std = @import("std");
+
 const types = @import("../protocol/types.zig");
 
 /// A resource exposed by an MCP server.
@@ -142,14 +143,14 @@ pub fn detectMimeType(path: []const u8) []const u8 {
 
 test "ResourceBuilder" {
     const allocator = std.testing.allocator;
-    var builder = ResourceBuilder.init(allocator, "file:///test.txt", "Test");
+    var builder: ResourceBuilder = .init(allocator, "file:///test.txt", "Test");
     const resource = builder.description("A test").mimeType("text/plain").build();
     try std.testing.expectEqualStrings("file:///test.txt", resource.uri);
 }
 
 test "ResourceBuilder with title and annotations" {
     const allocator = std.testing.allocator;
-    var builder = ResourceBuilder.init(allocator, "file:///data.json", "Data");
+    var builder: ResourceBuilder = .init(allocator, "file:///data.json", "Data");
     const resource = builder
         .title("Data File")
         .description("JSON data file")

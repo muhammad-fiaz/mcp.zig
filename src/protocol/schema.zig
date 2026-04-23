@@ -68,7 +68,7 @@ pub const Schema = struct {
         }
 
         if (self.required) |req| {
-            var arr = std.json.Array.init(allocator);
+            var arr: std.json.Array = .init(allocator);
             for (req) |name| {
                 try arr.append(.{ .string = name });
             }
@@ -232,7 +232,7 @@ pub const InputSchemaBuilder = struct {
     pub fn init(allocator: std.mem.Allocator) InputSchemaBuilder {
         return .{
             .allocator = allocator,
-            .properties = std.StringHashMap(Property).init(allocator),
+            .properties = .init(allocator),
             .required_fields = .empty,
         };
     }
@@ -324,7 +324,7 @@ pub const InputSchemaBuilder = struct {
         try obj.put(self.allocator, "properties", .{ .object = props });
 
         if (self.required_fields.items.len > 0) {
-            var req = std.json.Array.init(self.allocator);
+            var req: std.json.Array = .init(self.allocator);
             for (self.required_fields.items) |name| {
                 try req.append(.{ .string = name });
             }
@@ -337,7 +337,7 @@ pub const InputSchemaBuilder = struct {
 
 test "SchemaBuilder" {
     const allocator = std.testing.allocator;
-    var builder = SchemaBuilder.init(allocator);
+    var builder: SchemaBuilder = .init(allocator);
 
     const schema = builder
         .string_()
@@ -349,11 +349,11 @@ test "SchemaBuilder" {
 }
 
 test "InputSchemaBuilder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var builder = InputSchemaBuilder.init(allocator);
+    var builder: InputSchemaBuilder = .init(allocator);
     defer builder.deinit();
 
     _ = try builder.addString("name", "User name", true);

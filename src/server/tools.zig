@@ -300,7 +300,7 @@ pub fn isValidToolName(name: []const u8) bool {
 test "ToolBuilder" {
     const allocator = std.testing.allocator;
 
-    var builder = ToolBuilder.init(allocator, "test_tool");
+    var builder: ToolBuilder = .init(allocator, "test_tool");
     const tool = builder
         .description("A test tool")
         .title("Test Tool")
@@ -315,7 +315,7 @@ test "ToolBuilder" {
 test "ToolBuilder with task support" {
     const allocator = std.testing.allocator;
 
-    var builder = ToolBuilder.init(allocator, "long_tool");
+    var builder: ToolBuilder = .init(allocator, "long_tool");
     const tool = builder
         .description("A long-running tool")
         .taskSupport("optional")
@@ -347,7 +347,7 @@ test "argument extraction" {
     try obj.put(allocator, "enabled", .{ .bool = true });
     try obj.put(allocator, "value", .{ .float = 3.14 });
 
-    const value = std.json.Value{ .object = obj };
+    const value: std.json.Value = .{ .object = obj };
 
     try std.testing.expectEqualStrings("test", getString(value, "name").?);
     try std.testing.expectEqual(@as(i64, 42), getInteger(value, "count").?);

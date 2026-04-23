@@ -641,19 +641,19 @@ pub const Result = struct {
 };
 
 test "RequestId equality" {
-    const id1 = RequestId{ .integer = 42 };
-    const id2 = RequestId{ .integer = 42 };
-    const id3 = RequestId{ .string = "abc" };
+    const id1: RequestId = .{ .integer = 42 };
+    const id2: RequestId = .{ .integer = 42 };
+    const id3: RequestId = .{ .string = "abc" };
 
     try std.testing.expect(id1.eql(id2));
     try std.testing.expect(!id1.eql(id3));
 }
 
 test "ContentBlock text access" {
-    const content = ContentBlock{ .text = .{ .text = "Hello" } };
+    const content: ContentBlock = .{ .text = .{ .text = "Hello" } };
     try std.testing.expectEqualStrings("Hello", content.asText().?);
 
-    const image = ContentBlock{ .image = .{ .data = "base64", .mimeType = "image/png" } };
+    const image: ContentBlock = .{ .image = .{ .data = "base64", .mimeType = "image/png" } };
     try std.testing.expect(image.asText() == null);
 }
 
@@ -670,11 +670,11 @@ test "TaskStatus" {
 }
 
 test "ContentBlock audio variant" {
-    const audio = ContentBlock{ .audio = .{ .data = "base64audio", .mimeType = "audio/wav" } };
+    const audio: ContentBlock = .{ .audio = .{ .data = "base64audio", .mimeType = "audio/wav" } };
     try std.testing.expect(audio.asText() == null);
 }
 
 test "ContentBlock resource_link variant" {
-    const link = ContentBlock{ .resource_link = .{ .name = "test", .uri = "file:///test.txt" } };
+    const link: ContentBlock = .{ .resource_link = .{ .name = "test", .uri = "file:///test.txt" } };
     try std.testing.expect(link.asText() == null);
 }

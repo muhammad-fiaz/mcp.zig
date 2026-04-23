@@ -215,7 +215,7 @@ pub const HttpTransport = struct {
     pub fn send(self: *Self, message: []const u8) Transport.SendError!void {
         if (self.is_closed) return Transport.SendError.ConnectionClosed;
 
-        var client = std.http.Client{ .allocator = self.allocator };
+        var client: std.http.Client = .{ .allocator = self.allocator };
         defer client.deinit();
 
         const uri = std.Uri.parse(self.endpoint) catch return Transport.SendError.WriteError;

@@ -18,7 +18,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
     // Create server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(.{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
