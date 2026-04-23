@@ -233,7 +233,7 @@ pub const InputSchemaBuilder = struct {
         return .{
             .allocator = allocator,
             .properties = std.StringHashMap(Property).init(allocator),
-            .required_fields = .{},
+            .required_fields = .empty,
         };
     }
 

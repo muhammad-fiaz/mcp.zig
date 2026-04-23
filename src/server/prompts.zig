@@ -5,6 +5,7 @@
 //! predefined conversation patterns with optional arguments.
 
 const std = @import("std");
+
 const types = @import("../protocol/types.zig");
 
 /// A prompt template exposed by an MCP server.
@@ -52,7 +53,7 @@ pub const PromptBuilder = struct {
         return .{
             .allocator = allocator,
             .prompt = .{ .name = name, .handler = defaultHandler },
-            .args_list = .{},
+            .args_list = .empty,
         };
     }
 
