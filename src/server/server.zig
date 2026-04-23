@@ -89,6 +89,7 @@ pub const ServerConfig = struct {
     websiteUrl: ?[]const u8 = null,
     instructions: ?[]const u8 = null,
     allocator: std.mem.Allocator = std.heap.page_allocator,
+    io: ?std.Io = null,
 };
 
 /// Current state of the server
@@ -104,6 +105,7 @@ pub const ServerState = enum {
 pub const Server = struct {
     config: ServerConfig,
     allocator: std.mem.Allocator,
+    io: std.Io,
     state: ServerState = .uninitialized,
     tools: std.StringHashMap(tools_mod.Tool),
     resources: std.StringHashMap(resources_mod.Resource),
@@ -129,9 +131,15 @@ pub const Server = struct {
     /// Initialize a new MCP Server
     pub fn init(config: ServerConfig) Self {
         const allocator = config.allocator;
+        const io = config.io orelse io: {
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            break :io threaded.io();
+        };
+
         return .{
             .config = config,
             .allocator = allocator,
+            .io = io,
             .tools = std.StringHashMap(tools_mod.Tool).init(allocator),
             .resources = std.StringHashMap(resources_mod.Resource).init(allocator),
             .resource_templates = std.StringHashMap(resources_mod.ResourceTemplate).init(allocator),
@@ -220,7 +228,7 @@ pub const Server = struct {
             .stdio => {
                 self.log("Server listening on STDIO");
                 const stdio = try self.allocator.create(transport_mod.StdioTransport);
-                stdio.* = transport_mod.StdioTransport.init(self.allocator);
+                stdio.* = transport_mod.StdioTransport.init(self.io, self.allocator);
                 self.stdio_transport = stdio;
                 self.transport = stdio.transport();
                 try self.messageLoop();
@@ -232,37 +240,36 @@ pub const Server = struct {
     }
 
     fn runHttp(self: *Self, config: HttpRunConfig) !void {
+        const io = self.io;
         const bind_host = if (std.mem.eql(u8, config.host, "localhost")) "127.0.0.1" else config.host;
 
-        const address = std.net.Address.resolveIp(bind_host, config.port) catch {
+        const address = std.Io.net.IpAddress.resolve(io, bind_host, config.port) catch {
             return error.AddressResolutionError;
         };
 
-        var listener = try address.listen(.{ .reuse_address = true });
-        defer listener.deinit();
-
-        std.log.info("Server listening on http://{f}", .{listener.listen_address});
+        var listener = try std.Io.net.IpAddress.listen(&address, io, .{});
+        defer listener.deinit(io);
 
         while (self.state != .stopped and self.state != .shutting_down) {
-            const connection = listener.accept() catch |err| {
+            const stream = listener.accept(io) catch |err| {
                 std.log.err("HTTP accept failed: {s}", .{@errorName(err)});
                 continue;
             };
 
-            self.serveHttpConnection(connection) catch |err| {
+            self.serveHttpConnection(io, stream) catch |err| {
                 std.log.err("HTTP connection error: {s}", .{@errorName(err)});
             };
         }
     }
 
-    fn serveHttpConnection(self: *Self, connection: std.net.Server.Connection) !void {
-        defer connection.stream.close();
+    fn serveHttpConnection(self: *Self, io: std.Io, stream: std.Io.net.Stream) !void {
+        defer stream.close(io);
 
         var send_buffer: [4096]u8 = undefined;
         var recv_buffer: [4096]u8 = undefined;
-        var connection_reader = connection.stream.reader(&recv_buffer);
-        var connection_writer = connection.stream.writer(&send_buffer);
-        var server: http.Server = .init(connection_reader.interface(), &connection_writer.interface);
+        var connection_reader = stream.reader(io, &recv_buffer);
+        var connection_writer = stream.writer(io, &send_buffer);
+        var server: http.Server = .init(&connection_reader.interface, &connection_writer.interface);
 
         var request = server.receiveHead() catch |err| switch (err) {
             error.HttpConnectionClosing => return,

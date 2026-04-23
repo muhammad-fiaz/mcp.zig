@@ -4,8 +4,8 @@
 //! Used primarily for update checking and logging.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const http = std.http;
+const builtin = @import("builtin");
 
 pub const NetworkError = error{
     InvalidUri,
@@ -19,8 +19,11 @@ pub const NetworkError = error{
 
 /// Fetches a JSON response from a URL.
 /// Returns the parsed JSON value (caller must deinit).
-pub fn fetchJson(allocator: std.mem.Allocator, url: []const u8, headers: []const http.Header) !std.json.Parsed(std.json.Value) {
-    var client = http.Client{ .allocator = allocator };
+pub fn fetchJson(io: std.Io, allocator: std.mem.Allocator, url: []const u8, headers: []const http.Header) !std.json.Parsed(std.json.Value) {
+    var client: http.Client = .{
+        .allocator = allocator,
+        .io = io,
+    };
     defer client.deinit();
 
     var req = try client.request(.GET, try std.Uri.parse(url), .{
@@ -52,12 +55,11 @@ pub fn fetchJson(allocator: std.mem.Allocator, url: []const u8, headers: []const
     var body = std.ArrayList(u8).initCapacity(allocator, 4096) catch return NetworkError.ReadError;
     defer body.deinit(allocator);
 
-    const writer = body.writer(allocator);
     var buf: [4096]u8 = undefined;
     while (true) {
         const n = reader.readSliceShort(&buf) catch return NetworkError.ReadError;
         if (n == 0) break;
-        try writer.writeAll(buf[0..n]);
+        body.appendSlice(allocator, buf[0..n]) catch return NetworkError.ReadError;
     }
 
     // Parse JSON from the response body.

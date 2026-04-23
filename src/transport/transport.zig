@@ -5,6 +5,7 @@
 //! transport for remote server connections.
 
 const std = @import("std");
+
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 const types = @import("../protocol/types.zig");
 
@@ -54,6 +55,7 @@ pub const Transport = struct {
 /// Messages are delimited by newlines and sent via stdin/stdout.
 pub const StdioTransport = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     read_buffer: std.ArrayList(u8),
     is_closed: bool = false,
     max_message_size: usize = 4 * 1024 * 1024,
@@ -61,10 +63,11 @@ pub const StdioTransport = struct {
     const Self = @This();
 
     /// Initializes a new STDIO transport.
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) Self {
         return .{
             .allocator = allocator,
-            .read_buffer = .{},
+            .io = io,
+            .read_buffer = .empty,
         };
     }
 
@@ -77,9 +80,9 @@ pub const StdioTransport = struct {
     pub fn send(self: *Self, message: []const u8) Transport.SendError!void {
         if (self.is_closed) return Transport.SendError.ConnectionClosed;
 
-        const stdout = std.fs.File.stdout();
-        stdout.writeAll(message) catch return Transport.SendError.WriteError;
-        stdout.writeAll("\n") catch return Transport.SendError.WriteError;
+        const stdout = std.Io.File.stdout();
+        stdout.writeStreamingAll(self.io, message) catch return Transport.SendError.WriteError;
+        stdout.writeStreamingAll(self.io, "\n") catch return Transport.SendError.WriteError;
     }
 
     /// Sends a JSON-RPC message object.
@@ -95,11 +98,11 @@ pub const StdioTransport = struct {
 
         self.read_buffer.clearRetainingCapacity();
 
-        const stdin = std.fs.File.stdin();
+        const stdin = std.Io.File.stdin();
 
         while (true) {
             var buf: [1]u8 = undefined;
-            const bytes_read = stdin.read(&buf) catch return Transport.ReceiveError.ReadError;
+            const bytes_read = stdin.readStreaming(self.io, &.{&buf}) catch return Transport.ReceiveError.ReadError;
 
             if (bytes_read == 0) {
                 if (self.read_buffer.items.len == 0) {
@@ -137,10 +140,9 @@ pub const StdioTransport = struct {
 
     /// Writes a message to stderr for logging.
     pub fn writeStderr(self: *Self, message: []const u8) void {
-        _ = self;
-        const stderr = std.fs.File.stderr();
-        stderr.writeAll(message) catch {};
-        stderr.writeAll("\n") catch {};
+        const stderr = std.Io.File.stderr();
+        stderr.writeStreamingAll(self.io, message) catch {};
+        stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Returns a Transport interface for this STDIO transport.
@@ -190,7 +192,7 @@ pub const HttpTransport = struct {
         return .{
             .allocator = allocator,
             .endpoint = owned_endpoint,
-            .pending_responses = .{},
+            .pending_responses = .empty,
         };
     }
 
@@ -218,7 +220,7 @@ pub const HttpTransport = struct {
 
         const uri = std.Uri.parse(self.endpoint) catch return Transport.SendError.WriteError;
 
-        var extra_headers = std.ArrayList(std.http.Header){};
+        var extra_headers: std.ArrayList(std.http.Header) = .empty;
         defer extra_headers.deinit(self.allocator);
 
         extra_headers.append(self.allocator, .{ .name = "Content-Type", .value = "application/json" }) catch {
@@ -277,15 +279,14 @@ pub const HttpTransport = struct {
         var transfer_buffer: [1024]u8 = undefined;
         var reader = response.reader(&transfer_buffer);
 
-        var body = std.ArrayList(u8){};
+        var body: std.ArrayList(u8) = .empty;
         defer body.deinit(self.allocator);
-        const writer = body.writer(self.allocator);
 
         var buf: [4096]u8 = undefined;
         while (true) {
             const n = reader.readSliceShort(&buf) catch return Transport.SendError.WriteError;
             if (n == 0) break;
-            writer.writeAll(buf[0..n]) catch return Transport.SendError.OutOfMemory;
+            body.appendSlice(self.allocator, buf[0..n]) catch return Transport.SendError.OutOfMemory;
         }
 
         if (body.items.len == 0) return;
@@ -365,19 +366,20 @@ pub const TransportType = enum {
 /// Creates a transport based on the specified type.
 pub fn createTransport(
     allocator: std.mem.Allocator,
+    io: std.Io,
     transport_type: TransportType,
     options: TransportOptions,
 ) !Transport {
     switch (transport_type) {
         .stdio => {
             const stdio = try allocator.create(StdioTransport);
-            stdio.* = StdioTransport.init(allocator);
+            stdio.* = .init(io, allocator);
             return stdio.transport();
         },
         .http => {
             const url = options.url orelse return error.MissingUrl;
             const http = try allocator.create(HttpTransport);
-            http.* = try HttpTransport.init(allocator, url);
+            http.* = try .init(allocator, url);
             if (options.authorization_token) |token| {
                 try http.setAuthorizationToken(token);
             }
@@ -394,7 +396,7 @@ pub const TransportOptions = struct {
 
 test "StdioTransport initialization" {
     const allocator = std.testing.allocator;
-    var transport_impl = StdioTransport.init(allocator);
+    var transport_impl: StdioTransport = .init(std.Io.failing, allocator);
     defer transport_impl.deinit();
 
     try std.testing.expect(!transport_impl.is_closed);

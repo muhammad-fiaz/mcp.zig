@@ -22,6 +22,7 @@ pub const ClientConfig = struct {
     icons: ?[]const types.Icon = null,
     websiteUrl: ?[]const u8 = null,
     allocator: std.mem.Allocator = std.heap.page_allocator,
+    io: ?std.Io = null,
 };
 
 /// Connection state of the client.
@@ -40,6 +41,7 @@ pub const ClientState = enum {
 pub const Client = struct {
     config: ClientConfig,
     allocator: std.mem.Allocator,
+    io: std.Io,
     state: ClientState = .disconnected,
     transport: ?transport_mod.Transport = null,
     server_info: ?types.Implementation = null,
@@ -62,12 +64,18 @@ pub const Client = struct {
     /// Initializes a new client with the given configuration.
     pub fn init(config: ClientConfig) Self {
         const allocator = config.allocator;
+        const io = config.io orelse io: {
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            break :io threaded.io();
+        };
+
         return .{
             .config = config,
             .allocator = allocator,
+            .io = io,
             .pending_requests = std.AutoHashMap(i64, PendingRequest).init(allocator),
-            .roots_list = .{},
-            .update_thread = report.checkForUpdates(allocator),
+            .roots_list = .empty,
+            .update_thread = report.checkForUpdates(io, allocator),
         };
     }
 
@@ -134,7 +142,7 @@ pub const Client = struct {
         self.state = .connecting;
 
         const stdio = try self.allocator.create(transport_mod.StdioTransport);
-        stdio.* = transport_mod.StdioTransport.init(self.allocator);
+        stdio.* = transport_mod.StdioTransport.init(self.allocator, self.io.?);
         self.transport = stdio.transport();
 
         try self.initialize();
@@ -377,10 +385,11 @@ pub const Client = struct {
 };
 
 test "Client initialization" {
-    var client = Client.init(.{
+    var client: Client = .init(.{
         .name = "test-client",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
+        .io = std.Io.failing,
     });
     defer client.deinit();
 
@@ -388,10 +397,11 @@ test "Client initialization" {
 }
 
 test "Client capabilities" {
-    var client = Client.init(.{
+    var client: Client = .init(.{
         .name = "test",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
+        .io = std.Io.failing,
     });
     defer client.deinit();
 
@@ -407,10 +417,11 @@ test "Client capabilities" {
 }
 
 test "Client advanced sampling" {
-    var client = Client.init(.{
+    var client: Client = .init(.{
         .name = "test",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
+        .io = std.Io.failing,
     });
     defer client.deinit();
 
@@ -420,10 +431,11 @@ test "Client advanced sampling" {
 }
 
 test "Client add root" {
-    var client = Client.init(.{
+    var client: Client = .init(.{
         .name = "test",
         .version = "1.0.0",
         .allocator = std.testing.allocator,
+        .io = std.Io.failing,
     });
     defer client.deinit();
 
