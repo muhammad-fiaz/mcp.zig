@@ -632,7 +632,7 @@ pub const Server = struct {
         }
 
         if (self.tools.get(tool_name)) |tool| {
-            const tool_result = tool.handler(allocator, arguments) catch |err| {
+            const tool_result = tool.handler(tool.user_data, io, allocator, arguments) catch |err| {
                 var content_array: std.json.Array = .init(allocator);
                 var text_obj: std.json.ObjectMap = .empty;
                 try text_obj.put(allocator, "type", .{ .string = "text" });
@@ -747,7 +747,7 @@ pub const Server = struct {
         }
 
         if (self.resources.get(uri)) |resource| {
-            const content = resource.handler(allocator, uri) catch |err| {
+            const content = resource.handler(resource.user_data, io, allocator, uri) catch |err| {
                 const error_response = jsonrpc.createInternalError(request.id, .{ .string = @errorName(err) });
                 try self.sendResponse(io, allocator, .{ .error_response = error_response });
                 return;
@@ -883,7 +883,7 @@ pub const Server = struct {
         }
 
         if (self.prompts.get(prompt_name)) |prompt| {
-            const messages = prompt.handler(allocator, arguments) catch |err| {
+            const messages = prompt.handler(prompt.user_data, io, allocator, arguments) catch |err| {
                 const error_response = jsonrpc.createInternalError(request.id, .{ .string = @errorName(err) });
                 try self.sendResponse(io, allocator, .{ .error_response = error_response });
                 return;
@@ -1163,7 +1163,7 @@ test "Server add tool" {
         .name = "test_tool",
         .description = "A test tool",
         .handler = struct {
-            fn handler(_: std.mem.Allocator, _: ?std.json.Value) !tools_mod.ToolResult {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) !tools_mod.ToolResult {
                 return .{ .content = &.{} };
             }
         }.handler,
@@ -1185,7 +1185,7 @@ test "Server add resource" {
         .uri = "file:///test",
         .name = "Test",
         .handler = struct {
-            fn handler(_: std.mem.Allocator, uri: []const u8) !resources_mod.ResourceContent {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) !resources_mod.ResourceContent {
                 return .{ .uri = uri };
             }
         }.handler,
@@ -1205,7 +1205,7 @@ test "Server add prompt" {
         .name = "test_prompt",
         .description = "A test prompt",
         .handler = struct {
-            fn handler(_: std.mem.Allocator, _: ?std.json.Value) ![]const prompts_mod.PromptMessage {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) ![]const prompts_mod.PromptMessage {
                 return &.{};
             }
         }.handler,

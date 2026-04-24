@@ -20,7 +20,7 @@ pub const Tool = struct {
     execution: ?types.ToolExecution = null,
     icons: ?[]const types.Icon = null,
     annotations: ?ToolAnnotations = null,
-    handler: *const fn (allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
+    handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
     user_data: ?*anyopaque = null,
 };
 
@@ -87,7 +87,7 @@ pub const ToolBuilder = struct {
     }
 
     /// Sets the tool handler function.
-    pub fn handler(self: *Self, h: *const fn (std.mem.Allocator, ?std.json.Value) ToolError!ToolResult) *Self {
+    pub fn handler(self: *Self, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, ?std.json.Value) ToolError!ToolResult) *Self {
         self.tool.handler = h;
         return self;
     }
@@ -139,7 +139,7 @@ pub const ToolBuilder = struct {
         return self.tool;
     }
 
-    fn defaultHandler(_: std.mem.Allocator, _: ?std.json.Value) ToolError!ToolResult {
+    fn defaultHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) ToolError!ToolResult {
         return .{ .content = &.{} };
     }
 };

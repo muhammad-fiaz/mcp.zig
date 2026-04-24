@@ -80,7 +80,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn addHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -93,7 +93,7 @@ fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.Too
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn subtractHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn subtractHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -106,7 +106,7 @@ fn subtractHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tool
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn multiplyHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn multiplyHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -119,7 +119,7 @@ fn multiplyHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tool
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn divideHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn divideHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };

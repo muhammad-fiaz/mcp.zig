@@ -82,7 +82,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn getAlertsHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const state = mcp.tools.getString(args, "state") orelse {
         return mcp.tools.errorResult(allocator, "Missing required argument: state (two-letter US state code)") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -109,7 +109,7 @@ fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.too
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn getForecastHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn getForecastHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const lat = mcp.tools.getFloat(args, "latitude") orelse {
         return mcp.tools.errorResult(allocator, "Missing required argument: latitude") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -152,7 +152,7 @@ fn getForecastHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.t
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn weatherInfoHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn weatherInfoHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",

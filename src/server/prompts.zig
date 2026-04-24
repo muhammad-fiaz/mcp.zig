@@ -16,7 +16,7 @@ pub const Prompt = struct {
     arguments: ?[]const PromptArgument = null,
     icons: ?[]const types.Icon = null,
     _meta: ?std.json.Value = null,
-    handler: *const fn (allocator: std.mem.Allocator, args: ?std.json.Value) PromptError![]const PromptMessage,
+    handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) PromptError![]const PromptMessage,
     user_data: ?*anyopaque = null,
 };
 
@@ -85,7 +85,7 @@ pub const PromptBuilder = struct {
     }
 
     /// Sets the prompt handler function.
-    pub fn handler(self: *PromptBuilder, h: *const fn (std.mem.Allocator, ?std.json.Value) PromptError![]const PromptMessage) *PromptBuilder {
+    pub fn handler(self: *PromptBuilder, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, ?std.json.Value) PromptError![]const PromptMessage) *PromptBuilder {
         self.prompt.handler = h;
         return self;
     }
@@ -98,7 +98,7 @@ pub const PromptBuilder = struct {
         return self.prompt;
     }
 
-    fn defaultHandler(_: std.mem.Allocator, _: ?std.json.Value) PromptError![]const PromptMessage {
+    fn defaultHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) PromptError![]const PromptMessage {
         return &.{};
     }
 };

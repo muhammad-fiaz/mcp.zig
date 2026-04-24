@@ -19,7 +19,7 @@ pub const Resource = struct {
     annotations: ?types.Annotations = null,
     size: ?u64 = null,
     _meta: ?std.json.Value = null,
-    handler: *const fn (allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
+    handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
     user_data: ?*anyopaque = null,
 };
 
@@ -96,7 +96,7 @@ pub const ResourceBuilder = struct {
     }
 
     /// Sets the resource handler function.
-    pub fn handler(self: *ResourceBuilder, h: *const fn (std.mem.Allocator, []const u8) ResourceError!ResourceContent) *ResourceBuilder {
+    pub fn handler(self: *ResourceBuilder, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, []const u8) ResourceError!ResourceContent) *ResourceBuilder {
         self.resource.handler = h;
         return self;
     }
@@ -106,7 +106,7 @@ pub const ResourceBuilder = struct {
         return self.resource;
     }
 
-    fn defaultHandler(_: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent {
+    fn defaultHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent {
         return .{ .uri = uri };
     }
 };
