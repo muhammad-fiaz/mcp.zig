@@ -149,15 +149,28 @@ pub fn textResult(allocator: std.mem.Allocator, text: []const u8) !ToolResult {
     const owned_text = try allocator.dupe(u8, text);
     const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .text = .{ .text = owned_text } };
-    return .{ .content = content };
+
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, "text", .{ .string = owned_text });
+
+    return .{
+        .content = content,
+        .structuredContent = .{ .object = obj },
+    };
 }
 
 /// Creates an error result containing a message.
 pub fn errorResult(allocator: std.mem.Allocator, message: []const u8) !ToolResult {
+    const owned_message = try allocator.dupe(u8, message);
     const content = try allocator.alloc(types.ContentBlock, 1);
-    content[0] = .{ .text = .{ .text = message } };
+    content[0] = .{ .text = .{ .text = owned_message } };
+
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, "error", .{ .string = owned_message });
+
     return .{
         .content = content,
+        .structuredContent = .{ .object = obj },
         .is_error = true,
     };
 }

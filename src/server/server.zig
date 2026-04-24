@@ -496,10 +496,27 @@ pub const Server = struct {
             }
         }
 
+        // use client's requested version if supported
+        var negotiated_version: []const u8 = protocol.VERSION;
+        if (request.params) |params| {
+            if (params == .object) {
+                if (params.object.get("protocolVersion")) |pv| {
+                    if (pv == .string) {
+                        for (protocol.SUPPORTED_VERSIONS) |sv| {
+                            if (std.mem.eql(u8, pv.string, sv)) {
+                                negotiated_version = sv;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         var result: std.json.ObjectMap = .empty;
         defer result.deinit(allocator);
 
-        try result.put(allocator, "protocolVersion", .{ .string = protocol.VERSION });
+        try result.put(allocator, "protocolVersion", .{ .string = negotiated_version });
 
         var caps: std.json.ObjectMap = .empty;
         if (self.capabilities.tools) |t| {
