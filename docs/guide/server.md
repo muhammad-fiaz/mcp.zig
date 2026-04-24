@@ -102,7 +102,7 @@ try server.addPrompt(.{
 The server handles errors gracefully:
 
 ```zig
-fn toolHandler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
+fn toolHandler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     const message = mcp.tools.getString(args, "message") orelse {
         return mcp.tools.errorResult(allocator, "Missing required argument: message") catch return mcp.tools.ToolError.OutOfMemory;
     };

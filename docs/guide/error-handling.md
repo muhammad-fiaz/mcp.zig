@@ -154,7 +154,7 @@ fn handleToolCall(self: *Server, request: Request) !Message {
 ### Validate Early
 
 ```zig
-fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
+fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     // Validate all arguments first
     const a = getArg(args, "a") orelse return error.InvalidArguments;
     const b = getArg(args, "b") orelse return error.InvalidArguments;
@@ -168,7 +168,7 @@ fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
 ### Provide Helpful Messages
 
 ```zig
-fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
+fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     const filename = getStringArg(args, "filename") orelse {
         return .{
             .content = &.{Content.createText("Missing 'filename' argument. Please provide the file to process.")},
@@ -183,7 +183,7 @@ fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
 ### Use errdefer for Cleanup
 
 ```zig
-fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
+fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     const buffer = try allocator.alloc(u8, 1024);
     errdefer allocator.free(buffer);
 

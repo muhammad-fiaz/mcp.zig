@@ -132,6 +132,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
@@ -263,7 +265,7 @@ Define filesystem boundaries:
 
 ```zig
 client.enableRoots(true);
-try client.addRoot("file:///projects", "Projects");
+try client.addRoot(allocator, "file:///projects", "Projects");
 ```
 
 ### Sampling

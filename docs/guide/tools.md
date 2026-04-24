@@ -123,7 +123,7 @@ return mcp.tools.errorResult(allocator, "Error occurred");
 ## Error Handling
 
 ```zig
-fn handler(allocator: Allocator, args: ?json.Value) ToolError!ToolResult {
+fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     // Validation error
     if (missing_required_arg) {
         return error.InvalidArguments;

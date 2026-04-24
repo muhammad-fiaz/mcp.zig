@@ -88,7 +88,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "ping",
         .description = "Returns pong",
         .handler = struct {
-            fn handler(alloc: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+            fn handler(_: ?*anyopaque, _: std.Io, alloc: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
                 return mcp.tools.textResult(alloc, "pong") catch return mcp.tools.ToolError.OutOfMemory;
             }
         }.handler,

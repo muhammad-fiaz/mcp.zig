@@ -100,7 +100,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn greetHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
 
     const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
@@ -108,7 +108,7 @@ fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.T
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
 
     // Demonstrate structured result
@@ -119,7 +119,7 @@ fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.To
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn aboutHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn aboutHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",
@@ -127,7 +127,7 @@ fn aboutHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceErr
     };
 }
 
-fn introduceHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
+fn introduceHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
     const style = mcp.prompts.getStringArg(args, "style") orelse "casual";
     _ = style;
 
