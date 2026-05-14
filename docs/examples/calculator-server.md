@@ -24,6 +24,13 @@ zig build
 ./zig-out/bin/calculator-server
 ```
 
+PowerShell (Windows):
+
+```powershell
+zig build
+.\zig-out\bin\calculator-server.exe
+```
+
 The calculator example runs over stdio by default (CI/GitHub Actions friendly). To test with `curl`/HTTP, switch the run mode in `examples/calculator_server.zig` to:
 
 ```zig

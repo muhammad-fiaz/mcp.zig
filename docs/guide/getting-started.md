@@ -31,7 +31,7 @@ Run the following command in your project directory:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Or specific release
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.4.tar.gz
 ```
 
 Then in your `build.zig`:
@@ -84,6 +84,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn helloHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {

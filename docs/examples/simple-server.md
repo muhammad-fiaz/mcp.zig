@@ -112,9 +112,9 @@ fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?s
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
 
     // Demonstrate structured result
-    var obj = std.json.ObjectMap.init(allocator);
-    obj.put("echo", .{ .string = message }) catch {};
-    obj.put("timestamp", .{ .integer = std.time.timestamp() }) catch {};
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(allocator, "echo", .{ .string = message }) catch {};
+    obj.put(allocator, "timestamp", .{ .integer = 0 }) catch {};
 
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }
@@ -139,17 +139,31 @@ fn introduceHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, arg
 
 ## Manual Test Commands
 
-Initialize over stdio:
+Initialize over stdio (POSIX shell):
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}' | ./zig-out/bin/example-server
 ```
 
-Call greet tool over stdio:
+Call greet tool over stdio (POSIX shell):
 
 ```bash
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Alice"}}}' | ./zig-out/bin/example-server
 ```
+
+PowerShell (Windows) STDIO test:
+
+```powershell
+.\zig-out\bin\example-server.exe
+```
+
+Then paste one JSON-RPC line and press Enter:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
+```
+
+Stop the server with Ctrl+C when you are done.
 
 To test HTTP mode, switch `server.run(io, allocator, .stdio)` to HTTP in the source and then run:
 

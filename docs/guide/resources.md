@@ -27,32 +27,35 @@ try server.addResource(.{
 
 ```zig
 fn resourceHandler(
+    _: ?*anyopaque,
+    io: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
-) ResourceError![]const ResourceContent;
+) ResourceError!ResourceContent;
 ```
 
 ### Example Handler
 
 ```zig
 fn readmeHandler(
+    _: ?*anyopaque,
+    io: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
-) mcp.resources.ResourceError![]const mcp.resources.ResourceContent {
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     _ = uri;
 
-    const content = try std.fs.cwd().readFileAlloc(
-        allocator,
+    const content = try std.Io.Dir.cwd().readFileAlloc(
+        io,
         "README.md",
-        1024 * 1024,
+        allocator,
+        .limited(1024 * 1024),
     );
 
-    return &.{
-        .{
-            .uri = "file:///README.md",
-            .mimeType = "text/markdown",
-            .text = content,
-        },
+    return .{
+        .uri = "file:///README.md",
+        .mimeType = "text/markdown",
+        .text = content,
     };
 }
 ```
@@ -62,24 +65,20 @@ fn readmeHandler(
 ### Text Content
 
 ```zig
-return &.{
-    .{
-        .uri = uri,
-        .mimeType = "text/plain",
-        .text = "Hello, World!",
-    },
+return .{
+    .uri = uri,
+    .mimeType = "text/plain",
+    .text = "Hello, World!",
 };
 ```
 
 ### Binary Content (Base64)
 
 ```zig
-return &.{
-    .{
-        .uri = uri,
-        .mimeType = "image/png",
-        .blob = base64_encoded_data,
-    },
+return .{
+    .uri = uri,
+    .mimeType = "image/png",
+    .blob = base64_encoded_data,
 };
 ```
 
@@ -100,10 +99,12 @@ try server.addResourceTemplate(.{
 
 ```zig
 fn profileHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
     params: std.StringHashMap([]const u8),
-) ResourceError![]const ResourceContent {
+) ResourceError!ResourceContent {
     const user_id = params.get("userId") orelse {
         return error.InvalidUri;
     };
@@ -111,12 +112,10 @@ fn profileHandler(
     // Fetch user profile using user_id
     const profile = try fetchProfile(allocator, user_id);
 
-    return &.{
-        .{
-            .uri = uri,
-            .mimeType = "application/json",
-            .text = profile,
-        },
+    return .{
+        .uri = uri,
+        .mimeType = "application/json",
+        .text = profile,
     };
 }
 ```
@@ -169,24 +168,26 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn configHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
-) mcp.resources.ResourceError![]const mcp.resources.ResourceContent {
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     _ = allocator;
-    return &.{
-        .{
-            .uri = uri,
-            .mimeType = "application/json",
-            .text = "{\"debug\": true, \"version\": \"1.0.0\"}",
-        },
+    return .{
+        .uri = uri,
+        .mimeType = "application/json",
+        .text = "{\"debug\": true, \"version\": \"1.0.0\"}",
     };
 }
 
 fn recordHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
     params: std.StringHashMap([]const u8),
-) mcp.resources.ResourceError![]const mcp.resources.ResourceContent {
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     const id = params.get("id") orelse return error.InvalidUri;
 
     const content = try std.fmt.allocPrint(
@@ -195,12 +196,10 @@ fn recordHandler(
         .{id},
     );
 
-    return &.{
-        .{
-            .uri = uri,
-            .mimeType = "application/json",
-            .text = content,
-        },
+    return .{
+        .uri = uri,
+        .mimeType = "application/json",
+        .text = content,
     };
 }
 ```

@@ -144,6 +144,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn echoHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {

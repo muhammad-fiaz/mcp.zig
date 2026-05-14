@@ -4,7 +4,7 @@
 # MCP.zig
 
 <a href="https://muhammad-fiaz.github.io/mcp.zig/"><img src="https://img.shields.io/badge/docs-muhammad--fiaz.github.io-blue" alt="Documentation"></a>
-<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.15.2+-orange.svg?logo=zig" alt="Zig Version"></a>
+<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.16.0+-orange.svg?logo=zig" alt="Zig Version"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml"><img src="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig"><img src="https://img.shields.io/github/stars/muhammad-fiaz/mcp.zig" alt="GitHub stars"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/issues"><img src="https://img.shields.io/github/issues/muhammad-fiaz/mcp.zig" alt="GitHub issues"></a>
@@ -87,7 +87,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Or specific release
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.4.tar.gz
 ```
 
 Then in your `build.zig`:

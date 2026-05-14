@@ -1,8 +1,8 @@
 .{
     .name = .mcp,
-    .version = "0.0.3",
+    .version = "0.0.4",
     .fingerprint = 0xa19bc83983058570,
-    .minimum_zig_version = "0.15.0",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

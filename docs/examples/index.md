@@ -43,6 +43,14 @@ zig build
 ./zig-out/bin/calculator-server
 ```
 
+PowerShell (Windows):
+
+```powershell
+.\zig-out\bin\example-server.exe
+.\zig-out\bin\weather-server.exe
+.\zig-out\bin\calculator-server.exe
+```
+
 To use custom HTTP transport, switch the run line in `examples/simple_server.zig` from stdio to HTTP and set your host/domain and port, for example:
 
 ```zig
@@ -73,6 +81,18 @@ You can also test by sending JSON-RPC messages directly:
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}' | ./zig-out/bin/example-server
+```
+
+PowerShell (Windows) STDIO test:
+
+```powershell
+.\zig-out\bin\example-server.exe
+```
+
+Then paste one JSON-RPC line and press Enter:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
 ```
 
 For HTTP transport mode:

@@ -43,6 +43,8 @@ pub const PromptError = error{
 
 ```zig
 fn myToolHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
@@ -132,12 +134,12 @@ const err = mcp.jsonrpc.createInternalError(id, null);
 The server handles errors from handlers:
 
 ```zig
-fn handleToolCall(self: *Server, request: Request) !Message {
+fn handleToolCall(self: *Server, io: std.Io, allocator: std.mem.Allocator, request: Request) !Message {
     const tool = self.findTool(request.params.name) orelse {
         return .{ .error_response = mcp.jsonrpc.createMethodNotFound(request.id, request.params.name) };
     };
 
-    const result = tool.handler(self.allocator, request.params.arguments) catch |err| {
+    const result = tool.handler(tool.user_data, io, allocator, request.params.arguments) catch |err| {
         return switch (err) {
             error.InvalidArguments => .{ .error_response = mcp.jsonrpc.createInvalidParams(request.id, "Invalid arguments") },
             error.OutOfMemory => .{ .error_response = mcp.jsonrpc.createInternalError(request.id, null) },
@@ -183,12 +185,12 @@ fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Valu
 ### Use errdefer for Cleanup
 
 ```zig
-fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
+fn handler(_: ?*anyopaque, io: std.Io, allocator: Allocator, args: ?std.json.Value) mcp.tools.ToolError!ToolResult {
     const buffer = try allocator.alloc(u8, 1024);
     errdefer allocator.free(buffer);
 
-    const file = try std.fs.openFile(path, .{});
-    errdefer file.close();
+    const file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+    errdefer file.close(io);
 
     // If any of the following fails, cleanup happens automatically
     try processFile(file, buffer);
@@ -204,6 +206,8 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 fn processFileHandler(
+    _: ?*anyopaque,
+    io: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
@@ -216,7 +220,7 @@ fn processFileHandler(
     };
 
     // 2. Check file exists
-    std.fs.accessAbsolute(path, .{}) catch {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch {
         return .{
             .content = &.{.{ .text = .{ .text = "Error: File not found at specified path" } }},
             .isError = true,
@@ -224,13 +228,14 @@ fn processFileHandler(
     };
 
     // 3. Read file with proper cleanup
-    const contents = std.fs.cwd().readFileAlloc(
-        allocator,
+    const contents = std.Io.Dir.cwd().readFileAlloc(
+        io,
         path,
-        10 * 1024 * 1024, // 10MB limit
+        allocator,
+        .limited(10 * 1024 * 1024), // 10MB limit
     ) catch |err| {
         const message = switch (err) {
-            error.FileTooBig => "Error: File exceeds 10MB limit",
+            error.StreamTooLong => "Error: File exceeds 10MB limit",
             error.AccessDenied => "Error: Permission denied",
             else => "Error: Failed to read file",
         };

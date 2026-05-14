@@ -1,2 +1,2 @@
 /// Current version of the MCP library
-pub const version = "0.0.3";
+pub const version = "0.0.4";

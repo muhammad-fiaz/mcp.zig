@@ -18,15 +18,21 @@ Tool handlers have this signature:
 
 ```zig
 fn handler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult;
 ```
 
+Use `_` for `user_data` and `io` when you don't need them.
+
 ### Example Handler
 
 ```zig
 fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
@@ -187,6 +193,8 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 fn calculateHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {

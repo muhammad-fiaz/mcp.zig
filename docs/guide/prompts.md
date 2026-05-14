@@ -26,6 +26,8 @@ try server.addPrompt(.{
 
 ```zig
 fn promptHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) PromptError![]const PromptMessage;
@@ -35,6 +37,8 @@ fn promptHandler(
 
 ```zig
 fn codeReviewHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
@@ -157,6 +161,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn explainHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
@@ -178,6 +184,8 @@ fn explainHandler(
 }
 
 fn generateCodeHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {

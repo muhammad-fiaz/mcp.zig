@@ -8,15 +8,21 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 pub fn main(init: std.process.Init) void {
-    run(init.io, init.gpa, init.minimal.args.vector) catch |err| {
+    run(init.io, init.gpa, init.minimal.args) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args.Vector) !void {
-    if (args.len < 2) {
-        std.debug.print("Usage: {s} <server-command>\n", .{args[0]});
-        std.debug.print("Example: {s} zig-out/bin/example-server\n", .{args[0]});
+fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args) !void {
+    var args = try std.process.Args.Iterator.initAllocator(process_args, allocator);
+    defer args.deinit();
+
+    const exe_name = args.next() orelse "example-client";
+    const server_command = args.next();
+
+    if (server_command == null) {
+        std.debug.print("Usage: {s} <server-command>\n", .{exe_name});
+        std.debug.print("Example: {s} zig-out/bin/example-server\n", .{exe_name});
         return;
     }
 
@@ -43,7 +49,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args.Vector) 
     std.debug.print("Roots configured: {d}\n", .{client.roots_list.items.len});
 
     // In a real implementation, you would:
-    // 1. Connect to server: try client.connectStdio(io, allocator, args[1], &.{});
+    // 1. Connect to server: try client.connectStdio(io, allocator, server_command.?, &.{});
     // 2. List tools: try client.listTools(io, allocator);
     // 3. Call tools: try client.callTool(io, allocator, "greet", args);
     // 4. Handle responses in an event loop

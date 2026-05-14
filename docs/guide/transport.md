@@ -157,7 +157,7 @@ const http_transport = mcp.transport.HttpTransport.init(
 ## Error Handling
 
 ```zig
-const message = transport.receive() catch |err| {
+const message = transport.receive(io, allocator) catch |err| {
     switch (err) {
         error.ConnectionClosed => {
             // Handle disconnect
@@ -177,12 +177,12 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 pub fn main(init: std.process.Init) void {
-    run(init.io, init.gpa) catch |err| {
+    run(init.io, init.gpa, init.minimal.args) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args) !void {
     // Create server
     var server: mcp.Server = .init(allocator, .{
         .name = "multi-transport-server",
@@ -191,10 +191,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer server.deinit();
 
     // Get transport mode from args
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    const mode = if (args.len > 1) args[1] else "stdio";
+    var args = try std.process.Args.Iterator.initAllocator(process_args, allocator);
+    defer args.deinit();
+    _ = args.next();
+    const mode = args.next() orelse "stdio";
 
     if (std.mem.eql(u8, mode, "http")) {
         std.debug.print("Starting HTTP server on port 8080...\n", .{});

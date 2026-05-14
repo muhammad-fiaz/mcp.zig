@@ -164,6 +164,8 @@ pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
 }
 
 fn registerHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
     args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {

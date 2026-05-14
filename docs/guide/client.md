@@ -69,8 +69,8 @@ for (tools) |tool| {
 ### Call a Tool
 
 ```zig
-var args = std.json.ObjectMap.init(allocator);
-try args.put("name", .{ .string = "World" });
+var args: std.json.ObjectMap = .empty;
+try args.put(allocator, "name", .{ .string = "World" });
 
 const result = try client.callTool(io, allocator, "greet", .{ .object = args });
 
@@ -115,8 +115,8 @@ for (prompts) |prompt| {
 ### Get a Prompt
 
 ```zig
-var args = std.json.ObjectMap.init(allocator);
-try args.put("topic", .{ .string = "Zig programming" });
+var args: std.json.ObjectMap = .empty;
+try args.put(allocator, "topic", .{ .string = "Zig programming" });
 
 const result = try client.getPrompt(io, allocator, "summarize", .{ .object = args });
 

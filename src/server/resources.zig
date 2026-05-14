@@ -123,9 +123,19 @@ pub fn getUriPath(uri: []const u8) ?[]const u8 {
     return null;
 }
 
+fn pathExtension(path: []const u8) []const u8 {
+    var i: usize = path.len;
+    while (i > 0) : (i -= 1) {
+        const c = path[i - 1];
+        if (c == '/' or c == '\\') break;
+        if (c == '.') return path[i - 1 ..];
+    }
+    return "";
+}
+
 /// Detects the MIME type based on file extension.
 pub fn detectMimeType(path: []const u8) []const u8 {
-    const ext = std.fs.path.extension(path);
+    const ext = pathExtension(path);
     if (std.mem.eql(u8, ext, ".txt")) return "text/plain";
     if (std.mem.eql(u8, ext, ".json")) return "application/json";
     if (std.mem.eql(u8, ext, ".html")) return "text/html";
