@@ -46,7 +46,7 @@ zig build
 To use custom HTTP transport, switch the run line in `examples/simple_server.zig` from stdio to HTTP and set your host/domain and port, for example:
 
 ```zig
-try server.run(.{ .http = .{ .host = "api.example.com", .port = 8443 } });
+try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8443 } });
 ```
 
 ## Testing with an AI Client
@@ -79,7 +79,7 @@ For HTTP transport mode:
 
 ```bash
 # switch run line in source from stdio to HTTP mode and set host/port:
-# try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+# try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 ./zig-out/bin/example-server
 
 curl -X POST http://localhost:8080 \
@@ -114,7 +114,12 @@ examples/
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
+}
+
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Your code here
+    _ = .{ io, allocator };
 }
 ```

@@ -106,25 +106,17 @@ exe.root_module.addImport("mcp", mcp_dep.module("mcp"));
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    if (run()) {} else |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
-    }
+    };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Check for updates
-    _ = mcp.report.checkForUpdates(allocator);
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "my-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -136,12 +128,14 @@ fn run() !void {
     });
 
     // Run with STDIO transport
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 
 fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
     allocator: std.mem.Allocator,
-    args: ?std.json.Value
+    args: ?std.json.Value,
 ) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
     const message = try std.fmt.allocPrint(allocator, "Hello, {s}!", .{name});
@@ -155,30 +149,25 @@ fn greetHandler(
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    if (run()) {} else |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
-    }
+    };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var client = mcp.Client.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var client: mcp.Client = .init(io, allocator, .{
         .name = "my-client",
         .version = "1.0.0",
-        .allocator = allocator,
     });
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     // Enable capabilities
     client.enableSampling();
     client.enableRoots(true); // Supports list changed notifications
 
     // Add roots
-    try client.addRoot("file:///projects", "Projects");
+    try client.addRoot(allocator, "file:///projects", "Projects");
 }
 ```
 
@@ -276,7 +265,7 @@ Define filesystem boundaries:
 
 ```zig
 client.enableRoots(true);
-try client.addRoot("file:///projects", "Projects");
+try client.addRoot(allocator, "file:///projects", "Projects");
 ```
 
 ### Sampling

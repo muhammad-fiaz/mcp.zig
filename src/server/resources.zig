@@ -5,6 +5,7 @@
 //! such as files, database records, or API responses.
 
 const std = @import("std");
+
 const types = @import("../protocol/types.zig");
 
 /// A resource exposed by an MCP server.
@@ -18,7 +19,7 @@ pub const Resource = struct {
     annotations: ?types.Annotations = null,
     size: ?u64 = null,
     _meta: ?std.json.Value = null,
-    handler: *const fn (allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
+    handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
     user_data: ?*anyopaque = null,
 };
 
@@ -55,13 +56,11 @@ pub const ResourceError = error{
 
 /// Builder for creating resources with a fluent API.
 pub const ResourceBuilder = struct {
-    allocator: std.mem.Allocator,
     resource: Resource,
 
     /// Creates a new resource builder with the given URI and name.
-    pub fn init(allocator: std.mem.Allocator, uri: []const u8, name: []const u8) ResourceBuilder {
+    pub fn init(uri: []const u8, name: []const u8) ResourceBuilder {
         return .{
-            .allocator = allocator,
             .resource = .{ .uri = uri, .name = name, .handler = defaultHandler },
         };
     }
@@ -97,7 +96,7 @@ pub const ResourceBuilder = struct {
     }
 
     /// Sets the resource handler function.
-    pub fn handler(self: *ResourceBuilder, h: *const fn (std.mem.Allocator, []const u8) ResourceError!ResourceContent) *ResourceBuilder {
+    pub fn handler(self: *ResourceBuilder, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, []const u8) ResourceError!ResourceContent) *ResourceBuilder {
         self.resource.handler = h;
         return self;
     }
@@ -107,7 +106,7 @@ pub const ResourceBuilder = struct {
         return self.resource;
     }
 
-    fn defaultHandler(_: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent {
+    fn defaultHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent {
         return .{ .uri = uri };
     }
 };
@@ -141,15 +140,13 @@ pub fn detectMimeType(path: []const u8) []const u8 {
 }
 
 test "ResourceBuilder" {
-    const allocator = std.testing.allocator;
-    var builder = ResourceBuilder.init(allocator, "file:///test.txt", "Test");
+    var builder: ResourceBuilder = .init("file:///test.txt", "Test");
     const resource = builder.description("A test").mimeType("text/plain").build();
     try std.testing.expectEqualStrings("file:///test.txt", resource.uri);
 }
 
 test "ResourceBuilder with title and annotations" {
-    const allocator = std.testing.allocator;
-    var builder = ResourceBuilder.init(allocator, "file:///data.json", "Data");
+    var builder: ResourceBuilder = .init("file:///data.json", "Data");
     const resource = builder
         .title("Data File")
         .description("JSON data file")

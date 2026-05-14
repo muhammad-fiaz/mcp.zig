@@ -7,12 +7,11 @@ The `Client` allows you to connect to MCP servers and interact with their capabi
 ```zig
 const mcp = @import("mcp");
 
-var client = mcp.Client.init(.{
+var client: mcp.Client = .init(io, allocator, .{
     .name = "my-client",
     .version = "1.0.0",
-    .allocator = allocator,
 });
-defer client.deinit();
+defer client.deinit(allocator);
 ```
 
 ## Configuration
@@ -21,7 +20,6 @@ defer client.deinit();
 | ----------- | ------------ | ------------------------- |
 | `name`      | `[]const u8` | Client name (required)    |
 | `version`   | `[]const u8` | Client version (required) |
-| `allocator` | `Allocator`  | Memory allocator          |
 
 ## Connecting to a Server
 
@@ -30,17 +28,17 @@ defer client.deinit();
 ### STDIO Transport
 
 ```zig
-try client.connectStdio("path/to/server", &.{});
+try client.connectStdio(io, allocator, "path/to/server", &.{});
 ```
 
 ### HTTP Transport
 
 ```zig
 // Connect to localhost on port 8080
-try client.connectHttp("http://localhost:8080");
+try client.connectHttp(io, allocator, "http://localhost:8080");
 
 // Connect to a custom host and port
-try client.connectHttp("http://192.168.1.50:9000");
+try client.connectHttp(io, allocator, "http://192.168.1.50:9000");
 ```
 
 ## Capabilities
@@ -62,7 +60,7 @@ client.enableSampling();
 ### List Available Tools
 
 ```zig
-const tools = try client.listTools();
+const tools = try client.listTools(io, allocator);
 for (tools) |tool| {
     std.debug.print("Tool: {s}\n", .{tool.name});
 }
@@ -74,7 +72,7 @@ for (tools) |tool| {
 var args = std.json.ObjectMap.init(allocator);
 try args.put("name", .{ .string = "World" });
 
-const result = try client.callTool("greet", .{ .object = args });
+const result = try client.callTool(io, allocator, "greet", .{ .object = args });
 
 for (result.content) |content| {
     if (content == .text) {
@@ -88,7 +86,7 @@ for (result.content) |content| {
 ### List Resources
 
 ```zig
-const resources = try client.listResources();
+const resources = try client.listResources(io, allocator);
 for (resources) |resource| {
     std.debug.print("Resource: {s}\n", .{resource.uri});
 }
@@ -97,7 +95,7 @@ for (resources) |resource| {
 ### Read a Resource
 
 ```zig
-const contents = try client.readResource("file:///data.json");
+const contents = try client.readResource(io, allocator, "file:///data.json");
 for (contents) |content| {
     std.debug.print("Content: {s}\n", .{content.text.text});
 }
@@ -108,7 +106,7 @@ for (contents) |content| {
 ### List Prompts
 
 ```zig
-const prompts = try client.listPrompts();
+const prompts = try client.listPrompts(io, allocator);
 for (prompts) |prompt| {
     std.debug.print("Prompt: {s}\n", .{prompt.name});
 }
@@ -120,7 +118,7 @@ for (prompts) |prompt| {
 var args = std.json.ObjectMap.init(allocator);
 try args.put("topic", .{ .string = "Zig programming" });
 
-const result = try client.getPrompt("summarize", .{ .object = args });
+const result = try client.getPrompt(io, allocator, "summarize", .{ .object = args });
 
 for (result.messages) |message| {
     std.debug.print("[{s}]: {s}\n", .{
@@ -135,8 +133,8 @@ for (result.messages) |message| {
 Roots define the file system areas the client has access to:
 
 ```zig
-try client.addRoot("file:///home/user/project", "Project Root");
-try client.addRoot("file:///home/user/data", "Data Directory");
+try client.addRoot(allocator, "file:///home/user/project", "Project Root");
+try client.addRoot(allocator, "file:///home/user/data", "Data Directory");
 ```
 
 ## Complete Example
@@ -145,41 +143,36 @@ try client.addRoot("file:///home/user/data", "Data Directory");
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    if (run()) {
+pub fn main(init: std.process.Init) void {
+    if (run(init.io, init.gpa)) {
         // Success
     } else |err| {
         mcp.reportError(err);
     }
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var client = mcp.Client.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var client: mcp.Client = .init(io, allocator, .{
         .name = "demo-client",
         .version = "1.0.0",
-        .allocator = allocator,
     });
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     // Enable capabilities
     client.enableRoots(true);
 
     // Add roots
-    try client.addRoot("file:///home/user/documents", "Documents");
+    try client.addRoot(allocator, "file:///home/user/documents", "Documents");
 
     // Connect to a server
-    try client.connectStdio("./my-server", &.{});
+    try client.connectStdio(io, allocator, "./my-server", &.{});
 
     // List and call tools
-    const tools = try client.listTools();
+    const tools = try client.listTools(io, allocator);
     std.debug.print("Available tools: {d}\n", .{tools.len});
 
     // Call a tool
-    const result = try client.callTool("hello", null);
+    const result = try client.callTool(io, allocator, "hello", null);
     std.debug.print("Result: {any}\n", .{result});
 }
 ```

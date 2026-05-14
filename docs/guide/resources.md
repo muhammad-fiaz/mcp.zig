@@ -136,15 +136,16 @@ try server.notifyResourceUpdated("file:///data.json");
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
+        mcp.reportError(err);
+    };
+}
 
-    var server = mcp.Server.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var server: mcp.Server = .init(allocator, .{
         .name = "resource-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -164,7 +165,7 @@ pub fn main() !void {
         .handler = recordHandler,
     });
 
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 
 fn configHandler(

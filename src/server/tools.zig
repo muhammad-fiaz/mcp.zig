@@ -5,9 +5,10 @@
 //! API calls, calculations, or any other server-side operations.
 
 const std = @import("std");
-const types = @import("../protocol/types.zig");
-const schema = @import("../protocol/schema.zig");
+
 const jsonrpc = @import("../protocol/jsonrpc.zig");
+const schema = @import("../protocol/schema.zig");
+const types = @import("../protocol/types.zig");
 
 /// A tool that can be exposed by an MCP server.
 pub const Tool = struct {
@@ -19,7 +20,7 @@ pub const Tool = struct {
     execution: ?types.ToolExecution = null,
     icons: ?[]const types.Icon = null,
     annotations: ?ToolAnnotations = null,
-    handler: *const fn (allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
+    handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
     user_data: ?*anyopaque = null,
 };
 
@@ -58,16 +59,14 @@ pub const ToolError = error{
 
 /// Builder for creating tools with a fluent API.
 pub const ToolBuilder = struct {
-    allocator: std.mem.Allocator,
     tool: Tool,
     input_builder: ?schema.InputSchemaBuilder = null,
 
     const Self = @This();
 
     /// Creates a new tool builder with the given name.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) Self {
+    pub fn init(name: []const u8) Self {
         return .{
-            .allocator = allocator,
             .tool = .{
                 .name = name,
                 .handler = defaultHandler,
@@ -88,7 +87,7 @@ pub const ToolBuilder = struct {
     }
 
     /// Sets the tool handler function.
-    pub fn handler(self: *Self, h: *const fn (std.mem.Allocator, ?std.json.Value) ToolError!ToolResult) *Self {
+    pub fn handler(self: *Self, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, ?std.json.Value) ToolError!ToolResult) *Self {
         self.tool.handler = h;
         return self;
     }
@@ -140,7 +139,7 @@ pub const ToolBuilder = struct {
         return self.tool;
     }
 
-    fn defaultHandler(_: std.mem.Allocator, _: ?std.json.Value) ToolError!ToolResult {
+    fn defaultHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) ToolError!ToolResult {
         return .{ .content = &.{} };
     }
 };
@@ -150,15 +149,28 @@ pub fn textResult(allocator: std.mem.Allocator, text: []const u8) !ToolResult {
     const owned_text = try allocator.dupe(u8, text);
     const content = try allocator.alloc(types.ContentBlock, 1);
     content[0] = .{ .text = .{ .text = owned_text } };
-    return .{ .content = content };
+
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, "text", .{ .string = owned_text });
+
+    return .{
+        .content = content,
+        .structuredContent = .{ .object = obj },
+    };
 }
 
 /// Creates an error result containing a message.
 pub fn errorResult(allocator: std.mem.Allocator, message: []const u8) !ToolResult {
+    const owned_message = try allocator.dupe(u8, message);
     const content = try allocator.alloc(types.ContentBlock, 1);
-    content[0] = .{ .text = .{ .text = message } };
+    content[0] = .{ .text = .{ .text = owned_message } };
+
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, "error", .{ .string = owned_message });
+
     return .{
         .content = content,
+        .structuredContent = .{ .object = obj },
         .is_error = true,
     };
 }
@@ -186,7 +198,7 @@ pub fn resourceLinkResult(allocator: std.mem.Allocator, name: []const u8, uri: [
 
 /// Creates a tool result with structured JSON content and a text fallback.
 pub fn structuredResult(allocator: std.mem.Allocator, structured: std.json.Value) !ToolResult {
-    var out: std.ArrayList(u8) = .{};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     try jsonrpc.serializeValue(allocator, &out, structured);
     const text_json = try out.toOwnedSlice(allocator);
@@ -297,9 +309,7 @@ pub fn isValidToolName(name: []const u8) bool {
 }
 
 test "ToolBuilder" {
-    const allocator = std.testing.allocator;
-
-    var builder = ToolBuilder.init(allocator, "test_tool");
+    var builder: ToolBuilder = .init("test_tool");
     const tool = builder
         .description("A test tool")
         .title("Test Tool")
@@ -312,9 +322,7 @@ test "ToolBuilder" {
 }
 
 test "ToolBuilder with task support" {
-    const allocator = std.testing.allocator;
-
-    var builder = ToolBuilder.init(allocator, "long_tool");
+    var builder: ToolBuilder = .init("long_tool");
     const tool = builder
         .description("A long-running tool")
         .taskSupport("optional")
@@ -338,15 +346,15 @@ test "isValidToolName" {
 test "argument extraction" {
     const allocator = std.testing.allocator;
 
-    var obj = std.json.ObjectMap.init(allocator);
-    defer obj.deinit();
+    var obj: std.json.ObjectMap = .empty;
+    defer obj.deinit(allocator);
 
-    try obj.put("name", .{ .string = "test" });
-    try obj.put("count", .{ .integer = 42 });
-    try obj.put("enabled", .{ .bool = true });
-    try obj.put("value", .{ .float = 3.14 });
+    try obj.put(allocator, "name", .{ .string = "test" });
+    try obj.put(allocator, "count", .{ .integer = 42 });
+    try obj.put(allocator, "enabled", .{ .bool = true });
+    try obj.put(allocator, "value", .{ .float = 3.14 });
 
-    const value = std.json.Value{ .object = obj };
+    const value: std.json.Value = .{ .object = obj };
 
     try std.testing.expectEqualStrings("test", getString(value, "name").?);
     try std.testing.expectEqual(@as(i64, 42), getInteger(value, "count").?);

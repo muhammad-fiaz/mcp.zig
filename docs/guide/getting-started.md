@@ -19,7 +19,7 @@ In this guide, you'll learn how to:
 
 Before you begin, make sure you have:
 
-- [Zig 0.15.0](https://ziglang.org/download/) or later installed
+- [Zig 0.16.0](https://ziglang.org/download/) or later installed
 - Basic familiarity with Zig programming language
 
 ## Quick Installation
@@ -53,27 +53,22 @@ Here's a minimal example of an MCP server:
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
+pub fn main(init: std.process.Init) void {
     // Run the application logic
-    run() catch |err| {
+    run(init.io, init.gpa) catch |err| {
         // Report error with link to issue tracker if needed
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Check for library updates in background (recommended)
-    if (mcp.report.checkForUpdates(allocator)) |t| t.detach();
+    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
     // Create a server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "hello-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
     defer server.deinit();
 
@@ -85,7 +80,7 @@ fn run() !void {
     });
 
     // Run the server (blocks until shutdown)
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 }
 
 fn helloHandler(

@@ -22,17 +22,13 @@ This example demonstrates how to:
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Get command line args for server path
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -44,13 +40,12 @@ fn run() !void {
     }
 
     // Create client
-    var client = mcp.Client.init(.{
+    var client: mcp.Client = .init(io, allocator, .{
         .name = "simple-client",
         .version = "1.0.0",
         .title = "Simple MCP Client",
-        .allocator = allocator,
     });
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     // Enable capabilities
     client.enableSampling();
@@ -59,17 +54,17 @@ fn run() !void {
     client.enableRoots(true);
 
     // Add some roots
-    try client.addRoot("file:///home/user/documents", "Documents");
-    try client.addRoot("file:///home/user/projects", "Projects");
+    try client.addRoot(allocator, "file:///home/user/documents", "Documents");
+    try client.addRoot(allocator, "file:///home/user/projects", "Projects");
 
     std.debug.print("MCP Client initialized\n", .{});
     std.debug.print("Client: {s} v{s}\n", .{ client.config.name, client.config.version });
     std.debug.print("Roots configured: {d}\n", .{client.roots_list.items.len});
 
     // In a real implementation, you would:
-    // 1. Connect to server: try client.connectStdio(args[1], &.{});
-    // 2. List tools: try client.listTools();
-    // 3. Call tools: try client.callTool("greet", args);
+    // 1. Connect to server: try client.connectStdio(io, allocator, args[1], &.{});
+    // 2. List tools: try client.listTools(io, allocator);
+    // 3. Call tools: try client.callTool(io, allocator, "greet", args);
     // 4. Handle responses in an event loop
 
     std.debug.print("\nTo connect to a server, run:\n", .{});
@@ -91,13 +86,13 @@ fn run() !void {
 For stdio servers:
 
 ```zig
-try client.connectStdio("./zig-out/bin/example-server", &.{});
+try client.connectStdio(io, allocator, "./zig-out/bin/example-server", &.{});
 ```
 
 For HTTP servers:
 
 ```zig
-try client.connectHttp("http://localhost:8080");
+try client.connectHttp(io, allocator, "http://localhost:8080");
 ```
 
 ## Expected Console Output

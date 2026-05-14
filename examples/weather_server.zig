@@ -4,30 +4,26 @@
 //! demonstrating how to create a practical MCP server.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
 const NWS_API_BASE = "https://api.weather.gov";
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create weather server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "weather-server",
         .version = "1.0.0",
         .title = "Weather Server",
         .description = "Get weather alerts and forecasts for US locations",
         .instructions = "Use get_alerts to check weather alerts for a US state, or get_forecast to get the forecast for a location.",
-        .allocator = allocator,
-    });
+        });
     defer server.deinit();
 
     // Add get_alerts tool
@@ -80,13 +76,13 @@ fn run() !void {
     server.enableTasks();
 
     // Run the server
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn getAlertsHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const state = mcp.tools.getString(args, "state") orelse {
         return mcp.tools.errorResult(allocator, "Missing required argument: state (two-letter US state code)") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -113,7 +109,7 @@ fn getAlertsHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.too
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn getForecastHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn getForecastHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const lat = mcp.tools.getFloat(args, "latitude") orelse {
         return mcp.tools.errorResult(allocator, "Missing required argument: latitude") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -156,7 +152,7 @@ fn getForecastHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.t
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn weatherInfoHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn weatherInfoHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",

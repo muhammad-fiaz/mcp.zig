@@ -27,7 +27,7 @@ zig build
 The calculator example runs over stdio by default (CI/GitHub Actions friendly). To test with `curl`/HTTP, switch the run mode in `examples/calculator_server.zig` to:
 
 ```zig
-try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 ```
 
 ## HTTP Request Example

@@ -3,27 +3,23 @@
 //! A simple calculator MCP server with arithmetic operations.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var server = mcp.Server.init(.{
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var server: mcp.Server = .init(allocator, .{
         .name = "calculator-server",
         .version = "1.0.0",
         .title = "Calculator Server",
         .description = "Perform arithmetic operations",
         .instructions = "Use add, subtract, multiply, or divide tools with 'a' and 'b' number arguments.",
-        .allocator = allocator,
-    });
+        });
     defer server.deinit();
 
     // Add arithmetic tools
@@ -78,13 +74,13 @@ fn run() !void {
 
     server.enableLogging();
     server.enableTasks();
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn addHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -97,7 +93,7 @@ fn addHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.Too
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn subtractHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn subtractHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -110,7 +106,7 @@ fn subtractHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tool
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn multiplyHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn multiplyHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };
@@ -123,7 +119,7 @@ fn multiplyHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tool
     return mcp.tools.textResult(allocator, result) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn divideHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn divideHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse {
         return mcp.tools.errorResult(allocator, "Missing argument: a") catch return mcp.tools.ToolError.OutOfMemory;
     };

@@ -3,17 +3,17 @@
 //! Provides functionality for error reporting and checking for library updates.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const http = std.http;
 const SemanticVersion = std.SemanticVersion;
-const version_info = @import("version.zig");
+const builtin = @import("builtin");
+
 const Network = @import("utils/network.zig");
+const version_info = @import("version.zig");
+const CURRENT_VERSION: []const u8 = version_info.version;
 
 pub const ISSUES_URL = "https://github.com/muhammad-fiaz/mcp.zig/issues";
 const REPO_OWNER = "muhammad-fiaz";
 const REPO_NAME = "mcp.zig";
-const CURRENT_VERSION: []const u8 = version_info.version;
-
 /// Prints an error message with instructions for reporting bugs.
 pub fn reportError(err: anyerror) void {
     std.debug.print("\n[MCP ERROR] {}\n", .{err});
@@ -28,7 +28,7 @@ pub fn reportErrorMessage(message: []const u8) void {
 
 /// Static flag to ensure update check runs only once per process
 var update_check_done = false;
-var update_check_mutex = std.Thread.Mutex{};
+var update_check_mutex: std.Io.Mutex = .init;
 
 fn stripVersionPrefix(tag: []const u8) []const u8 {
     if (tag.len == 0) return tag;
@@ -58,14 +58,14 @@ fn compareVersions(latest_raw: []const u8) VersionRelation {
     return .unknown;
 }
 
-fn fetchLatestTag(allocator: std.mem.Allocator) ![]const u8 {
+fn fetchLatestTag(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
     const url = std.fmt.comptimePrint("https://api.github.com/repos/{s}/{s}/releases/latest", .{ REPO_OWNER, REPO_NAME });
     const extra_headers = [_]http.Header{
         .{ .name = "Accept", .value = "application/vnd.github+json" },
         .{ .name = "User-Agent", .value = "mcp.zig" },
     };
 
-    const parsed = Network.fetchJson(allocator, url, &extra_headers) catch return error.TagMissing;
+    const parsed = Network.fetchJson(io, allocator, url, &extra_headers) catch return error.TagMissing;
     defer parsed.deinit();
 
     return switch (parsed.value) {
@@ -85,21 +85,21 @@ fn fetchLatestTag(allocator: std.mem.Allocator) ![]const u8 {
 /// Checks for updates in a background thread (runs only once per process).
 /// Returns a thread handle so callers can optionally join during shutdown.
 /// Fails silently on errors (no internet, api limits, etc).
-pub fn checkForUpdates(allocator: std.mem.Allocator) ?std.Thread {
+pub fn checkForUpdates(io: std.Io, allocator: std.mem.Allocator) ?std.Thread {
     if (builtin.is_test) return null;
 
-    update_check_mutex.lock();
-    defer update_check_mutex.unlock();
+    update_check_mutex.lock(io) catch return null;
+    defer update_check_mutex.unlock(io);
 
     // Prevent multiple concurrent update checks
     if (update_check_done) return null;
     update_check_done = true;
 
-    return std.Thread.spawn(.{}, checkWorker, .{allocator}) catch null;
+    return std.Thread.spawn(.{}, checkWorker, .{ io, allocator }) catch null;
 }
 
-fn checkWorker(allocator: std.mem.Allocator) void {
-    const latest_tag = fetchLatestTag(allocator) catch return;
+fn checkWorker(io: std.Io, allocator: std.mem.Allocator) void {
+    const latest_tag = fetchLatestTag(io, allocator) catch return;
     defer allocator.free(latest_tag);
 
     // Use ASCII-safe indicators instead of emoji for cross-platform compatibility

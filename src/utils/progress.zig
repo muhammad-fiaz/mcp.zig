@@ -74,7 +74,7 @@ pub fn createToken(allocator: std.mem.Allocator) !ProgressToken {
 }
 
 test "Tracker" {
-    var tracker = Tracker.init(.{ .integer = 1 }, 100);
+    var tracker: Tracker = .init(.{ .integer = 1 }, 100);
     try std.testing.expectEqual(@as(f64, 0), tracker.current);
 
     tracker.update(50, null);

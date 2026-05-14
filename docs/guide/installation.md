@@ -4,7 +4,7 @@ This guide covers different ways to install and use mcp.zig in your project.
 
 ## Requirements
 
-- **Zig 0.15.0** or later
+- **Zig 0.16.0** or later
 - A Zig project with `build.zig` and `build.zig.zon`
 
 ## Using Zig Package Manager
@@ -94,7 +94,8 @@ Create a simple test file to verify the installation:
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) void {
+    _ = init;
     std.debug.print("mcp.zig version: {s}\n", .{mcp.protocol.VERSION});
     std.debug.print("Installation successful!\n", .{});
 }

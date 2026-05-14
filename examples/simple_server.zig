@@ -4,31 +4,27 @@
 //! with tools, resources, and prompts.
 
 const std = @import("std");
+
 const mcp = @import("mcp");
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| {
         mcp.reportError(err);
     };
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Check for updates in background
-    if (mcp.report.checkForUpdates(allocator)) |t| t.detach();
+    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
     // Create server
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
         .description = "A simple example MCP server",
         .instructions = "This server provides basic greeting and echo tools.",
-        .allocator = allocator,
-    });
+        });
     defer server.deinit();
 
     // Add a greeting tool
@@ -82,13 +78,13 @@ fn run() !void {
     server.enableTasks();
 
     // Run the server
-    try server.run(.stdio);
+    try server.run(io, allocator, .stdio);
 
     // To run with HTTP transport:
-    // try server.run(.{ .http = .{ .host = "localhost", .port = 8080 } });
+    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn greetHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
 
     const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
@@ -96,18 +92,18 @@ fn greetHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.T
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn echoHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
 
     // Demonstrate structured result
-    var obj = std.json.ObjectMap.init(allocator);
-    obj.put("echo", .{ .string = message }) catch {};
-    obj.put("timestamp", .{ .integer = std.time.timestamp() }) catch {};
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(allocator, "echo", .{ .string = message }) catch {};
+    obj.put(allocator, "timestamp", .{ .integer = 0 }) catch {};
 
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn aboutHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn aboutHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",
@@ -115,7 +111,7 @@ fn aboutHandler(_: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceErr
     };
 }
 
-fn introduceHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
+fn introduceHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
     const style = mcp.prompts.getStringArg(args, "style") orelse "casual";
     _ = style;
 

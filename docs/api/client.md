@@ -18,17 +18,15 @@ Create a new MCP client.
 | ----------- | ------------ | ------------------------- |
 | `name`      | `[]const u8` | Client name (required)    |
 | `version`   | `[]const u8` | Client version (required) |
-| `allocator` | `Allocator`  | Memory allocator          |
 
 **Example:**
 
 ```zig
-var client = mcp.Client.init(.{
+var client: mcp.Client = .init(io, allocator, .{
     .name = "my-client",
     .version = "1.0.0",
-    .allocator = allocator,
 });
-defer client.deinit();
+defer client.deinit(allocator);
 ```
 
 ---
@@ -38,7 +36,7 @@ defer client.deinit();
 ### `Client.deinit`
 
 ```zig
-pub fn deinit(self: *Client) void
+pub fn deinit(self: *Client, allocator: std.mem.Allocator) void
 ```
 
 Clean up client resources and pending state.
@@ -106,7 +104,7 @@ Enable the tasks capability for managing long-running operations.
 ### `Client.addRoot`
 
 ```zig
-pub fn addRoot(self: *Client, uri: []const u8, name: ?[]const u8) !void
+pub fn addRoot(self: *Client, allocator: std.mem.Allocator, uri: []const u8, name: ?[]const u8) !void
 ```
 
 Add a filesystem root.
@@ -119,8 +117,8 @@ Add a filesystem root.
 **Example:**
 
 ```zig
-try client.addRoot("file:///home/user/documents", "Documents");
-try client.addRoot("file:///home/user/projects", "Projects");
+try client.addRoot(allocator, "file:///home/user/documents", "Documents");
+try client.addRoot(allocator, "file:///home/user/projects", "Projects");
 ```
 
 ---
@@ -166,13 +164,13 @@ Enabled capabilities.
 ### `Client.connectStdio`
 
 ```zig
-pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
+pub fn connectStdio(self: *Client, io: std.Io, allocator: std.mem.Allocator, command: []const u8, args: []const []const u8) !void
 ```
 
 ### `Client.connectHttp`
 
 ```zig
-pub fn connectHttp(self: *Client, url: []const u8) !void
+pub fn connectHttp(self: *Client, io: std.Io, allocator: std.mem.Allocator, url: []const u8) !void
 ```
 
 ### `Client.setAuthorizationToken`
@@ -196,49 +194,49 @@ All request APIs currently send protocol requests and return `!void`.
 ### Tools
 
 ```zig
-pub fn listTools(self: *Client) !void
-pub fn callTool(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
+pub fn listTools(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn callTool(self: *Client, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void
 ```
 
 ### Resources
 
 ```zig
-pub fn listResources(self: *Client) !void
-pub fn readResource(self: *Client, uri: []const u8) !void
-pub fn subscribeResource(self: *Client, uri: []const u8) !void
-pub fn unsubscribeResource(self: *Client, uri: []const u8) !void
-pub fn listResourceTemplates(self: *Client) !void
+pub fn listResources(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn readResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
+pub fn subscribeResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
+pub fn unsubscribeResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
+pub fn listResourceTemplates(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
 ```
 
 ### Prompts
 
 ```zig
-pub fn listPrompts(self: *Client) !void
-pub fn getPrompt(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
+pub fn listPrompts(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn getPrompt(self: *Client, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void
 ```
 
 ### Completion / Logging / Health
 
 ```zig
-pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !void
-pub fn setLogLevel(self: *Client, level: []const u8) !void
-pub fn ping(self: *Client) !void
+pub fn complete(self: *Client, io: std.Io, allocator: std.mem.Allocator, ref: std.json.Value, argument: std.json.Value) !void
+pub fn setLogLevel(self: *Client, io: std.Io, allocator: std.mem.Allocator, level: []const u8) !void
+pub fn ping(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
 ```
 
 ### Tasks
 
 ```zig
-pub fn getTask(self: *Client, taskId: []const u8) !void
-pub fn getTaskResult(self: *Client, taskId: []const u8) !void
-pub fn listTasks(self: *Client) !void
-pub fn cancelTask(self: *Client, taskId: []const u8) !void
+pub fn getTask(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
+pub fn getTaskResult(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
+pub fn listTasks(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn cancelTask(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
 ```
 
 ### Notifications
 
 ```zig
-pub fn notifyInitialized(self: *Client) !void
-pub fn notifyRootsChanged(self: *Client) !void
+pub fn notifyInitialized(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn notifyRootsChanged(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
 ```
 
 ## Complete Example
@@ -247,26 +245,25 @@ pub fn notifyRootsChanged(self: *Client) !void
 const std = @import("std");
 const mcp = @import("mcp");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
+}
 
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Create client
-    var client = mcp.Client.init(.{
+    var client: mcp.Client = .init(io, allocator, .{
         .name = "full-client",
         .version = "1.0.0",
-        .allocator = allocator,
     });
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     // Enable capabilities
     client.enableRoots(true);
     client.enableSampling();
 
     // Configure roots
-    try client.addRoot("file:///home/user/docs", "Documentation");
-    try client.addRoot("file:///home/user/code", "Source Code");
+    try client.addRoot(allocator, "file:///home/user/docs", "Documentation");
+    try client.addRoot(allocator, "file:///home/user/code", "Source Code");
 
     // Print configuration
     std.debug.print("Client: {s} v{s}\n", .{
@@ -287,7 +284,7 @@ pub fn main() !void {
 ### `Client.connectStdio`
 
 ```zig
-pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
+pub fn connectStdio(self: *Client, io: std.Io, allocator: std.mem.Allocator, command: []const u8, args: []const []const u8) !void
 ```
 
 Connect to a server using the STDIO transport. 
@@ -296,7 +293,7 @@ Connect to a server using the STDIO transport.
 ### `Client.connectHttp`
 
 ```zig
-pub fn connectHttp(self: *Client, url: []const u8) !void
+pub fn connectHttp(self: *Client, io: std.Io, allocator: std.mem.Allocator, url: []const u8) !void
 ```
 
 Connect to a server via HTTP transport.
@@ -325,10 +322,10 @@ Disconnects from the server and closes the active transport.
 
 ```zig
 /// Request the list of available tools
-pub fn listTools(self: *Client) !void
+pub fn listTools(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
 
     // Request operations are currently fire-and-handle-later style
-    try client.listTools();
-    try client.callTool("hello", null);
+    try client.listTools(io, allocator);
+    try client.callTool(io, allocator, "hello", null);
 /// Request the list of available resources
-pub fn listResources(self: *Client) !void
+pub fn listResources(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void

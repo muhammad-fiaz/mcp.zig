@@ -134,10 +134,9 @@ const std = @import("std");
 const mcp = @import("mcp");
 
 pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
-    var server = mcp.Server.init(.{
+    var server: mcp.Server = .init(allocator, .{
         .name = "validated-server",
         .version = "1.0.0",
-        .allocator = allocator,
     });
 
     // Build input schema

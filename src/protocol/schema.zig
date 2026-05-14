@@ -48,31 +48,31 @@ pub const Schema = struct {
 
     /// Converts this schema to a JSON value for serialization.
     pub fn toJson(self: Schema, allocator: std.mem.Allocator) !std.json.Value {
-        var obj = std.json.ObjectMap.init(allocator);
-        errdefer obj.deinit();
+        var obj: std.json.ObjectMap = .empty;
+        errdefer obj.deinit(allocator);
 
         if (self.type) |t| {
-            try obj.put("type", .{ .string = t.toString() });
+            try obj.put(allocator, "type", .{ .string = t.toString() });
         }
 
         if (self.description) |desc| {
-            try obj.put("description", .{ .string = desc });
+            try obj.put(allocator, "description", .{ .string = desc });
         }
 
         if (self.title) |t| {
-            try obj.put("title", .{ .string = t });
+            try obj.put(allocator, "title", .{ .string = t });
         }
 
         if (self.properties) |props| {
-            try obj.put("properties", .{ .object = props });
+            try obj.put(allocator, "properties", .{ .object = props });
         }
 
         if (self.required) |req| {
-            var arr = std.json.Array.init(allocator);
+            var arr: std.json.Array = .init(allocator);
             for (req) |name| {
                 try arr.append(.{ .string = name });
             }
-            try obj.put("required", .{ .array = arr });
+            try obj.put(allocator, "required", .{ .array = arr });
         }
 
         return .{ .object = obj };
@@ -82,11 +82,10 @@ pub const Schema = struct {
 /// Builder for creating JSON schemas programmatically.
 pub const SchemaBuilder = struct {
     schema: Schema = .{},
-    allocator: std.mem.Allocator,
 
     /// Creates a new schema builder.
-    pub fn init(allocator: std.mem.Allocator) SchemaBuilder {
-        return .{ .allocator = allocator };
+    pub fn init() SchemaBuilder {
+        return .{};
     }
 
     /// Sets the schema type.
@@ -214,7 +213,6 @@ pub const CommonSchemas = struct {
 
 /// Builder for creating tool input schemas.
 pub const InputSchemaBuilder = struct {
-    allocator: std.mem.Allocator,
     properties: std.StringHashMap(Property),
     required_fields: std.ArrayList([]const u8),
 
@@ -231,104 +229,103 @@ pub const InputSchemaBuilder = struct {
     /// Creates a new input schema builder.
     pub fn init(allocator: std.mem.Allocator) InputSchemaBuilder {
         return .{
-            .allocator = allocator,
-            .properties = std.StringHashMap(Property).init(allocator),
-            .required_fields = .{},
+            .properties = .init(allocator),
+            .required_fields = .empty,
         };
     }
 
     /// Releases resources held by the builder.
-    pub fn deinit(self: *InputSchemaBuilder) void {
+    pub fn deinit(self: *InputSchemaBuilder, allocator: std.mem.Allocator) void {
         self.properties.deinit();
-        self.required_fields.deinit(self.allocator);
+        self.required_fields.deinit(allocator);
     }
 
     /// Adds a string property.
-    pub fn addString(self: *InputSchemaBuilder, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
+    pub fn addString(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
         try self.properties.put(name, .{
             .type = "string",
             .description = desc,
         });
         if (required) {
-            try self.required_fields.append(self.allocator, name);
+            try self.required_fields.append(allocator, name);
         }
         return self;
     }
 
     /// Adds a number property.
-    pub fn addNumber(self: *InputSchemaBuilder, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
+    pub fn addNumber(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
         try self.properties.put(name, .{
             .type = "number",
             .description = desc,
         });
         if (required) {
-            try self.required_fields.append(self.allocator, name);
+            try self.required_fields.append(allocator, name);
         }
         return self;
     }
 
     /// Adds an integer property.
-    pub fn addInteger(self: *InputSchemaBuilder, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
+    pub fn addInteger(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
         try self.properties.put(name, .{
             .type = "integer",
             .description = desc,
         });
         if (required) {
-            try self.required_fields.append(self.allocator, name);
+            try self.required_fields.append(allocator, name);
         }
         return self;
     }
 
     /// Adds a boolean property.
-    pub fn addBoolean(self: *InputSchemaBuilder, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
+    pub fn addBoolean(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, required: bool) !*InputSchemaBuilder {
         try self.properties.put(name, .{
             .type = "boolean",
             .description = desc,
         });
         if (required) {
-            try self.required_fields.append(self.allocator, name);
+            try self.required_fields.append(allocator, name);
         }
         return self;
     }
 
     /// Adds an enum property.
-    pub fn addEnum(self: *InputSchemaBuilder, name: []const u8, desc: ?[]const u8, values: []const []const u8, required: bool) !*InputSchemaBuilder {
+    pub fn addEnum(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, values: []const []const u8, required: bool) !*InputSchemaBuilder {
         try self.properties.put(name, .{
             .type = "string",
             .description = desc,
             .@"enum" = values,
         });
         if (required) {
-            try self.required_fields.append(self.allocator, name);
+            try self.required_fields.append(allocator, name);
         }
         return self;
     }
 
     /// Builds the final input schema as a JSON value.
-    pub fn build(self: *InputSchemaBuilder) !std.json.Value {
-        var obj = std.json.ObjectMap.init(self.allocator);
-        errdefer obj.deinit();
+    pub fn build(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !std.json.Value {
+        var obj: std.json.ObjectMap = .empty;
+        errdefer obj.deinit(allocator);
 
-        try obj.put("type", .{ .string = "object" });
+        try obj.put(allocator, "type", .{ .string = "object" });
 
-        var props = std.json.ObjectMap.init(self.allocator);
+        var props: std.json.ObjectMap = .empty;
         var iter = self.properties.iterator();
         while (iter.next()) |entry| {
-            var prop_obj = std.json.ObjectMap.init(self.allocator);
-            try prop_obj.put("type", .{ .string = entry.value_ptr.type });
+            var prop_obj: std.json.ObjectMap = .empty;
+            try prop_obj.put(allocator, "type", .{ .string = entry.value_ptr.type });
             if (entry.value_ptr.description) |desc| {
-                try prop_obj.put("description", .{ .string = desc });
+                try prop_obj.put(allocator, "description", .{ .string = desc });
             }
-            try props.put(entry.key_ptr.*, .{ .object = prop_obj });
+            try props.put(allocator, entry.key_ptr.*, .{ .object = prop_obj });
         }
-        try obj.put("properties", .{ .object = props });
+        try obj.put(allocator, "properties", .{ .object = props });
 
         if (self.required_fields.items.len > 0) {
-            var req = std.json.Array.init(self.allocator);
+            var req: std.json.Array = .init(allocator);
             for (self.required_fields.items) |name| {
                 try req.append(.{ .string = name });
             }
-            try obj.put("required", .{ .array = req });
+            try obj.put(allocator, "required", .{ .array = req });
         }
 
         return .{ .object = obj };
@@ -336,8 +333,7 @@ pub const InputSchemaBuilder = struct {
 };
 
 test "SchemaBuilder" {
-    const allocator = std.testing.allocator;
-    var builder = SchemaBuilder.init(allocator);
+    var builder: SchemaBuilder = .init();
 
     const schema = builder
         .string_()
@@ -349,17 +345,17 @@ test "SchemaBuilder" {
 }
 
 test "InputSchemaBuilder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var builder = InputSchemaBuilder.init(allocator);
-    defer builder.deinit();
+    var builder: InputSchemaBuilder = .init(allocator);
+    defer builder.deinit(allocator);
 
-    _ = try builder.addString("name", "User name", true);
-    _ = try builder.addInteger("age", "User age", false);
+    _ = try builder.addString(allocator, "name", "User name", true);
+    _ = try builder.addInteger(allocator, "age", "User age", false);
 
-    const schema = try builder.build();
+    const schema = try builder.build(allocator);
 
     try std.testing.expectEqualStrings("object", schema.object.get("type").?.string);
 }
