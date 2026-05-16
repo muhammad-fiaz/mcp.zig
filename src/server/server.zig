@@ -601,7 +601,21 @@ pub const Server = struct {
             }
 
             var input_schema: std.json.ObjectMap = .empty;
-            try input_schema.put(allocator, "type", .{ .string = "object" });
+            if (entry.value_ptr.inputSchema) |schema| {
+                try input_schema.put(allocator, "type", .{ .string = schema.type });
+
+                if (schema.@"$schema") |s| try input_schema.put(allocator, "$schema", .{ .string = s });
+                if (schema.description) |d| try input_schema.put(allocator, "description", .{ .string = d });
+                if (schema.properties) |p| try input_schema.put(allocator, "properties", p);
+
+                if (schema.required) |req| {
+                    var arr: std.json.Array = .init(allocator);
+                    for (req) |name| try arr.append(.{ .string = name });
+                    try input_schema.put(allocator, "required", .{ .array = arr });
+                }
+            } else {
+                try input_schema.put(allocator, "type", .{ .string = "object" });
+            }
             try tool_obj.put(allocator, "inputSchema", .{ .object = input_schema });
 
             if (entry.value_ptr.annotations) |ann| {
