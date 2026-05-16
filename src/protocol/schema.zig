@@ -4,6 +4,7 @@
 //! in MCP for tool input validation and type definitions.
 
 const std = @import("std");
+const types = @import("types.zig");
 
 /// JSON Schema type definitions.
 pub const SchemaType = enum {
@@ -301,14 +302,26 @@ pub const InputSchemaBuilder = struct {
         return self;
     }
 
-    /// Builds the final input schema as a JSON value.
-    pub fn build(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !std.json.Value {
-        var obj: std.json.ObjectMap = .empty;
-        errdefer obj.deinit(allocator);
+    /// Builds the final input schema as an 'InputSchema'.
+    pub fn toInputSchema(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !types.InputSchema {
+        const props = try self.buildProperties(allocator);
 
-        try obj.put(allocator, "type", .{ .string = "object" });
+        const req: ?[]const []const u8 = if (self.required_fields.items.len == 0)
+            null
+        else
+            try allocator.dupe([]const u8, self.required_fields.items);
 
+        return .{
+            .type = "object",
+            .properties = if (props.count() == 0) null else .{ .object = props },
+            .required = req,
+        };
+    }
+
+    fn buildProperties(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !std.json.ObjectMap {
         var props: std.json.ObjectMap = .empty;
+        errdefer props.deinit(allocator);
+
         var iter = self.properties.iterator();
         while (iter.next()) |entry| {
             var prop_obj: std.json.ObjectMap = .empty;
@@ -318,6 +331,18 @@ pub const InputSchemaBuilder = struct {
             }
             try props.put(allocator, entry.key_ptr.*, .{ .object = prop_obj });
         }
+
+        return props;
+    }
+
+    /// Builds the final input schema as a JSON value.
+    pub fn build(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !std.json.Value {
+        var obj: std.json.ObjectMap = .empty;
+        errdefer obj.deinit(allocator);
+
+        try obj.put(allocator, "type", .{ .string = "object" });
+
+        const props = try self.buildProperties(allocator);
         try obj.put(allocator, "properties", .{ .object = props });
 
         if (self.required_fields.items.len > 0) {
