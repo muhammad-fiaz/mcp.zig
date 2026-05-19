@@ -16,6 +16,8 @@ Important `ServerConfig` fields:
 | `version` | `[]const u8` | Required server version |
 | `title` | `?[]const u8` | Optional human-readable title |
 | `description` | `?[]const u8` | Optional description |
+| `icons` | `?[]const mcp.types.Icon` | Optional icon list |
+| `websiteUrl` | `?[]const u8` | Optional website URL |
 | `instructions` | `?[]const u8` | Optional usage instructions |
 
 ## Lifecycle
@@ -23,7 +25,7 @@ Important `ServerConfig` fields:
 ```zig
 pub fn deinit(self: *Server) void
 pub fn run(self: *Server, io: std.Io, allocator: std.mem.Allocator, options: RunOptions) !void
-pub fn runWithTransport(self: *Server, t: mcp.transport.Transport) !void
+pub fn runWithTransport(self: *Server, io: std.Io, allocator: std.mem.Allocator, t: mcp.transport.Transport) !void
 ```
 
 Run options:

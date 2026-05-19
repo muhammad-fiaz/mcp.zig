@@ -30,7 +30,7 @@ const jsonrpc = mcp.jsonrpc;
 
 ## Versions
 
-- Library version: `0.0.4`
+- Library version: `0.0.5`
 - Protocol version: `2025-11-25`
 
 ```zig

@@ -22,6 +22,8 @@ defer server.deinit();
 | version | []const u8 | Server version (required) |
 | title | ?[]const u8 | Human-readable title |
 | description | ?[]const u8 | Server description |
+| icons | ?[]const mcp.types.Icon | Optional icon list |
+| websiteUrl | ?[]const u8 | Optional website URL |
 | instructions | ?[]const u8 | Optional server usage instructions |
 
 ## Capabilities

@@ -1,10 +1,15 @@
 //! Simple MCP Server Example
 //!
-//! This example demonstrates how to create a basic MCP server
-//! with tools, resources, and prompts.
+//! This example demonstrates the minimal viable MCP server:
+//! - One greeting tool with input schema
+//! - One echo tool
+//! - One resource
+//! - One prompt
+//!
+//! Run with STDIO transport (for use with Claude Desktop, etc.):
+//!   zig build run-server
 
 const std = @import("std");
-
 const mcp = @import("mcp");
 
 pub fn main(init: std.process.Init) void {
@@ -14,108 +19,149 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
-    // Check for updates in background
-    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
+    // Schemas live for the server's lifetime; use an arena.
+    var schema_arena = std.heap.ArenaAllocator.init(allocator);
+    defer schema_arena.deinit();
+    const sa = schema_arena.allocator();
 
-    // Create server
+    const greet_schema = try buildGreetSchema(sa);
+    const echo_schema = try buildEchoSchema(sa);
+
     var server: mcp.Server = .init(allocator, .{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
-        .description = "A simple example MCP server",
-        .instructions = "This server provides basic greeting and echo tools.",
-        });
+        .description = "A minimal example MCP server demonstrating tools, resources, and prompts",
+        .instructions = "Use 'greet' to greet someone by name, or 'echo' to reflect a message back.",
+    });
     defer server.deinit();
 
-    // Add a greeting tool
+    // --- Tools ---
     try server.addTool(.{
         .name = "greet",
         .description = "Greet a user by name",
         .title = "Greeting Tool",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = greet_schema,
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
         .handler = greetHandler,
     });
 
-    // Add an echo tool
     try server.addTool(.{
         .name = "echo",
-        .description = "Echo back the input message",
+        .description = "Echo back the input message unchanged",
         .title = "Echo Tool",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = echo_schema,
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
         .handler = echoHandler,
     });
 
-    // Add a simple resource
+    // --- Resources ---
     try server.addResource(.{
         .uri = "info://server/about",
         .name = "About",
         .description = "Information about this server",
         .mimeType = "text/plain",
+        .annotations = .{ .priority = 0.9 },
         .handler = aboutHandler,
     });
 
-    // Add a prompt
+    // --- Prompts ---
     try server.addPrompt(.{
         .name = "introduce",
-        .description = "Introduce the server capabilities",
-        .title = "Introduction Prompt",
+        .description = "Ask the model to introduce this server's capabilities",
+        .title = "Server Introduction",
         .arguments = &[_]mcp.prompts.PromptArgument{
-            .{ .name = "style", .description = "Introduction style (formal/casual)", .required = false },
+            .{ .name = "style", .description = "Tone: formal or casual", .required = false },
         },
         .handler = introduceHandler,
     });
 
-    // Enable logging
     server.enableLogging();
-    server.enableTasks();
-
-    // Run the server
     try server.run(io, allocator, .stdio);
-
-    // To run with HTTP transport:
-    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-fn greetHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+// ---------------------------------------------------------------------------
+// Schema builders
+// ---------------------------------------------------------------------------
+
+fn buildGreetSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "name", "Name of the person to greet", false);
+    return b.toInputSchema(allocator);
+}
+
+fn buildEchoSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "message", "Message to echo back", true);
+    return b.toInputSchema(allocator);
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
-
-    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
-
+    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to mcp.zig.", .{name}) catch
+        return mcp.tools.ToolError.OutOfMemory;
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn echoHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.tools.ToolError!mcp.tools.ToolResult {
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
-
-    // Demonstrate structured result
-    var obj: std.json.ObjectMap = .empty;
-    obj.put(allocator, "echo", .{ .string = message }) catch {};
-    obj.put(allocator, "timestamp", .{ .integer = 0 }) catch {};
-
-    return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, message) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn aboutHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn aboutHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    _: std.mem.Allocator,
+    uri: []const u8,
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",
-        .text = "Simple MCP Server v1.0.0\n\nThis is an example MCP server built with mcp.zig.",
+        .text =
+        \\Simple MCP Server v1.0.0
+        \\
+        \\Built with mcp.zig — a native Zig implementation of the
+        \\Model Context Protocol (spec 2025-11-25).
+        \\
+        \\Tools:  greet, echo
+        \\Resources: info://server/about
+        \\Prompts: introduce
+        ,
     };
 }
 
-fn introduceHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
+fn introduceHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
     const style = mcp.prompts.getStringArg(args, "style") orelse "casual";
-    _ = style;
-
-    const messages = allocator.alloc(mcp.prompts.PromptMessage, 1) catch return mcp.prompts.PromptError.OutOfMemory;
-    messages[0] = mcp.prompts.userMessage("Please introduce this MCP server and explain what tools it provides.");
+    const text = std.fmt.allocPrint(
+        allocator,
+        "Please introduce this MCP server in a {s} tone. Describe the 'greet' and 'echo' tools.",
+        .{style},
+    ) catch return mcp.prompts.PromptError.OutOfMemory;
+    const messages = allocator.alloc(mcp.prompts.PromptMessage, 1) catch
+        return mcp.prompts.PromptError.OutOfMemory;
+    messages[0] = mcp.prompts.userMessage(text);
     return messages;
 }

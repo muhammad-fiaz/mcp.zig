@@ -87,7 +87,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Zig 0.16.x (recommended)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.4.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.5.tar.gz
 
 # Zig 0.15.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
@@ -184,6 +184,7 @@ The `examples/` directory contains several example implementations:
 | **simple_client.zig**     | Basic client setup                    |
 | **weather_server.zig**    | Weather information server            |
 | **calculator_server.zig** | Calculator with arithmetic operations |
+| **advanced_server.zig**   | Advanced schemas and task support     |
 
 Run examples:
 
@@ -195,6 +196,7 @@ zig build
 zig build run-server
 zig build run-weather
 zig build run-calc
+zig build run-advanced
 ```
 
 ## Architecture

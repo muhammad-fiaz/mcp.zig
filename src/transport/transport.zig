@@ -212,7 +212,7 @@ pub const HttpTransport = struct {
         extra_headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" }) catch {
             return Transport.SendError.OutOfMemory;
         };
-        extra_headers.append(allocator, .{ .name = "Accept", .value = "application/json" }) catch {
+        extra_headers.append(allocator, .{ .name = "Accept", .value = "application/json, text/event-stream" }) catch {
             return Transport.SendError.OutOfMemory;
         };
         extra_headers.append(allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version }) catch {
@@ -255,10 +255,15 @@ pub const HttpTransport = struct {
 
         var response = req.receiveHead(redirect_buffer) catch return Transport.SendError.WriteError;
 
+        var content_type: ?[]const u8 = null;
+
         var header_it = response.head.iterateHeaders();
         while (header_it.next()) |header| {
             if (std.ascii.eqlIgnoreCase(header.name, "mcp-session-id")) {
                 self.setSessionId(allocator, header.value) catch return Transport.SendError.OutOfMemory;
+            }
+            if (std.ascii.eqlIgnoreCase(header.name, "content-type")) {
+                content_type = header.value;
             }
         }
 
@@ -276,6 +281,13 @@ pub const HttpTransport = struct {
         }
 
         if (body.items.len == 0) return;
+
+        if (content_type) |ctype| {
+            if (std.mem.indexOf(u8, ctype, "text/event-stream") != null) {
+                try self.enqueueSseEvents(allocator, body.items);
+                return;
+            }
+        }
 
         const owned = allocator.dupe(u8, body.items) catch return Transport.SendError.OutOfMemory;
         self.pending_responses.append(allocator, owned) catch {
@@ -313,6 +325,37 @@ pub const HttpTransport = struct {
             allocator.free(old);
         }
         self.authorization_token = try allocator.dupe(u8, token);
+    }
+
+    fn enqueueSseEvents(self: *Self, allocator: std.mem.Allocator, body: []const u8) !void {
+        var current: std.ArrayList(u8) = .empty;
+        defer current.deinit(allocator);
+
+        var it = std.mem.splitScalar(u8, body, '\n');
+        while (it.next()) |line| {
+            if (line.len == 0) {
+                if (current.items.len > 0) {
+                    const owned = try allocator.dupe(u8, current.items);
+                    try self.pending_responses.append(allocator, owned);
+                    current.clearRetainingCapacity();
+                }
+                continue;
+            }
+
+            if (std.mem.startsWith(u8, line, "data:")) {
+                var data_line = line[5..];
+                if (data_line.len > 0 and data_line[0] == ' ') data_line = data_line[1..];
+                if (current.items.len > 0) {
+                    try current.append(allocator, '\n');
+                }
+                try current.appendSlice(allocator, data_line);
+            }
+        }
+
+        if (current.items.len > 0) {
+            const owned = try allocator.dupe(u8, current.items);
+            try self.pending_responses.append(allocator, owned);
+        }
     }
 
     /// Returns a Transport interface for this HTTP transport.

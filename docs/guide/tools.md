@@ -54,16 +54,16 @@ Define expected arguments using JSON Schema:
 
 ```zig
 var schema = mcp.schema.InputSchemaBuilder.init(allocator);
-defer schema.deinit();
+defer schema.deinit(allocator);
 
-_ = try schema.addString("name", "The person's name", true);
-_ = try schema.addNumber("age", "The person's age", false);
+_ = try schema.addString(allocator, "name", "The person's name", true);
+_ = try schema.addNumber(allocator, "age", "The person's age", false);
 
 try server.addTool(.{
     .name = "greet",
     .description = "Greet a person",
     .handler = greetHandler,
-    .inputSchema = try schema.build(),
+    .inputSchema = try schema.toInputSchema(allocator),
 });
 ```
 
@@ -155,18 +155,58 @@ fn handler(_: ?*anyopaque, _: std.Io, allocator: Allocator, args: ?std.json.Valu
 Use the builder pattern for complex tools:
 
 ```zig
-var builder = mcp.tools.ToolBuilder.init(allocator, "advanced_tool");
-defer builder.deinit();
+var schema = mcp.schema.InputSchemaBuilder.init(allocator);
+defer schema.deinit(allocator);
 
-const tool = builder
+_ = try schema.addString(allocator, "input", "Input text", true);
+_ = try schema.addNumber(allocator, "count", "Number of iterations", false);
+_ = try schema.addBoolean(allocator, "verbose", "Enable verbose output", false);
+
+const tool = mcp.tools.ToolBuilder.init("advanced_tool")
     .description("An advanced tool with many options")
     .handler(advancedHandler)
-    .addStringArg("input", "Input text", true)
-    .addNumberArg("count", "Number of iterations", false)
-    .addBoolArg("verbose", "Enable verbose output", false)
+    .inputSchema(try schema.toInputSchema(allocator))
     .build();
 
 try server.addTool(tool);
+```
+
+## Output Schema
+
+You can describe structured tool results with `outputSchema`:
+
+```zig
+var props: std.json.ObjectMap = .empty;
+var value_obj: std.json.ObjectMap = .empty;
+try value_obj.put(allocator, "type", .{ .string = "number" });
+try props.put(allocator, "result", .{ .object = value_obj });
+
+const output_schema = mcp.types.OutputSchema{
+    .@"$schema" = "https://json-schema.org/draft/2020-12/schema",
+    .type = "object",
+    .properties = .{ .object = props },
+    .required = &[_][]const u8{ "result" },
+};
+
+try server.addTool(.{
+    .name = "calculate",
+    .description = "Perform calculations",
+    .handler = calculateHandler,
+    .outputSchema = output_schema,
+});
+```
+
+## Task Support
+
+Tools can opt into task-aware execution:
+
+```zig
+try server.addTool(.{
+    .name = "long_task",
+    .description = "Run a long task",
+    .execution = .{ .taskSupport = "optional" },
+    .handler = longTaskHandler,
+});
 ```
 
 ## Best Practices

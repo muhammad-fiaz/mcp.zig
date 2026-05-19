@@ -118,6 +118,18 @@ pub const Client = struct {
         };
     }
 
+    /// Enables task-augmented requests for sampling and elicitation.
+    pub fn enableTasksAdvanced(self: *Self, sampling: bool, elicitation: bool) void {
+        self.capabilities.tasks = .{
+            .list = .{},
+            .cancel = .{},
+            .requests = .{
+                .sampling = if (sampling) .{ .createMessage = .{} } else null,
+                .elicitation = if (elicitation) .{ .create = .{} } else null,
+            },
+        };
+    }
+
     /// Adds a filesystem root that the server can access.
     pub fn addRoot(self: *Self, allocator: std.mem.Allocator, uri: []const u8, name: ?[]const u8) !void {
         try self.roots_list.append(allocator, .{ .uri = uri, .name = name });
@@ -195,6 +207,20 @@ pub const Client = struct {
             var tasks_cap: std.json.ObjectMap = .empty;
             try tasks_cap.put(allocator, "list", .{ .object = .empty });
             try tasks_cap.put(allocator, "cancel", .{ .object = .empty });
+            if (self.capabilities.tasks.?.requests) |reqs| {
+                var requests_obj: std.json.ObjectMap = .empty;
+                if (reqs.sampling != null) {
+                    var sampling_obj: std.json.ObjectMap = .empty;
+                    try sampling_obj.put(allocator, "createMessage", .{ .object = .empty });
+                    try requests_obj.put(allocator, "sampling", .{ .object = sampling_obj });
+                }
+                if (reqs.elicitation != null) {
+                    var elicitation_obj: std.json.ObjectMap = .empty;
+                    try elicitation_obj.put(allocator, "create", .{ .object = .empty });
+                    try requests_obj.put(allocator, "elicitation", .{ .object = elicitation_obj });
+                }
+                try tasks_cap.put(allocator, "requests", .{ .object = requests_obj });
+            }
             try caps.put(allocator, "tasks", .{ .object = tasks_cap });
         }
         try params.put(allocator, "capabilities", .{ .object = caps });
@@ -207,6 +233,31 @@ pub const Client = struct {
         }
         if (self.config.description) |d| {
             try client_info.put(allocator, "description", .{ .string = d });
+        }
+        if (self.config.icons) |icons| {
+            var icons_array: std.json.Array = .init(allocator);
+            for (icons) |icon| {
+                var icon_obj: std.json.ObjectMap = .empty;
+                try icon_obj.put(allocator, "src", .{ .string = icon.src });
+                if (icon.mimeType) |mime| {
+                    try icon_obj.put(allocator, "mimeType", .{ .string = mime });
+                }
+                if (icon.sizes) |sizes| {
+                    var sizes_array: std.json.Array = .init(allocator);
+                    for (sizes) |size| {
+                        try sizes_array.append(.{ .string = size });
+                    }
+                    try icon_obj.put(allocator, "sizes", .{ .array = sizes_array });
+                }
+                if (icon.theme) |theme| {
+                    try icon_obj.put(allocator, "theme", .{ .string = @tagName(theme) });
+                }
+                try icons_array.append(.{ .object = icon_obj });
+            }
+            try client_info.put(allocator, "icons", .{ .array = icons_array });
+        }
+        if (self.config.websiteUrl) |u| {
+            try client_info.put(allocator, "websiteUrl", .{ .string = u });
         }
         try params.put(allocator, "clientInfo", .{ .object = client_info });
 

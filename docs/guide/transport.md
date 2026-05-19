@@ -82,7 +82,19 @@ The response body contains the JSON-RPC response.
 ### Example Pattern
 
 Most examples default to `stdio` and include optional HTTP run lines.
-`examples/simple_server.zig` is currently configured for HTTP mode and can be switched back to `stdio` if needed.
+Switch to HTTP by changing the run call in the example source.
+
+## Streamable HTTP (SSE)
+
+If the client sends `Accept: text/event-stream`, the server responds with a
+single Server-Sent Events payload containing the JSON-RPC response.
+
+```bash
+curl -X POST http://localhost:8080 \
+    -H "Content-Type: application/json" \
+    -H "Accept: text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+```
 
 ## Custom Transports
 

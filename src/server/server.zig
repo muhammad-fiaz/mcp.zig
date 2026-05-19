@@ -96,12 +96,14 @@ pub const ServerState = enum {
 
 /// MCP Server that handles client connections and routes requests
 pub const Server = struct {
+    allocator: std.mem.Allocator,
     config: ServerConfig,
     state: ServerState = .uninitialized,
     tools: std.StringHashMap(tools_mod.Tool),
     resources: std.StringHashMap(resources_mod.Resource),
     resource_templates: std.StringHashMap(resources_mod.ResourceTemplate),
     prompts: std.StringHashMap(prompts_mod.Prompt),
+    tasks: std.StringHashMap(TaskEntry),
     capabilities: types.ServerCapabilities = .{},
     client_info: ?types.Implementation = null,
     client_capabilities: ?types.ClientCapabilities = null,
@@ -119,14 +121,21 @@ pub const Server = struct {
         timestamp: i64,
     };
 
+    const TaskEntry = struct {
+        task: types.Task,
+        result_json: []const u8,
+    };
+
     /// Initialize a new MCP Server
     pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
         return .{
+            .allocator = allocator,
             .config = config,
             .tools = .init(allocator),
             .resources = .init(allocator),
             .resource_templates = .init(allocator),
             .prompts = .init(allocator),
+            .tasks = .init(allocator),
             .pending_requests = .init(allocator),
         };
     }
@@ -137,7 +146,18 @@ pub const Server = struct {
         self.resources.deinit();
         self.resource_templates.deinit();
         self.prompts.deinit();
+        self.deinitTasks();
         self.pending_requests.deinit();
+        if (self.client_info) |ci| {
+            self.allocator.free(ci.name);
+            self.allocator.free(ci.version);
+            self.client_info = null;
+        }
+        if (self.stdio_transport) |stdio| {
+            stdio.deinit(self.allocator);
+            self.allocator.destroy(stdio);
+            self.stdio_transport = null;
+        }
     }
 
     /// Add a tool to the server
@@ -267,6 +287,15 @@ pub const Server = struct {
     }
 
     fn handleHttpJsonRpcRequest(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: *http.Server.Request) !void {
+        var wants_sse = false;
+        var header_it = http.HeaderIterator.init(request.head_buffer);
+        while (header_it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "accept")) {
+                if (std.mem.indexOf(u8, header.value, "text/event-stream") != null) {
+                    wants_sse = true;
+                }
+            }
+        }
         const content_length = request.head.content_length orelse {
             try request.respond("Content-Length required", .{
                 .status = .bad_request,
@@ -359,6 +388,18 @@ pub const Server = struct {
         };
 
         if (request_transport.response_message) |response_json| {
+            if (wants_sse) {
+                const sse_body = try std.fmt.allocPrint(allocator, "data: {s}\n\n", .{response_json});
+                defer allocator.free(sse_body);
+                try request.respond(sse_body, .{
+                    .status = .ok,
+                    .extra_headers = &.{
+                        .{ .name = "Content-Type", .value = "text/event-stream" },
+                    },
+                });
+                return;
+            }
+
             try request.respond(response_json, .{
                 .status = .ok,
                 .extra_headers = &.{
@@ -368,7 +409,7 @@ pub const Server = struct {
             return;
         }
 
-        try request.respond("", .{ .status = .no_content });
+        try request.respond("", .{ .status = .accepted });
     }
 
     /// Run the server with a custom transport
@@ -386,14 +427,21 @@ pub const Server = struct {
                         self.state = .shutting_down;
                         break;
                     },
-                    else => {
-                        self.logError(io, "Transport receive error");
-                        continue;
+                    else => |e| {
+                        var buf: [128]u8 = undefined;
+                        if (std.fmt.bufPrint(&buf, "Transport receive error: {s}", .{@errorName(e)})) |msg| {
+                            self.logError(io, msg);
+                        } else |_| {
+                            self.logError(io, "Transport receive error");
+                        }
+                        self.state = .shutting_down;
+                        break;
                     },
                 }
             };
 
             if (message_data) |data| {
+                defer allocator.free(data);
                 try self.handleMessage(io, allocator, data);
             }
         }
@@ -403,15 +451,18 @@ pub const Server = struct {
 
     /// Handle an incoming message
     fn handleMessage(self: *Self, io: std.Io, allocator: std.mem.Allocator, data: []const u8) !void {
-        const parsed_message = jsonrpc.parseMessage(allocator, data) catch {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        const parsed_message = jsonrpc.parseMessage(aa, data) catch {
             const error_response = jsonrpc.createParseError(null);
-            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+            try self.sendResponse(io, aa, .{ .error_response = error_response });
             return;
         };
-        defer parsed_message.deinit();
 
         switch (parsed_message.message) {
-            .request => |req| try self.handleRequest(io, allocator, req),
+            .request => |req| try self.handleRequest(io, aa, req),
             .notification => |notif| try self.handleNotification(io, notif),
             .response => |resp| self.handleResponse(resp),
             .error_response => |err| self.handleErrorResponse(io, err),
@@ -487,9 +538,15 @@ pub const Server = struct {
                 if (obj.get("clientInfo")) |client_info_val| {
                     if (client_info_val == .object) {
                         const ci = client_info_val.object;
+                        const name = if (ci.get("name")) |n| if (n == .string) n.string else "unknown" else "unknown";
+                        const version = if (ci.get("version")) |v| if (v == .string) v.string else "0.0.0" else "0.0.0";
+                        if (self.client_info) |existing| {
+                            self.allocator.free(existing.name);
+                            self.allocator.free(existing.version);
+                        }
                         self.client_info = .{
-                            .name = if (ci.get("name")) |n| if (n == .string) n.string else "unknown" else "unknown",
-                            .version = if (ci.get("version")) |v| if (v == .string) v.string else "0.0.0" else "0.0.0",
+                            .name = try self.allocator.dupe(u8, name),
+                            .version = try self.allocator.dupe(u8, version),
                         };
                     }
                 }
@@ -563,6 +620,9 @@ pub const Server = struct {
         if (self.config.description) |d| {
             try server_info.put(allocator, "description", .{ .string = d });
         }
+        if (self.config.icons) |icons| {
+            try putIcons(allocator, &server_info, icons);
+        }
         if (self.config.websiteUrl) |u| {
             try server_info.put(allocator, "websiteUrl", .{ .string = u });
         }
@@ -599,6 +659,9 @@ pub const Server = struct {
             if (entry.value_ptr.title) |t| {
                 try tool_obj.put(allocator, "title", .{ .string = t });
             }
+            if (entry.value_ptr.icons) |icons| {
+                try putIcons(allocator, &tool_obj, icons);
+            }
 
             var input_schema: std.json.ObjectMap = .empty;
             if (entry.value_ptr.inputSchema) |schema| {
@@ -617,6 +680,19 @@ pub const Server = struct {
                 try input_schema.put(allocator, "type", .{ .string = "object" });
             }
             try tool_obj.put(allocator, "inputSchema", .{ .object = input_schema });
+
+            if (entry.value_ptr.outputSchema) |schema| {
+                var output_schema: std.json.ObjectMap = .empty;
+                try output_schema.put(allocator, "type", .{ .string = schema.type });
+                if (schema.@"$schema") |s| try output_schema.put(allocator, "$schema", .{ .string = s });
+                if (schema.properties) |p| try output_schema.put(allocator, "properties", p);
+                if (schema.required) |req| {
+                    var arr: std.json.Array = .init(allocator);
+                    for (req) |name| try arr.append(.{ .string = name });
+                    try output_schema.put(allocator, "required", .{ .array = arr });
+                }
+                try tool_obj.put(allocator, "outputSchema", .{ .object = output_schema });
+            }
 
             if (entry.value_ptr.annotations) |ann| {
                 var ann_obj: std.json.ObjectMap = .empty;
@@ -650,6 +726,7 @@ pub const Server = struct {
     fn handleToolsCall(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var tool_name: []const u8 = "";
         var arguments: ?std.json.Value = null;
+        var task_meta: ?types.TaskMetadata = null;
 
         if (request.params) |params| {
             if (params == .object) {
@@ -659,72 +736,83 @@ pub const Server = struct {
                     }
                 }
                 arguments = params.object.get("arguments");
+                if (params.object.get("task")) |task_val| {
+                    if (task_val == .object) {
+                        var ttl: ?i64 = null;
+                        if (task_val.object.get("ttl")) |ttl_val| {
+                            if (ttl_val == .integer) {
+                                ttl = @intCast(ttl_val.integer);
+                            }
+                        }
+                        task_meta = .{ .ttl = ttl };
+                    }
+                }
             }
         }
 
         if (self.tools.get(tool_name)) |tool| {
-            const tool_result = tool.handler(tool.user_data, io, allocator, arguments) catch |err| {
-                var content_array: std.json.Array = .init(allocator);
-                var text_obj: std.json.ObjectMap = .empty;
-                try text_obj.put(allocator, "type", .{ .string = "text" });
-                try text_obj.put(allocator, "text", .{ .string = @errorName(err) });
-                try content_array.append(.{ .object = text_obj });
+            const tasks_enabled = self.capabilities.tasks != null and self.capabilities.tasks.?.requests != null and self.capabilities.tasks.?.requests.?.tools != null and self.capabilities.tasks.?.requests.?.tools.?.call != null;
+            const task_support = if (tool.execution) |exec| exec.taskSupport else null;
 
+            if (tasks_enabled and task_support != null and std.mem.eql(u8, task_support.?, "required") and task_meta == null) {
+                const error_response = jsonrpc.createMethodNotFound(request.id, "tools/call");
+                try self.sendResponse(io, allocator, .{ .error_response = error_response });
+                return;
+            }
+
+            if (tasks_enabled and task_meta != null) {
+                if (task_support == null or std.mem.eql(u8, task_support.?, "forbidden")) {
+                    const error_response = jsonrpc.createMethodNotFound(request.id, "tools/call");
+                    try self.sendResponse(io, allocator, .{ .error_response = error_response });
+                    return;
+                }
+
+                var status_message: ?[]const u8 = null;
+                const tool_result: tools_mod.ToolResult = tool.handler(tool.user_data, io, allocator, arguments) catch |err| blk: {
+                    const msg = try std.fmt.allocPrint(self.allocator, "{s}", .{@errorName(err)});
+                    status_message = msg;
+                    var content = try self.allocator.alloc(types.ContentBlock, 1);
+                    content[0] = .{ .text = .{ .text = msg } };
+                    break :blk tools_mod.ToolResult{ .content = content, .is_error = true };
+                };
+
+                const result_json = try self.serializeToolCallResult(tool_result);
+                const task_id = try generateTaskId(io, self.allocator);
+                const created_at = try nowIsoTimestamp(io, self.allocator);
+                const updated_at = try self.allocator.dupe(u8, created_at);
+
+                const task: types.Task = .{
+                    .taskId = task_id,
+                    .status = if (tool_result.is_error) .failed else .completed,
+                    .statusMessage = status_message,
+                    .createdAt = created_at,
+                    .lastUpdatedAt = updated_at,
+                    .ttl = if (task_meta) |meta| meta.ttl else null,
+                    .pollInterval = null,
+                };
+
+                try self.tasks.put(task_id, .{ .task = task, .result_json = result_json });
+
+                const task_obj = try buildTaskObject(allocator, task);
                 var result: std.json.ObjectMap = .empty;
-                try result.put(allocator, "content", .{ .array = content_array });
-                try result.put(allocator, "isError", .{ .bool = true });
+                try result.put(allocator, "task", .{ .object = task_obj });
 
                 const response = jsonrpc.createResponse(request.id, .{ .object = result });
                 try self.sendResponse(io, allocator, .{ .response = response });
                 return;
+            }
+
+            const tool_result = tool.handler(tool.user_data, io, allocator, arguments) catch |err| {
+                var content = try allocator.alloc(types.ContentBlock, 1);
+                content[0] = .{ .text = .{ .text = @errorName(err) } };
+                const result_value = try buildToolCallResultValue(allocator, .{ .content = content, .is_error = true });
+                const response = jsonrpc.createResponse(request.id, result_value);
+                try self.sendResponse(io, allocator, .{ .response = response });
+                return;
             };
 
-            var content_array: std.json.Array = .init(allocator);
-            for (tool_result.content) |content_item| {
-                var item_obj: std.json.ObjectMap = .empty;
-                switch (content_item) {
-                    .text => |text| {
-                        try item_obj.put(allocator, "type", .{ .string = "text" });
-                        try item_obj.put(allocator, "text", .{ .string = text.text });
-                    },
-                    .image => |img| {
-                        try item_obj.put(allocator, "type", .{ .string = "image" });
-                        try item_obj.put(allocator, "data", .{ .string = img.data });
-                        try item_obj.put(allocator, "mimeType", .{ .string = img.mimeType });
-                    },
-                    .audio => |aud| {
-                        try item_obj.put(allocator, "type", .{ .string = "audio" });
-                        try item_obj.put(allocator, "data", .{ .string = aud.data });
-                        try item_obj.put(allocator, "mimeType", .{ .string = aud.mimeType });
-                    },
-                    .resource_link => |link| {
-                        try item_obj.put(allocator, "type", .{ .string = "resource_link" });
-                        try item_obj.put(allocator, "uri", .{ .string = link.uri });
-                        try item_obj.put(allocator, "name", .{ .string = link.name });
-                        if (link.title) |t| try item_obj.put(allocator, "title", .{ .string = t });
-                        if (link.description) |d| try item_obj.put(allocator, "description", .{ .string = d });
-                        if (link.mimeType) |m| try item_obj.put(allocator, "mimeType", .{ .string = m });
-                    },
-                    .resource => |res| {
-                        try item_obj.put(allocator, "type", .{ .string = "resource" });
-                        var res_obj: std.json.ObjectMap = .empty;
-                        try res_obj.put(allocator, "uri", .{ .string = res.resource.uri });
-                        if (res.resource.text) |text| try res_obj.put(allocator, "text", .{ .string = text });
-                        if (res.resource.mimeType) |mime| try res_obj.put(allocator, "mimeType", .{ .string = mime });
-                        try item_obj.put(allocator, "resource", .{ .object = res_obj });
-                    },
-                }
-                try content_array.append(.{ .object = item_obj });
-            }
-
-            var result: std.json.ObjectMap = .empty;
-            try result.put(allocator, "content", .{ .array = content_array });
-            try result.put(allocator, "isError", .{ .bool = tool_result.is_error });
-            if (tool_result.structuredContent) |sc| {
-                try result.put(allocator, "structuredContent", sc);
-            }
-
-            const response = jsonrpc.createResponse(request.id, .{ .object = result });
+            const result_value = try buildToolCallResultValue(allocator, tool_result);
+            const response = jsonrpc.createResponse(request.id, result_value);
             try self.sendResponse(io, allocator, .{ .response = response });
         } else {
             const error_response = jsonrpc.createInvalidParams(request.id, "Tool not found");
@@ -750,8 +838,17 @@ pub const Server = struct {
             if (entry.value_ptr.mimeType) |mime| {
                 try resource_obj.put(allocator, "mimeType", .{ .string = mime });
             }
+            if (entry.value_ptr.icons) |icons| {
+                try putIcons(allocator, &resource_obj, icons);
+            }
+            if (entry.value_ptr.annotations) |ann| {
+                try putAnnotations(allocator, &resource_obj, ann);
+            }
             if (entry.value_ptr.size) |s| {
                 try resource_obj.put(allocator, "size", .{ .integer = @intCast(s) });
+            }
+            if (entry.value_ptr._meta) |meta| {
+                try resource_obj.put(allocator, "_meta", meta);
             }
             try resources_array.append(.{ .object = resource_obj });
         }
@@ -796,6 +893,9 @@ pub const Server = struct {
             if (content.mimeType) |mime| {
                 try content_obj.put(allocator, "mimeType", .{ .string = mime });
             }
+            if (content._meta) |meta| {
+                try content_obj.put(allocator, "_meta", meta);
+            }
             try contents_array.append(.{ .object = content_obj });
 
             var result: std.json.ObjectMap = .empty;
@@ -826,6 +926,15 @@ pub const Server = struct {
             }
             if (entry.value_ptr.mimeType) |mime| {
                 try template_obj.put(allocator, "mimeType", .{ .string = mime });
+            }
+            if (entry.value_ptr.icons) |icons| {
+                try putIcons(allocator, &template_obj, icons);
+            }
+            if (entry.value_ptr.annotations) |ann| {
+                try putAnnotations(allocator, &template_obj, ann);
+            }
+            if (entry.value_ptr._meta) |meta| {
+                try template_obj.put(allocator, "_meta", meta);
             }
             try templates_array.append(.{ .object = template_obj });
         }
@@ -869,6 +978,9 @@ pub const Server = struct {
             if (entry.value_ptr.title) |t| {
                 try prompt_obj.put(allocator, "title", .{ .string = t });
             }
+            if (entry.value_ptr.icons) |icons| {
+                try putIcons(allocator, &prompt_obj, icons);
+            }
 
             if (entry.value_ptr.arguments) |args| {
                 var args_array: std.json.Array = .init(allocator);
@@ -885,6 +997,10 @@ pub const Server = struct {
                     try args_array.append(.{ .object = arg_obj });
                 }
                 try prompt_obj.put(allocator, "arguments", .{ .array = args_array });
+            }
+
+            if (entry.value_ptr._meta) |meta| {
+                try prompt_obj.put(allocator, "_meta", meta);
             }
 
             try prompts_array.append(.{ .object = prompt_obj });
@@ -1021,22 +1137,88 @@ pub const Server = struct {
 
     /// Handle tasks/get request
     fn handleTasksGet(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        _ = request.params;
-        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/get");
-        try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        var task_id: ?[]const u8 = null;
+        if (request.params) |params| {
+            if (params == .object) {
+                if (params.object.get("taskId")) |id_val| {
+                    if (id_val == .string) {
+                        task_id = id_val.string;
+                    }
+                }
+            }
+        }
+
+        const id = task_id orelse {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Missing taskId");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+            return;
+        };
+
+        if (self.tasks.get(id)) |entry| {
+            const task_obj = try buildTaskObject(allocator, entry.task);
+            const response = jsonrpc.createResponse(request.id, .{ .object = task_obj });
+            try self.sendResponse(io, allocator, .{ .response = response });
+        } else {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Task not found");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        }
     }
 
     /// Handle tasks/result request
     fn handleTasksResult(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        _ = request.params;
-        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/result");
-        try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        var task_id: ?[]const u8 = null;
+        if (request.params) |params| {
+            if (params == .object) {
+                if (params.object.get("taskId")) |id_val| {
+                    if (id_val == .string) {
+                        task_id = id_val.string;
+                    }
+                }
+            }
+        }
+
+        const id = task_id orelse {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Missing taskId");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+            return;
+        };
+
+        if (self.tasks.get(id)) |entry| {
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, entry.result_json, .{});
+            defer parsed.deinit();
+
+            if (parsed.value == .object) {
+                var result_obj = parsed.value.object;
+                if (result_obj.get("_meta") == null) {
+                    var meta_obj: std.json.ObjectMap = .empty;
+                    var related_obj: std.json.ObjectMap = .empty;
+                    try related_obj.put(allocator, "taskId", .{ .string = entry.task.taskId });
+                    try meta_obj.put(allocator, "io.modelcontextprotocol/related-task", .{ .object = related_obj });
+                    try result_obj.put(allocator, "_meta", .{ .object = meta_obj });
+                }
+                const response = jsonrpc.createResponse(request.id, .{ .object = result_obj });
+                try self.sendResponse(io, allocator, .{ .response = response });
+                return;
+            }
+
+            const error_response = jsonrpc.createInternalError(request.id, .{ .string = "Invalid task result" });
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        } else {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Task not found");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        }
     }
 
     /// Handle tasks/list request
     fn handleTasksList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var result: std.json.ObjectMap = .empty;
-        const tasks_array: std.json.Array = .init(allocator);
+        var tasks_array: std.json.Array = .init(allocator);
+
+        var iter = self.tasks.iterator();
+        while (iter.next()) |entry| {
+            const task_obj = try buildTaskObject(allocator, entry.value_ptr.task);
+            try tasks_array.append(.{ .object = task_obj });
+        }
         try result.put(allocator, "tasks", .{ .array = tasks_array });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
@@ -1045,9 +1227,42 @@ pub const Server = struct {
 
     /// Handle tasks/cancel request
     fn handleTasksCancel(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        _ = request.params;
-        const error_response = jsonrpc.createMethodNotFound(request.id, "tasks/cancel");
-        try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        var task_id: ?[]const u8 = null;
+        if (request.params) |params| {
+            if (params == .object) {
+                if (params.object.get("taskId")) |id_val| {
+                    if (id_val == .string) {
+                        task_id = id_val.string;
+                    }
+                }
+            }
+        }
+
+        const id = task_id orelse {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Missing taskId");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+            return;
+        };
+
+        if (self.tasks.getPtr(id)) |entry| {
+            if (entry.task.status == .completed or entry.task.status == .failed or entry.task.status == .cancelled) {
+                const error_response = jsonrpc.createInvalidParams(request.id, "Task already in terminal status");
+                try self.sendResponse(io, allocator, .{ .error_response = error_response });
+                return;
+            }
+
+            entry.task.status = .cancelled;
+            const updated = try nowIsoTimestamp(io, self.allocator);
+            self.allocator.free(entry.task.lastUpdatedAt);
+            entry.task.lastUpdatedAt = updated;
+
+            const task_obj = try buildTaskObject(allocator, entry.task);
+            const response = jsonrpc.createResponse(request.id, .{ .object = task_obj });
+            try self.sendResponse(io, allocator, .{ .response = response });
+        } else {
+            const error_response = jsonrpc.createInvalidParams(request.id, "Task not found");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+        }
     }
 
     /// Handle incoming notifications
@@ -1155,6 +1370,178 @@ pub const Server = struct {
                 return;
             };
         }
+    }
+
+    fn deinitTasks(self: *Self) void {
+        var iter = self.tasks.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.task.taskId);
+            self.allocator.free(entry.value_ptr.task.createdAt);
+            self.allocator.free(entry.value_ptr.task.lastUpdatedAt);
+            if (entry.value_ptr.task.statusMessage) |msg| {
+                self.allocator.free(msg);
+            }
+            self.allocator.free(entry.value_ptr.result_json);
+        }
+        self.tasks.deinit();
+    }
+
+    fn nowIsoTimestamp(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+        const now_ts = std.Io.Clock.real.now(io);
+        const now_secs: i64 = now_ts.toSeconds();
+        const secs: u64 = if (now_secs < 0) 0 else @intCast(now_secs);
+        const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = secs };
+        const epoch_day = epoch_seconds.getEpochDay();
+        const year_day = epoch_day.calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+        const day_seconds = epoch_seconds.getDaySeconds();
+
+        const year: u16 = year_day.year;
+        const month: u4 = month_day.month.numeric();
+        const day: u5 = month_day.day_index + 1;
+        const hour: u5 = day_seconds.getHoursIntoDay();
+        const minute: u6 = day_seconds.getMinutesIntoHour();
+        const second: u6 = day_seconds.getSecondsIntoMinute();
+
+        return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        });
+    }
+
+    fn generateTaskId(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+        var bytes: [16]u8 = undefined;
+        io.randomSecure(&bytes) catch io.random(&bytes);
+
+        var hex_buf: [32]u8 = undefined;
+        var i: usize = 0;
+        while (i < bytes.len) : (i += 1) {
+            _ = std.fmt.bufPrint(hex_buf[i * 2 .. i * 2 + 2], "{x:0>2}", .{bytes[i]}) catch unreachable;
+        }
+        return allocator.dupe(u8, &hex_buf);
+    }
+
+    fn buildToolCallResultValue(allocator: std.mem.Allocator, tool_result: tools_mod.ToolResult) !std.json.Value {
+        var content_array: std.json.Array = .init(allocator);
+        for (tool_result.content) |content_item| {
+            var item_obj: std.json.ObjectMap = .empty;
+            switch (content_item) {
+                .text => |text| {
+                    try item_obj.put(allocator, "type", .{ .string = "text" });
+                    try item_obj.put(allocator, "text", .{ .string = text.text });
+                },
+                .image => |img| {
+                    try item_obj.put(allocator, "type", .{ .string = "image" });
+                    try item_obj.put(allocator, "data", .{ .string = img.data });
+                    try item_obj.put(allocator, "mimeType", .{ .string = img.mimeType });
+                },
+                .audio => |aud| {
+                    try item_obj.put(allocator, "type", .{ .string = "audio" });
+                    try item_obj.put(allocator, "data", .{ .string = aud.data });
+                    try item_obj.put(allocator, "mimeType", .{ .string = aud.mimeType });
+                },
+                .resource_link => |link| {
+                    try item_obj.put(allocator, "type", .{ .string = "resource_link" });
+                    try item_obj.put(allocator, "uri", .{ .string = link.uri });
+                    try item_obj.put(allocator, "name", .{ .string = link.name });
+                    if (link.title) |t| try item_obj.put(allocator, "title", .{ .string = t });
+                    if (link.description) |d| try item_obj.put(allocator, "description", .{ .string = d });
+                    if (link.mimeType) |m| try item_obj.put(allocator, "mimeType", .{ .string = m });
+                },
+                .resource => |res| {
+                    try item_obj.put(allocator, "type", .{ .string = "resource" });
+                    var res_obj: std.json.ObjectMap = .empty;
+                    try res_obj.put(allocator, "uri", .{ .string = res.resource.uri });
+                    if (res.resource.text) |text| try res_obj.put(allocator, "text", .{ .string = text });
+                    if (res.resource.mimeType) |mime| try res_obj.put(allocator, "mimeType", .{ .string = mime });
+                    try item_obj.put(allocator, "resource", .{ .object = res_obj });
+                },
+            }
+            try content_array.append(.{ .object = item_obj });
+        }
+
+        var result: std.json.ObjectMap = .empty;
+        try result.put(allocator, "content", .{ .array = content_array });
+        try result.put(allocator, "isError", .{ .bool = tool_result.is_error });
+        if (tool_result.structuredContent) |sc| {
+            try result.put(allocator, "structuredContent", sc);
+        }
+        return .{ .object = result };
+    }
+
+    fn serializeToolCallResult(self: *Self, tool_result: tools_mod.ToolResult) ![]const u8 {
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena.deinit();
+
+        const result_value = try buildToolCallResultValue(arena.allocator(), tool_result);
+        var buffer: std.ArrayList(u8) = .empty;
+        defer buffer.deinit(self.allocator);
+
+        try jsonrpc.serializeValue(self.allocator, &buffer, result_value);
+        return buffer.toOwnedSlice(self.allocator);
+    }
+
+    fn buildTaskObject(allocator: std.mem.Allocator, task: types.Task) !std.json.ObjectMap {
+        var task_obj: std.json.ObjectMap = .empty;
+        try task_obj.put(allocator, "taskId", .{ .string = task.taskId });
+        try task_obj.put(allocator, "status", .{ .string = task.status.toString() });
+        if (task.statusMessage) |msg| {
+            try task_obj.put(allocator, "statusMessage", .{ .string = msg });
+        }
+        try task_obj.put(allocator, "createdAt", .{ .string = task.createdAt });
+        try task_obj.put(allocator, "lastUpdatedAt", .{ .string = task.lastUpdatedAt });
+        if (task.ttl) |ttl| {
+            try task_obj.put(allocator, "ttl", .{ .integer = ttl });
+        }
+        if (task.pollInterval) |interval| {
+            try task_obj.put(allocator, "pollInterval", .{ .integer = interval });
+        }
+        return task_obj;
+    }
+
+    fn putIcons(allocator: std.mem.Allocator, obj: *std.json.ObjectMap, icons: []const types.Icon) !void {
+        var icons_array: std.json.Array = .init(allocator);
+        for (icons) |icon| {
+            var icon_obj: std.json.ObjectMap = .empty;
+            try icon_obj.put(allocator, "src", .{ .string = icon.src });
+            if (icon.mimeType) |mime| {
+                try icon_obj.put(allocator, "mimeType", .{ .string = mime });
+            }
+            if (icon.sizes) |sizes| {
+                var sizes_array: std.json.Array = .init(allocator);
+                for (sizes) |size| {
+                    try sizes_array.append(.{ .string = size });
+                }
+                try icon_obj.put(allocator, "sizes", .{ .array = sizes_array });
+            }
+            if (icon.theme) |theme| {
+                try icon_obj.put(allocator, "theme", .{ .string = @tagName(theme) });
+            }
+            try icons_array.append(.{ .object = icon_obj });
+        }
+        try obj.put(allocator, "icons", .{ .array = icons_array });
+    }
+
+    fn putAnnotations(allocator: std.mem.Allocator, obj: *std.json.ObjectMap, annotations: types.Annotations) !void {
+        var ann_obj: std.json.ObjectMap = .empty;
+        if (annotations.audience) |aud| {
+            var aud_array: std.json.Array = .init(allocator);
+            for (aud) |role| {
+                try aud_array.append(.{ .string = role.toString() });
+            }
+            try ann_obj.put(allocator, "audience", .{ .array = aud_array });
+        }
+        if (annotations.priority) |priority| {
+            try ann_obj.put(allocator, "priority", .{ .float = priority });
+        }
+        if (annotations.lastModified) |last_modified| {
+            try ann_obj.put(allocator, "lastModified", .{ .string = last_modified });
+        }
+        try obj.put(allocator, "annotations", .{ .object = ann_obj });
     }
 
     fn log(self: *Self, io: std.Io, message: []const u8) void {

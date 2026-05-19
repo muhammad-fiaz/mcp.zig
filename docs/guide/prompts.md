@@ -91,25 +91,19 @@ mcp.prompts.userMessage("Analyze this text for me")
 mcp.prompts.assistantMessage("I'll analyze the text...")
 ```
 
-### Custom Role
-
-```zig
-.{
-    .role = "system",
-    .content = .{ .text = .{ .text = "You are a helpful assistant." } },
-}
-```
+Only `user` and `assistant` roles are supported by `mcp.types.Role`.
 
 ## Using PromptBuilder
 
 ```zig
-var builder = mcp.prompts.PromptBuilder.init(allocator, "my_prompt");
-defer builder.deinit();
+var builder = mcp.prompts.PromptBuilder.init("my_prompt");
+defer builder.deinit(allocator);
+
+_ = try builder.addArgument(allocator, "input", "The input text", true);
+_ = try builder.addArgument(allocator, "style", "Output style", false);
 
 const prompt = builder
     .description("A helpful prompt")
-    .addArgument("input", "The input text", true)
-    .addArgument("style", "Output style", false)
     .handler(myHandler)
     .build();
 
@@ -210,7 +204,7 @@ fn generateCodeHandler(
     );
 
     return &.{
-        .{ .role = "system", .content = .{ .text = .{ .text = system } } },
+        mcp.prompts.userMessage(system),
         mcp.prompts.userMessage(user),
     };
 }

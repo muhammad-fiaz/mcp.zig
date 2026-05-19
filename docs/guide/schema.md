@@ -11,7 +11,7 @@ JSON Schema defines the structure of tool arguments, ensuring valid inputs.
 ### Creating a Schema
 
 ```zig
-var builder = mcp.schema.SchemaBuilder.init(allocator);
+var builder = mcp.schema.SchemaBuilder.init();
 
 const schema = builder
     .string_()
@@ -36,19 +36,20 @@ Build complete input schemas for tools:
 
 ```zig
 var schema = mcp.schema.InputSchemaBuilder.init(allocator);
-defer schema.deinit();
+defer schema.deinit(allocator);
 
 // Add string property (required)
-_ = try schema.addString("name", "User's name", true);
+_ = try schema.addString(allocator, "name", "User's name", true);
 
 // Add number property (optional)
-_ = try schema.addNumber("age", "User's age", false);
+_ = try schema.addNumber(allocator, "age", "User's age", false);
 
 // Add boolean property
-_ = try schema.addBoolean("active", "Is user active", false);
+_ = try schema.addBoolean(allocator, "active", "Is user active", false);
 
 // Add enum property
 _ = try schema.addEnum(
+    allocator,
     "role",
     "User's role",
     &.{ "admin", "user", "guest" },
@@ -56,7 +57,7 @@ _ = try schema.addEnum(
 );
 
 // Build the schema
-const inputSchema = try schema.build();
+const inputSchema = try schema.toInputSchema(allocator);
 ```
 
 ### Using with Tools
@@ -66,7 +67,7 @@ try server.addTool(.{
     .name = "create_user",
     .description = "Create a new user",
     .handler = createUserHandler,
-    .inputSchema = try schema.build(),
+    .inputSchema = try schema.toInputSchema(allocator),
 });
 ```
 
@@ -77,8 +78,6 @@ try server.addTool(.{
 ```zig
 builder
     .string_()
-    .minLength(1)
-    .maxLength(100)
     .pattern("^[a-zA-Z]+$")
     .format("email")
 ```
@@ -90,6 +89,16 @@ builder
     .number_()
     .minimum(0)
     .maximum(100)
+```
+
+### InputSchemaBuilder Constraints
+
+```zig
+// For string length constraints on tool arguments:
+_ = schema.setPropertyLength("name", 1, 100);
+
+// For numeric ranges on tool arguments:
+_ = schema.setPropertyRange("age", 18, 120);
 ```
 
 ### Common Formats
@@ -141,12 +150,14 @@ pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
 
     // Build input schema
     var schema = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer schema.deinit(allocator);
 
-    _ = try schema.addString("username", "Unique username", true);
-    _ = try schema.addString("email", "Email address", true);
-    _ = try schema.addInteger("age", "User's age (must be 18+)", false);
-    _ = try schema.addBoolean("newsletter", "Subscribe to newsletter", false);
+    _ = try schema.addString(allocator, "username", "Unique username", true);
+    _ = try schema.addString(allocator, "email", "Email address", true);
+    _ = try schema.addInteger(allocator, "age", "User's age (must be 18+)", false);
+    _ = try schema.addBoolean(allocator, "newsletter", "Subscribe to newsletter", false);
     _ = try schema.addEnum(
+        allocator,
         "plan",
         "Subscription plan",
         &.{ "free", "basic", "pro" },
@@ -157,7 +168,7 @@ pub fn setupServer(allocator: std.mem.Allocator) !mcp.Server {
         .name = "register_user",
         .description = "Register a new user account",
         .handler = registerHandler,
-        .inputSchema = try schema.build(),
+        .inputSchema = try schema.toInputSchema(allocator),
     });
 
     return server;

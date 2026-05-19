@@ -25,8 +25,6 @@ defer client.deinit(allocator);
 
 ### STDIO Transport
 
-### STDIO Transport
-
 ```zig
 try client.connectStdio(io, allocator, "path/to/server", &.{});
 ```
@@ -60,10 +58,7 @@ client.enableSampling();
 ### List Available Tools
 
 ```zig
-const tools = try client.listTools(io, allocator);
-for (tools) |tool| {
-    std.debug.print("Tool: {s}\n", .{tool.name});
-}
+try client.listTools(io, allocator);
 ```
 
 ### Call a Tool
@@ -72,13 +67,7 @@ for (tools) |tool| {
 var args: std.json.ObjectMap = .empty;
 try args.put(allocator, "name", .{ .string = "World" });
 
-const result = try client.callTool(io, allocator, "greet", .{ .object = args });
-
-for (result.content) |content| {
-    if (content == .text) {
-        std.debug.print("{s}\n", .{content.text.text});
-    }
-}
+try client.callTool(io, allocator, "greet", .{ .object = args });
 ```
 
 ## Using Resources
@@ -86,19 +75,13 @@ for (result.content) |content| {
 ### List Resources
 
 ```zig
-const resources = try client.listResources(io, allocator);
-for (resources) |resource| {
-    std.debug.print("Resource: {s}\n", .{resource.uri});
-}
+try client.listResources(io, allocator);
 ```
 
 ### Read a Resource
 
 ```zig
-const contents = try client.readResource(io, allocator, "file:///data.json");
-for (contents) |content| {
-    std.debug.print("Content: {s}\n", .{content.text.text});
-}
+try client.readResource(io, allocator, "file:///data.json");
 ```
 
 ## Using Prompts
@@ -106,10 +89,7 @@ for (contents) |content| {
 ### List Prompts
 
 ```zig
-const prompts = try client.listPrompts(io, allocator);
-for (prompts) |prompt| {
-    std.debug.print("Prompt: {s}\n", .{prompt.name});
-}
+try client.listPrompts(io, allocator);
 ```
 
 ### Get a Prompt
@@ -118,13 +98,32 @@ for (prompts) |prompt| {
 var args: std.json.ObjectMap = .empty;
 try args.put(allocator, "topic", .{ .string = "Zig programming" });
 
-const result = try client.getPrompt(io, allocator, "summarize", .{ .object = args });
+try client.getPrompt(io, allocator, "summarize", .{ .object = args });
+```
 
-for (result.messages) |message| {
-    std.debug.print("[{s}]: {s}\n", .{
-        message.role,
-        message.content.text.text,
-    });
+## Handling Responses
+
+All request APIs send JSON-RPC messages and return `!void`. To read responses,
+use the underlying transport and parse the incoming messages:
+
+```zig
+try client.listTools(io, allocator);
+
+if (client.transport) |t| {
+    if (try t.receive(io, allocator)) |json| {
+        const parsed = try mcp.jsonrpc.parseMessage(allocator, json);
+        defer parsed.deinit();
+
+        switch (parsed.message) {
+            .response => |resp| {
+                std.debug.print("Response: {any}\n", .{resp.result});
+            },
+            .error_response => |err| {
+                std.debug.print("Error: {s}\n", .{err.@"error".message});
+            },
+            else => {},
+        }
+    }
 }
 ```
 

@@ -4,13 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Library module for external projects.
-    // Allows: const mcp = @import("mcp"); after adding as dependency.
+    // -------------------------------------------------------------------------
+    // Library module (public — for downstream projects)
+    // -------------------------------------------------------------------------
     _ = b.addModule("mcp", .{
         .root_source_file = b.path("src/mcp.zig"),
     });
 
-    // Static library (for release artifacts)
+    // Static library artifact
     const lib = b.addLibrary(.{
         .name = "mcp",
         .linkage = .static,
@@ -22,103 +23,66 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    // Internal module with target/optimize for building examples and tests.
+    // Internal module used by examples and tests
     const mcp_module = b.createModule(.{
         .root_source_file = b.path("src/mcp.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    // -------------------------------------------------------------------------
     // Unit tests
+    // -------------------------------------------------------------------------
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/mcp.zig"),
         .target = target,
         .optimize = optimize,
     });
+    const unit_tests = b.addTest(.{ .root_module = test_mod });
 
-    const unit_tests = b.addTest(.{
-        .root_module = test_mod,
-    });
-
-    const compile_unit_tests = b.step("test-compile", "Compile unit tests without running");
-    compile_unit_tests.dependOn(&unit_tests.step);
+    const test_compile_step = b.step("test-compile", "Compile unit tests without running");
+    test_compile_step.dependOn(&unit_tests.step);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    // Example: Simple Server
-    const server_mod = b.createModule(.{
-        .root_source_file = b.path("examples/simple_server.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    server_mod.addImport("mcp", mcp_module);
+    // -------------------------------------------------------------------------
+    // Helper: add a named example executable
+    // -------------------------------------------------------------------------
+    const all_step = b.step("run-all-examples", "Build all examples");
 
-    const server_example = b.addExecutable(.{
-        .name = "example-server",
-        .root_module = server_mod,
-    });
-    b.installArtifact(server_example);
+    const Example = struct { name: []const u8, src: []const u8, run_step: []const u8, desc: []const u8 };
+    const examples = [_]Example{
+        .{ .name = "example-server", .src = "examples/simple_server.zig", .run_step = "run-server", .desc = "Run the simple server example" },
+        .{ .name = "example-client", .src = "examples/simple_client.zig", .run_step = "run-client", .desc = "Run the simple client example" },
+        .{ .name = "weather-server", .src = "examples/weather_server.zig", .run_step = "run-weather", .desc = "Run the weather server example" },
+        .{ .name = "calculator-server", .src = "examples/calculator_server.zig", .run_step = "run-calc", .desc = "Run the calculator server example" },
+        .{ .name = "advanced-server", .src = "examples/advanced_server.zig", .run_step = "run-advanced", .desc = "Run the advanced server example" },
+        .{ .name = "filesystem-server", .src = "examples/filesystem_server.zig", .run_step = "run-filesystem", .desc = "Run the filesystem server example" },
+        .{ .name = "notes-server", .src = "examples/notes_server.zig", .run_step = "run-notes", .desc = "Run the notes server example" },
+        .{ .name = "http-server", .src = "examples/http_server.zig", .run_step = "run-http", .desc = "Run the HTTP server example" },
+    };
 
-    const run_server = b.addRunArtifact(server_example);
-    const server_step = b.step("run-server", "Run the example server");
-    server_step.dependOn(&run_server.step);
+    inline for (examples) |ex| {
+        const mod = b.createModule(.{
+            .root_source_file = b.path(ex.src),
+            .target = target,
+            .optimize = optimize,
+        });
+        mod.addImport("mcp", mcp_module);
 
-    // Example: Simple Client
-    const client_mod = b.createModule(.{
-        .root_source_file = b.path("examples/simple_client.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    client_mod.addImport("mcp", mcp_module);
+        const exe = b.addExecutable(.{
+            .name = ex.name,
+            .root_module = mod,
+        });
+        b.installArtifact(exe);
 
-    const client_example = b.addExecutable(.{
-        .name = "example-client",
-        .root_module = client_mod,
-    });
-    b.installArtifact(client_example);
+        const run_artifact = b.addRunArtifact(exe);
+        if (b.args) |args| run_artifact.addArgs(args);
 
-    const run_client = b.addRunArtifact(client_example);
-    if (b.args) |args| {
-        run_client.addArgs(args);
+        const run_step = b.step(ex.run_step, ex.desc);
+        run_step.dependOn(&run_artifact.step);
+        all_step.dependOn(&exe.step);
     }
-    const client_step = b.step("run-client", "Run the example client");
-    client_step.dependOn(&run_client.step);
-
-    // Example: Weather Server
-    const weather_mod = b.createModule(.{
-        .root_source_file = b.path("examples/weather_server.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    weather_mod.addImport("mcp", mcp_module);
-
-    const weather_example = b.addExecutable(.{
-        .name = "weather-server",
-        .root_module = weather_mod,
-    });
-    b.installArtifact(weather_example);
-
-    const run_weather = b.addRunArtifact(weather_example);
-    const weather_step = b.step("run-weather", "Run the weather server example");
-    weather_step.dependOn(&run_weather.step);
-
-    // Example: Calculator Tool Server
-    const calc_mod = b.createModule(.{
-        .root_source_file = b.path("examples/calculator_server.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    calc_mod.addImport("mcp", mcp_module);
-
-    const calc_example = b.addExecutable(.{
-        .name = "calculator-server",
-        .root_module = calc_mod,
-    });
-    b.installArtifact(calc_example);
-
-    const run_calc = b.addRunArtifact(calc_example);
-    const calc_step = b.step("run-calc", "Run the calculator server example");
-    calc_step.dependOn(&run_calc.step);
 }

@@ -49,14 +49,16 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
     defer client.deinit(allocator);
 
     // Enable capabilities
-    client.enableSampling();
+    client.enableSamplingAdvanced(true, true);
     client.enableElicitation();
-    client.enableTasks();
+    client.enableTasksAdvanced(true, true);
     client.enableRoots(true);
 
     // Add some roots
-    try client.addRoot(allocator, "file:///home/user/documents", "Documents");
-    try client.addRoot(allocator, "file:///home/user/projects", "Projects");
+    const docs_root = mcp.roots.fileRoot("file:///home/user/documents", "Documents");
+    const projects_root = mcp.roots.fileRoot("file:///home/user/projects", "Projects");
+    try client.addRoot(allocator, docs_root.uri, docs_root.name);
+    try client.addRoot(allocator, projects_root.uri, projects_root.name);
 
     std.debug.print("MCP Client initialized\n", .{});
     std.debug.print("Client: {s} v{s}\n", .{ client.config.name, client.config.version });
@@ -76,9 +78,9 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
 ## Client-Side API Explained
 
 1. Client.init creates a client identity used during MCP initialize.
-2. enableSampling enables model sampling capability negotiation.
+2. enableSamplingAdvanced enables sampling with context and tool use support.
 3. enableElicitation enables user-input elicitation capability.
-4. enableTasks enables task-related MCP methods.
+4. enableTasksAdvanced enables task-related MCP methods (including request augmentation).
 5. enableRoots(true) enables roots capability and listChanged notification handling.
 6. addRoot registers filesystem roots that the server may request.
 

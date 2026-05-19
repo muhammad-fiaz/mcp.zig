@@ -39,7 +39,7 @@ export default defineConfig({
         target: '_blank'
       },
       {
-        text: 'v0.0.4',
+        text: 'v0.0.5',
         items: [
           { text: 'Contributing', link: '/contributing' },
           { text: 'GitHub Releases', link: 'https://github.com/muhammad-fiaz/mcp.zig/releases' }
@@ -116,7 +116,11 @@ export default defineConfig({
             { text: 'Simple Server', link: '/examples/simple-server' },
             { text: 'Simple Client', link: '/examples/simple-client' },
             { text: 'Weather Server', link: '/examples/weather-server' },
-            { text: 'Calculator Server', link: '/examples/calculator-server' }
+            { text: 'Calculator Server', link: '/examples/calculator-server' },
+            { text: 'Advanced Server', link: '/examples/advanced-server' },
+            { text: 'Filesystem Server', link: '/examples/filesystem-server' },
+            { text: 'Notes Server', link: '/examples/notes-server' },
+            { text: 'HTTP Server', link: '/examples/http-server' }
           ]
         }
       ]

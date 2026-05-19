@@ -92,6 +92,30 @@ pub const ToolBuilder = struct {
         return self;
     }
 
+    /// Sets the input schema for the tool.
+    pub fn inputSchema(self: *Self, schema_value: types.InputSchema) *Self {
+        self.tool.inputSchema = schema_value;
+        return self;
+    }
+
+    /// Sets the output schema for the tool.
+    pub fn outputSchema(self: *Self, schema_value: types.OutputSchema) *Self {
+        self.tool.outputSchema = schema_value;
+        return self;
+    }
+
+    /// Sets icon metadata for the tool.
+    pub fn icons(self: *Self, icons_value: []const types.Icon) *Self {
+        self.tool.icons = icons_value;
+        return self;
+    }
+
+    /// Sets annotations metadata for the tool.
+    pub fn annotations(self: *Self, annotations_value: ToolAnnotations) *Self {
+        self.tool.annotations = annotations_value;
+        return self;
+    }
+
     /// Marks the tool as potentially destructive.
     pub fn destructive(self: *Self) *Self {
         if (self.tool.annotations == null) {

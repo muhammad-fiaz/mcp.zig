@@ -36,34 +36,11 @@ fn resourceHandler(
 
 ### Example Handler
 
-```zig
 fn readmeHandler(
     _: ?*anyopaque,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    uri: []const u8,
-) mcp.resources.ResourceError!mcp.resources.ResourceContent {
-    _ = uri;
 
-    const content = try std.Io.Dir.cwd().readFileAlloc(
-        io,
-        "README.md",
-        allocator,
-        .limited(1024 * 1024),
-    );
-
-    return .{
-        .uri = "file:///README.md",
-        .mimeType = "text/markdown",
-        .text = content,
-    };
-}
-```
-
-## Resource Content Types
-
-### Text Content
-
+Resource templates are metadata only. Your resource handler must still handle
+the concrete `uri` values that match the template.
 ```zig
 return .{
     .uri = uri,

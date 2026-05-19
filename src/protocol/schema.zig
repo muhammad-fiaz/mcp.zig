@@ -216,6 +216,7 @@ pub const CommonSchemas = struct {
 pub const InputSchemaBuilder = struct {
     properties: std.StringHashMap(Property),
     required_fields: std.ArrayList([]const u8),
+    schema_dialect: ?[]const u8 = null,
 
     pub const Property = struct {
         type: []const u8,
@@ -224,6 +225,8 @@ pub const InputSchemaBuilder = struct {
         default: ?std.json.Value = null,
         minimum: ?f64 = null,
         maximum: ?f64 = null,
+        minLength: ?u64 = null,
+        maxLength: ?u64 = null,
         format: ?[]const u8 = null,
     };
 
@@ -233,6 +236,12 @@ pub const InputSchemaBuilder = struct {
             .properties = .init(allocator),
             .required_fields = .empty,
         };
+    }
+
+    /// Sets the JSON Schema dialect for the root schema.
+    pub fn setSchemaDialect(self: *InputSchemaBuilder, dialect: []const u8) *InputSchemaBuilder {
+        self.schema_dialect = dialect;
+        return self;
     }
 
     /// Releases resources held by the builder.
@@ -302,6 +311,101 @@ pub const InputSchemaBuilder = struct {
         return self;
     }
 
+    /// Adds a string property with a default value.
+    pub fn addStringWithDefault(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, default_value: []const u8, required: bool) !*InputSchemaBuilder {
+        try self.properties.put(name, .{
+            .type = "string",
+            .description = desc,
+            .default = .{ .string = default_value },
+        });
+        if (required) {
+            try self.required_fields.append(allocator, name);
+        }
+        return self;
+    }
+
+    /// Adds a number property with a default value.
+    pub fn addNumberWithDefault(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, default_value: f64, required: bool) !*InputSchemaBuilder {
+        try self.properties.put(name, .{
+            .type = "number",
+            .description = desc,
+            .default = .{ .float = default_value },
+        });
+        if (required) {
+            try self.required_fields.append(allocator, name);
+        }
+        return self;
+    }
+
+    /// Adds an integer property with a default value.
+    pub fn addIntegerWithDefault(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, default_value: i64, required: bool) !*InputSchemaBuilder {
+        try self.properties.put(name, .{
+            .type = "integer",
+            .description = desc,
+            .default = .{ .integer = default_value },
+        });
+        if (required) {
+            try self.required_fields.append(allocator, name);
+        }
+        return self;
+    }
+
+    /// Adds a boolean property with a default value.
+    pub fn addBooleanWithDefault(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, default_value: bool, required: bool) !*InputSchemaBuilder {
+        try self.properties.put(name, .{
+            .type = "boolean",
+            .description = desc,
+            .default = .{ .bool = default_value },
+        });
+        if (required) {
+            try self.required_fields.append(allocator, name);
+        }
+        return self;
+    }
+
+    /// Adds an enum property with a default value.
+    pub fn addEnumWithDefault(self: *InputSchemaBuilder, allocator: std.mem.Allocator, name: []const u8, desc: ?[]const u8, values: []const []const u8, default_value: []const u8, required: bool) !*InputSchemaBuilder {
+        try self.properties.put(name, .{
+            .type = "string",
+            .description = desc,
+            .@"enum" = values,
+            .default = .{ .string = default_value },
+        });
+        if (required) {
+            try self.required_fields.append(allocator, name);
+        }
+        return self;
+    }
+
+    /// Sets the string format for an existing property.
+    pub fn setPropertyFormat(self: *InputSchemaBuilder, name: []const u8, fmt: []const u8) bool {
+        if (self.properties.getPtr(name)) |prop| {
+            prop.format = fmt;
+            return true;
+        }
+        return false;
+    }
+
+    /// Sets the numeric bounds for an existing property.
+    pub fn setPropertyRange(self: *InputSchemaBuilder, name: []const u8, minimum: ?f64, maximum: ?f64) bool {
+        if (self.properties.getPtr(name)) |prop| {
+            prop.minimum = minimum;
+            prop.maximum = maximum;
+            return true;
+        }
+        return false;
+    }
+
+    /// Sets string length bounds for an existing property.
+    pub fn setPropertyLength(self: *InputSchemaBuilder, name: []const u8, min_len: ?u64, max_len: ?u64) bool {
+        if (self.properties.getPtr(name)) |prop| {
+            prop.minLength = min_len;
+            prop.maxLength = max_len;
+            return true;
+        }
+        return false;
+    }
+
     /// Builds the final input schema as an 'InputSchema'.
     pub fn toInputSchema(self: *InputSchemaBuilder, allocator: std.mem.Allocator) !types.InputSchema {
         const props = try self.buildProperties(allocator);
@@ -312,6 +416,7 @@ pub const InputSchemaBuilder = struct {
             try allocator.dupe([]const u8, self.required_fields.items);
 
         return .{
+            .@"$schema" = self.schema_dialect,
             .type = "object",
             .properties = if (props.count() == 0) null else .{ .object = props },
             .required = req,
@@ -329,6 +434,31 @@ pub const InputSchemaBuilder = struct {
             if (entry.value_ptr.description) |desc| {
                 try prop_obj.put(allocator, "description", .{ .string = desc });
             }
+            if (entry.value_ptr.@"enum") |values| {
+                var enum_arr: std.json.Array = .init(allocator);
+                for (values) |value| {
+                    try enum_arr.append(.{ .string = value });
+                }
+                try prop_obj.put(allocator, "enum", .{ .array = enum_arr });
+            }
+            if (entry.value_ptr.default) |def| {
+                try prop_obj.put(allocator, "default", def);
+            }
+            if (entry.value_ptr.minimum) |min| {
+                try prop_obj.put(allocator, "minimum", .{ .float = min });
+            }
+            if (entry.value_ptr.maximum) |max| {
+                try prop_obj.put(allocator, "maximum", .{ .float = max });
+            }
+            if (entry.value_ptr.minLength) |min_len| {
+                try prop_obj.put(allocator, "minLength", .{ .integer = @intCast(min_len) });
+            }
+            if (entry.value_ptr.maxLength) |max_len| {
+                try prop_obj.put(allocator, "maxLength", .{ .integer = @intCast(max_len) });
+            }
+            if (entry.value_ptr.format) |fmt| {
+                try prop_obj.put(allocator, "format", .{ .string = fmt });
+            }
             try props.put(allocator, entry.key_ptr.*, .{ .object = prop_obj });
         }
 
@@ -340,6 +470,9 @@ pub const InputSchemaBuilder = struct {
         var obj: std.json.ObjectMap = .empty;
         errdefer obj.deinit(allocator);
 
+        if (self.schema_dialect) |dialect| {
+            try obj.put(allocator, "$schema", .{ .string = dialect });
+        }
         try obj.put(allocator, "type", .{ .string = "object" });
 
         const props = try self.buildProperties(allocator);

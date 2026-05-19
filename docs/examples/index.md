@@ -6,19 +6,35 @@ Explore these complete, working examples to learn how to use mcp.zig effectively
 
 ### [Simple Server](/examples/simple-server)
 
-A basic MCP server with a greeting tool. Perfect for getting started.
+A minimal MCP server with greeting and echo tools, a resource, and a prompt.
 
 ### [Simple Client](/examples/simple-client)
 
-A basic MCP client that connects to servers.
+A basic MCP client demonstrating capability declaration and roots configuration.
 
 ### [Weather Server](/examples/weather-server)
 
-A more complex server that provides weather information using multiple tools.
+A multi-tool server with InputSchema constraints, resource templates, and task support.
 
 ### [Calculator Server](/examples/calculator-server)
 
-A server demonstrating mathematical operations with proper input validation.
+Arithmetic tools with structured output schemas, annotations, and task-enabled division.
+
+### [Advanced Server](/examples/advanced-server)
+
+Full feature showcase: JSON Schema 2020-12, icons, output schemas, task support, prompts.
+
+### [Filesystem Server](/examples/filesystem-server)
+
+Read files and list directories. Demonstrates real file I/O inside tool handlers.
+
+### [Notes Server](/examples/notes-server)
+
+Stateful server storing in-memory notes. Shows `user_data` context, list-change notifications.
+
+### [HTTP Server](/examples/http-server)
+
+HTTP transport with SSE support. Includes a `hash_text` tool and a status resource.
 
 ## Running Examples
 
@@ -41,6 +57,9 @@ zig build
 
 # Run the calculator
 ./zig-out/bin/calculator-server
+
+# Run the advanced server
+./zig-out/bin/advanced-server
 ```
 
 PowerShell (Windows):
@@ -49,6 +68,7 @@ PowerShell (Windows):
 .\zig-out\bin\example-server.exe
 .\zig-out\bin\weather-server.exe
 .\zig-out\bin\calculator-server.exe
+.\zig-out\bin\advanced-server.exe
 ```
 
 To use custom HTTP transport, switch the run line in `examples/simple_server.zig` from stdio to HTTP and set your host/domain and port, for example:
@@ -118,10 +138,14 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080 -ContentType 'applicat
 
 ```
 examples/
-├── simple_server.zig      # Basic server example
-├── simple_client.zig      # Basic client example
-├── weather_server.zig     # Weather tool example
-└── calculator_server.zig  # Calculator example
+├── simple_server.zig      # Minimal server (tools, resource, prompt)
+├── simple_client.zig      # Client with roots and capabilities
+├── weather_server.zig     # Weather tools + resource template
+├── calculator_server.zig  # Arithmetic with output schemas
+├── advanced_server.zig    # Full feature showcase
+├── filesystem_server.zig  # File I/O via tools and resources
+├── notes_server.zig       # Stateful notes store (user_data)
+└── http_server.zig        # HTTP transport + SSE example
 ```
 
 ## Creating Your Own Examples

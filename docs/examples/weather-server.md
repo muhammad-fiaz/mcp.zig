@@ -21,6 +21,7 @@ This example demonstrates:
 
 const std = @import("std");
 const mcp = @import("mcp");
+const common = @import("common.zig");
 
 const NWS_API_BASE = "https://api.weather.gov";
 
@@ -31,6 +32,13 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var schema_arena = std.heap.ArenaAllocator.init(allocator);
+    defer schema_arena.deinit();
+    const schema_alloc = schema_arena.allocator();
+
+    const alerts_schema = try buildAlertsSchema(schema_alloc);
+    const forecast_schema = try buildForecastSchema(schema_alloc);
+
     // Create weather server
     var server: mcp.Server = .init(allocator, .{
         .name = "weather-server",
@@ -38,6 +46,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .title = "Weather Server",
         .description = "Get weather alerts and forecasts for US locations",
         .instructions = "Use get_alerts to check weather alerts for a US state, or get_forecast to get the forecast for a location.",
+        .icons = common.defaultIcons(),
     });
     defer server.deinit();
 
@@ -46,11 +55,9 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "get_alerts",
         .description = "Get weather alerts for a US state",
         .title = "Get Weather Alerts",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = alerts_schema,
+        .icons = common.defaultIcons(),
+        .annotations = common.readOnlyToolAnnotations(),
         .handler = getAlertsHandler,
     });
 
@@ -59,11 +66,9 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "get_forecast",
         .description = "Get weather forecast for a location",
         .title = "Get Weather Forecast",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = forecast_schema,
+        .icons = common.defaultIcons(),
+        .annotations = common.readOnlyToolAnnotations(),
         .handler = getForecastHandler,
     });
 
@@ -73,6 +78,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "Weather API Info",
         .description = "Information about the weather data source",
         .mimeType = "text/plain",
+        .icons = common.defaultIcons(),
+        .annotations = .{ .priority = 0.7 },
         .handler = weatherInfoHandler,
     });
 
@@ -83,6 +90,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .title = "State Weather Alerts",
         .description = "Get weather alerts for a specific US state",
         .mimeType = "application/json",
+        .icons = common.defaultIcons(),
     });
 
     // Enable logging, completions, and tasks
@@ -95,6 +103,30 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     // To run with HTTP transport:
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
+}
+
+fn buildAlertsSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer builder.deinit(allocator);
+
+    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try builder.addString(allocator, "state", "Two-letter US state code", true);
+    _ = builder.setPropertyLength("state", 2, 2);
+
+    return builder.toInputSchema(allocator);
+}
+
+fn buildForecastSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer builder.deinit(allocator);
+
+    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try builder.addNumber(allocator, "latitude", "Latitude in degrees", true);
+    _ = try builder.addNumber(allocator, "longitude", "Longitude in degrees", true);
+    _ = builder.setPropertyRange("latitude", -90, 90);
+    _ = builder.setPropertyRange("longitude", -180, 180);
+
+    return builder.toInputSchema(allocator);
 }
 
 fn getAlertsHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {

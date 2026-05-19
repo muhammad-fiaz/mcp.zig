@@ -8,6 +8,7 @@ This example demonstrates argument validation and deterministic tool behavior.
 - subtract tool
 - multiply tool
 - divide tool (division-by-zero handling)
+- JSON Schema input/output
 - logging and tasks capabilities
 
 ## Tool Arguments
@@ -54,6 +55,10 @@ curl -X POST http://localhost:8080 \
 ```
 
 The divide tool returns an MCP error result payload for divide-by-zero.
+
+## Output Shape
+
+Each tool returns structured JSON with `operation` and `result` fields.
 
 ## Source
 

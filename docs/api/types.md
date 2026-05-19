@@ -136,6 +136,9 @@ pub const ToolResult = struct {
 pub const ToolError = error{
     InvalidArguments,
     ExecutionFailed,
+    PermissionDenied,
+    ResourceNotFound,
+    Timeout,
     OutOfMemory,
     Unknown,
 };
@@ -145,14 +148,19 @@ pub const ToolError = error{
 
 ## Resource Types
 
-### `Resource`
+### `ResourceDefinition`
 
 ```zig
-pub const Resource = struct {
-    uri: []const u8,
+pub const ResourceDefinition = struct {
+    icons: ?[]const Icon = null,
     name: []const u8,
-    mimeType: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    uri: []const u8,
     description: ?[]const u8 = null,
+    mimeType: ?[]const u8 = null,
+    annotations: ?Annotations = null,
+    size: ?u64 = null,
+    _meta: ?std.json.Value = null,
 };
 ```
 
@@ -188,6 +196,7 @@ pub const ResourceError = error{
 pub const Root = struct {
     uri: []const u8,
     name: ?[]const u8 = null,
+    _meta: ?std.json.Value = null,
 };
 ```
 
@@ -204,6 +213,9 @@ pub const Implementation = struct {
     name: []const u8,
     version: []const u8,
     title: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    icons: ?[]const Icon = null,
+    websiteUrl: ?[]const u8 = null,
 };
 ```
 
@@ -252,9 +264,15 @@ pub const Schema = struct {
     required: ?[]const []const u8 = null,
     items: ?*const Schema = null,
     description: ?[]const u8 = null,
+    default: ?std.json.Value = null,
+    @"enum": ?[]const std.json.Value = null,
     minimum: ?f64 = null,
     maximum: ?f64 = null,
+    minLength: ?u64 = null,
+    maxLength: ?u64 = null,
     pattern: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    format: ?[]const u8 = null,
 };
 ```
 

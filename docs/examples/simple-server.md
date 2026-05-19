@@ -22,6 +22,7 @@ This example shows how to:
 
 const std = @import("std");
 const mcp = @import("mcp");
+const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) void {
     run(init.io, init.gpa) catch |err| {
@@ -30,6 +31,14 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var schema_arena = std.heap.ArenaAllocator.init(allocator);
+    defer schema_arena.deinit();
+    const schema_alloc = schema_arena.allocator();
+
+    const greet_schema = try buildGreetSchema(schema_alloc);
+    const echo_schema = try buildEchoSchema(schema_alloc);
+    const text_output_schema = try common.buildTextResultSchema(schema_alloc, "text");
+
     // Check for updates in background
     if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
 
@@ -40,6 +49,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .title = "Simple MCP Server",
         .description = "A simple example MCP server",
         .instructions = "This server provides basic greeting and echo tools.",
+        .icons = common.defaultIcons(),
     });
     defer server.deinit();
 
@@ -48,11 +58,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "greet",
         .description = "Greet a user by name",
         .title = "Greeting Tool",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = greet_schema,
+        .outputSchema = text_output_schema,
+        .icons = common.defaultIcons(),
+        .annotations = common.readOnlyToolAnnotations(),
         .handler = greetHandler,
     });
 
@@ -61,11 +70,10 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "echo",
         .description = "Echo back the input message",
         .title = "Echo Tool",
-        .annotations = .{
-            .readOnlyHint = true,
-            .idempotentHint = true,
-            .destructiveHint = false,
-        },
+        .inputSchema = echo_schema,
+        .outputSchema = text_output_schema,
+        .icons = common.defaultIcons(),
+        .annotations = common.readOnlyToolAnnotations(),
         .handler = echoHandler,
     });
 
@@ -75,6 +83,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "About",
         .description = "Information about this server",
         .mimeType = "text/plain",
+        .icons = common.defaultIcons(),
+        .annotations = .{ .priority = 0.9 },
         .handler = aboutHandler,
     });
 
@@ -86,6 +96,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .arguments = &[_]mcp.prompts.PromptArgument{
             .{ .name = "style", .description = "Introduction style (formal/casual)", .required = false },
         },
+        .icons = common.defaultIcons(),
         .handler = introduceHandler,
     });
 
@@ -98,6 +109,26 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     // To run with HTTP transport:
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
+}
+
+fn buildGreetSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer builder.deinit(allocator);
+
+    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try builder.addString(allocator, "name", "Name to greet", false);
+
+    return builder.toInputSchema(allocator);
+}
+
+fn buildEchoSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer builder.deinit(allocator);
+
+    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try builder.addString(allocator, "message", "Message to echo", true);
+
+    return builder.toInputSchema(allocator);
 }
 
 fn greetHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
@@ -113,8 +144,7 @@ fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?s
 
     // Demonstrate structured result
     var obj: std.json.ObjectMap = .empty;
-    obj.put(allocator, "echo", .{ .string = message }) catch {};
-    obj.put(allocator, "timestamp", .{ .integer = 0 }) catch {};
+    obj.put(allocator, "text", .{ .string = message }) catch {};
 
     return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
 }
