@@ -1,3 +1,9 @@
+---
+title: "Prompts"
+description: "Define and use MCP prompts — reusable templates for structuring AI interactions and workflows."
+keywords: [MCP prompts, prompt templates, prompt arguments, prompt messages, workflows]
+---
+
 # Prompts
 
 Prompts are reusable templates that help structure interactions with AI models.

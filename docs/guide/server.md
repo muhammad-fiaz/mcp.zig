@@ -1,3 +1,9 @@
+---
+title: "Server API"
+description: "MCP Server API reference — create servers, register tools/resources/prompts, and run with STDIO or HTTP transport."
+keywords: [MCP server, server API, create server, tools, resources, prompts, STDIO, HTTP transport]
+---
+
 # Server
 
 The Server is the main runtime component for exposing MCP capabilities to AI clients.

@@ -24,12 +24,12 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const ping_schema = try buildPingSchema(sa);
     const hash_schema = try buildHashSchema(sa);
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "http-server",
         .version = "1.0.0",
         .title = "HTTP MCP Server",
         .description = "An MCP server accessible over HTTP with SSE support",
-        .instructions = "POST JSON-RPC to http://localhost:8080/. Use 'ping' or 'hash_text'.",
+        .instructions = "POST JSON-RPC to http://127.0.0.1:8080/mcp. Use 'ping' or 'hash_text'.",
     });
     defer server.deinit();
 
@@ -62,11 +62,11 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     server.enableLogging();
 
     // Print connection info to stderr before blocking
-    std.debug.print("HTTP MCP Server starting on http://localhost:8080\n", .{});
-    std.debug.print("Send JSON-RPC via: curl -X POST http://localhost:8080/ -H 'Content-Type: application/json' -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}'\n", .{});
+    std.debug.print("HTTP MCP Server starting on http://127.0.0.1:8080\n", .{});
+    std.debug.print("Send JSON-RPC via: curl -X POST http://127.0.0.1:8080/mcp -H 'Content-Type: application/json' -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}'\n", .{});
 
-    // Run HTTP transport on localhost:8080
-    try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
+    // Run HTTP transport on 127.0.0.1:8080
+    try server.run(io, allocator, .{ .http = .{ .host = "127.0.0.1", .port = 8080 } });
 }
 
 fn buildPingSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {

@@ -1,13 +1,16 @@
 ---
 layout: home
+title: Model Context Protocol (MCP) Library for Zig
+description: The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.
+keywords: zig, mcp, model context protocol, ai, llm, tools, resources, prompts, zig library, json-rpc, mcp server, mcp client, stdio transport, http transport, ai integration, ziglang
 
 hero:
-  name: mcp.zig
+  name: MCP.zig
   text: Model Context Protocol for Zig
-  tagline: Bringing MCP support to the Zig ecosystem — the first comprehensive MCP library for Zig
+  tagline: The first comprehensive MCP library for Zig — build AI-ready servers and clients with native performance
   image:
     src: /logo.png
-    alt: mcp.zig
+    alt: MCP.zig - Model Context Protocol Library for Zig
   actions:
     - theme: brand
       text: Get Started
@@ -61,11 +64,11 @@ features:
 }
 </style>
 
-## 🎯 Why mcp.zig?
+## Why MCP.zig?
 
 The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro) is an open standard by Anthropic for connecting AI applications to external systems. While MCP has official SDKs for TypeScript, Python, and other languages, **Zig currently lacks proper MCP support**.
 
-**mcp.zig** fills this gap by providing a native, high-performance MCP implementation for Zig developers.
+**MCP.zig** fills this gap by providing a native, high-performance MCP implementation for Zig developers.
 
 ::: info Official MCP Resources
 For the official MCP specification and documentation, visit [modelcontextprotocol.io](https://modelcontextprotocol.io/docs/getting-started/intro)
@@ -82,7 +85,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Zig 0.16.x (recommended)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.5.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
 
 # Zig 0.15.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
@@ -121,7 +124,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
 ## Why Choose mcp.zig?
 
-| Feature            | mcp.zig                    | Other Languages |
+| Feature            | MCP.zig                    | Other Languages |
 | ------------------ | -------------------------- | --------------- |
 | **Performance**    | ⚡ Native Zig speed        | Interpreted/JIT |
 | **Memory Safety**  | ✅ Compile-time guarantees | Runtime checks  |

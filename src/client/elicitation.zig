@@ -1,9 +1,10 @@
-//! MCP Elicitation Module (Spec 2025-11-25)
+//! MCP Elicitation Module (Spec 2026-07-28)
 //!
 //! Provides types and utilities for server-initiated elicitation requests.
 //! Elicitation allows servers to request structured information from users
 //! through the client, enabling interactive workflows.
 //! Supports both form-based and URL-based elicitation modes.
+//! Supports MRTR (Multi Round-Trip Requests) via InputRequiredResult.
 
 const std = @import("std");
 const types = @import("../protocol/types.zig");
@@ -17,10 +18,9 @@ pub const ElicitationFormRequest = struct {
     _meta: ?std.json.Value = null,
 };
 
-/// Request from server to elicit information via URL.
+/// Request from server to elicit information via URL (2026-07-28: no elicitationId in URL mode).
 pub const ElicitationUrlRequest = struct {
     message: []const u8,
-    elicitationId: []const u8,
     url: []const u8,
     mode: []const u8 = "url",
     task: ?types.TaskMetadata = null,
@@ -48,6 +48,15 @@ pub const ElicitationResponse = struct {
             return @tagName(self);
         }
     };
+};
+
+/// MRTR input request for elicitation via subscriptions/listen.
+pub const ElicitationInputRequest = struct {
+    requestId: []const u8,
+    requestType: []const u8 = "elicitation",
+    message: []const u8,
+    requestedSchema: ?std.json.Value = null,
+    url: ?[]const u8 = null,
 };
 
 /// Handler function type for processing elicitation requests.
@@ -86,8 +95,8 @@ pub fn formRequest(message: []const u8, schema: std.json.Value) ElicitationReque
 }
 
 /// Builds a URL elicitation request.
-pub fn urlRequest(message: []const u8, elicitation_id: []const u8, url: []const u8) ElicitationRequest {
-    return .{ .url = .{ .message = message, .elicitationId = elicitation_id, .url = url } };
+pub fn urlRequest(message: []const u8, url: []const u8) ElicitationRequest {
+    return .{ .url = .{ .message = message, .url = url } };
 }
 
 test "accept response" {
@@ -108,4 +117,16 @@ test "cancel response" {
 test "Action toString" {
     try std.testing.expectEqualStrings("accept", ElicitationResponse.Action.accept.toString());
     try std.testing.expectEqualStrings("decline", ElicitationResponse.Action.decline.toString());
+}
+
+test "URL elicitation - no elicitationId in 2026-07-28" {
+    const req = urlRequest("Please visit", "https://example.com/auth");
+    switch (req) {
+        .url => |url_req| {
+            try std.testing.expectEqualStrings("Please visit", url_req.message);
+            try std.testing.expectEqualStrings("https://example.com/auth", url_req.url);
+            // elicitationId is no longer a field in URL mode per 2026-07-28
+        },
+        else => try std.testing.expect(false),
+    }
 }

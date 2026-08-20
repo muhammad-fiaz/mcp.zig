@@ -1,3 +1,9 @@
+---
+title: "Error Handling"
+description: "MCP error handling — handle transport errors, JSON-RPC errors, and tool execution errors gracefully."
+keywords: [error handling, ToolError, ResourceError, PromptError, JSON-RPC errors, error codes]
+---
+
 # Error Handling
 
 Proper error handling is essential for robust MCP servers and clients.

@@ -1,6 +1,6 @@
 //! Advanced MCP Server Example
 //!
-//! Demonstrates the full range of mcp.zig v0.0.5 server features:
+//! Demonstrates the full range of mcp.zig v0.0.6 server features:
 //! - JSON Schema 2020-12 input + output schemas
 //! - Icons and tool annotations
 //! - Task-enabled tools (taskSupport = "optional")
@@ -31,11 +31,11 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .theme = .light,
     }};
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "advanced-server",
         .version = "1.0.0",
         .title = "Advanced MCP Server",
-        .description = "Showcases the full mcp.zig v0.0.5 feature set",
+        .description = "Showcases the full mcp.zig v0.0.6 feature set",
         .websiteUrl = "https://github.com/muhammad-fiaz/mcp.zig",
         .instructions = "Use convert_temperature to convert between Celsius and Fahrenheit.",
         .icons = &server_icon,
@@ -165,7 +165,7 @@ fn featuresHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const
         .uri = uri,
         .mimeType = "text/plain",
         .text =
-        \\Advanced Server Features (mcp.zig v0.0.5)
+        \\Advanced Server Features (mcp.zig v0.0.6)
         \\- JSON Schema 2020-12 input + output schemas
         \\- Structured content in tool results
         \\- Task-enabled tools (taskSupport = optional)

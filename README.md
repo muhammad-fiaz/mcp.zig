@@ -48,9 +48,10 @@ The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-
 
 - **Server Framework** - Build MCP servers that expose tools, resources, and prompts
 - **Client Framework** - Create MCP clients with full support for roots, sampling, and elicitation
+- **MRTR Support** - Multi Round-Trip Requests via InputRequiredResult for interactive workflows
 - **Tasks System** - Advanced support for long-running, interactive tasks
 - **Rich Content** - Full support for text, images, audio, and embedded resources
-- **Transport Layer** - STDIO and HTTP transport support
+- **Transport Layer** - STDIO and HTTP transport support (httpx.zig)
 - **Full Protocol Support** - JSON-RPC 2.0, capability negotiation, lifecycle management
 - **Native Performance** - Written in pure Zig for optimal performance
 - **Comprehensive Testing** - Unit tests for all components
@@ -87,7 +88,7 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Zig 0.16.x (recommended)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.5.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
 
 # Zig 0.15.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
@@ -163,14 +164,20 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "my-client",
         .version = "1.0.0",
     });
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Enable capabilities
     client.enableSampling();
     client.enableRoots(true); // Supports list changed notifications
 
-    // Add roots
-    try client.addRoot(allocator, "file:///projects", "Projects");
+    // Connect to server
+    try client.connectStdio("my-server-binary", &.{});
+
+    // Discover server capabilities (2026-07-28)
+    try client.discover();
+
+    // List tools
+    try client.listTools();
 }
 ```
 
@@ -309,14 +316,33 @@ The generated files (including `index.html`, `main.js`, and `main.wasm`) will be
 
 ## Protocol Version
 
-This library implements MCP protocol version **2025-11-25**.
+This library implements MCP protocol version **2026-07-28**.
 
 | Version    | Status        |
 | ---------- | ------------- |
-| 2025-11-25 | Supported  |
+| 2026-07-28 | Supported  |
+| 2025-11-25 | Compatible |
 | 2025-06-18 | Compatible |
 | 2025-03-26 | Compatible |
 | 2024-11-05 | Compatible |
+
+### What's New in 2026-07-28
+
+- **Stateless Protocol** - No more `initialize`/`notifications/initialized` handshake. Every request carries protocol version and client info in `_meta`.
+- **`server/discover`** - Mandatory RPC that servers MUST implement. Returns `supportedVersions`, `capabilities`, `serverInfo`.
+- **MRTR (Multi Round-Trip Requests)** - Servers use `InputRequiredResult` with `resultType: "input_required"` and `inputRequests` instead of server-initiated JSON-RPC requests.
+- **`subscriptions/listen`** - Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint.
+- **Caching** - `ttlMs` and `cacheScope` required on list/read results.
+- **OAuth 2.1** authorization framework with Protected Resource Metadata.
+
+### Deprecated Features
+
+- `initialize`/`notifications/initialized` handshake (use `server/discover`)
+- `ping` method
+- `logging/setLevel` method
+- `resources/subscribe`/`resources/unsubscribe` (use `subscriptions/listen`)
+- HTTP+SSE transport (deprecated, use Streamable HTTP)
+- Roots, Sampling, Logging (still functional but new implementations should not adopt)
 
 
 ## Contributing

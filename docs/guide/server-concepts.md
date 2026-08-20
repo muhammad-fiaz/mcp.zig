@@ -1,3 +1,9 @@
+---
+title: "Server Concepts"
+description: "Core MCP server concepts: tools, resources, prompts, and how servers expose capabilities to AI applications."
+keywords: [MCP server, tools, resources, prompts, capabilities, server features]
+---
+
 # Understanding MCP Servers
 
 MCP servers are programs that expose specific capabilities to AI applications through standardized protocol interfaces.

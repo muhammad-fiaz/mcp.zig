@@ -1,4 +1,4 @@
-//! MCP Prompts Module (Spec 2025-11-25)
+//! MCP Prompts Module (Spec 2026-07-28)
 //!
 //! Provides the Prompt primitive for MCP servers. Prompts are reusable templates
 //! that help structure interactions with LLMs, allowing servers to expose

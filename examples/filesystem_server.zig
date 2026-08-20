@@ -22,7 +22,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const read_schema = try buildReadSchema(sa);
     const list_schema = try buildListSchema(sa);
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "filesystem-server",
         .version = "1.0.0",
         .title = "Filesystem Server",

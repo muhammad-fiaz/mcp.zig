@@ -1,4 +1,4 @@
-//! MCP Resources Module (Spec 2025-11-25)
+//! MCP Resources Module (Spec 2026-07-28)
 //!
 //! Provides the Resource primitive for MCP servers. Resources are read-only
 //! data sources that provide contextual information to AI applications,

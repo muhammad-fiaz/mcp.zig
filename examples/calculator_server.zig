@@ -27,7 +27,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const input_schema = try buildTwoNumberSchema(sa);
     const output_schema = try buildArithmeticOutputSchema(sa);
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "calculator-server",
         .version = "1.0.0",
         .title = "Calculator Server",

@@ -1,3 +1,9 @@
+---
+title: "Server API Reference"
+description: "Complete API reference for mcp.Server — initialization, configuration, tools, resources, prompts, and transport."
+keywords: [Server API, mcp.Server, ServerConfig, addTool, addResource, addPrompt, enableLogging, STDIO, HTTP]
+---
+
 # Server API
 
 `mcp.Server` is the core runtime for exposing tools, resources, prompts, and utility notifications.

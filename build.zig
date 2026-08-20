@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Fetch httpx dependency
+    const httpx_dep = b.dependency("httpx", .{});
+    const httpx_module = httpx_dep.module("httpx");
+
     _ = b.addModule("mcp", .{
         .root_source_file = b.path("src/mcp.zig"),
     });
@@ -18,6 +22,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    lib.root_module.addImport("httpx", httpx_module);
     b.installArtifact(lib);
 
     // Documentation generation
@@ -35,6 +40,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    mcp_module.addImport("httpx", httpx_module);
 
     // Unit tests
     const test_mod = b.createModule(.{
@@ -42,6 +48,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    test_mod.addImport("httpx", httpx_module);
     const unit_tests = b.addTest(.{ .root_module = test_mod });
 
     const test_compile_step = b.step("test-compile", "Compile unit tests without running");
@@ -64,6 +71,12 @@ pub fn build(b: *std.Build) void {
         .{ .name = "filesystem-server", .src = "examples/filesystem_server.zig", .run_step = "run-filesystem", .desc = "Run the filesystem server example" },
         .{ .name = "notes-server", .src = "examples/notes_server.zig", .run_step = "run-notes", .desc = "Run the notes server example" },
         .{ .name = "http-server", .src = "examples/http_server.zig", .run_step = "run-http", .desc = "Run the HTTP server example" },
+        .{ .name = "middleware-server", .src = "examples/middleware_server.zig", .run_step = "run-middleware", .desc = "Run the middleware server example" },
+        .{ .name = "batch-client", .src = "examples/batch_client.zig", .run_step = "run-batch", .desc = "Run the batch client example" },
+        .{ .name = "rate-limiter-example", .src = "examples/rate_limiter_example.zig", .run_step = "run-rate-limiter", .desc = "Run the rate limiter example" },
+        .{ .name = "health-check-example", .src = "examples/health_check_example.zig", .run_step = "run-health-check", .desc = "Run the health check example" },
+        .{ .name = "shutdown-example", .src = "examples/shutdown_example.zig", .run_step = "run-shutdown", .desc = "Run the shutdown example" },
+        .{ .name = "validator-example", .src = "examples/validator_example.zig", .run_step = "run-validator", .desc = "Run the validator example" },
     };
 
     inline for (examples) |ex| {
@@ -73,6 +86,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         mod.addImport("mcp", mcp_module);
+        mod.addImport("httpx", httpx_module);
 
         const exe = b.addExecutable(.{
             .name = ex.name,
@@ -81,7 +95,7 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(exe);
 
         const run_artifact = b.addRunArtifact(exe);
-        if (b.args) |args| run_artifact.addArgs(args);
+        run_artifact.step.dependOn(&exe.step);
 
         const run_step = b.step(ex.run_step, ex.desc);
         run_step.dependOn(&run_artifact.step);

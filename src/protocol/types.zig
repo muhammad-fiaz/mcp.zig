@@ -635,6 +635,56 @@ pub const JsonRpcError = struct {
     data: ?std.json.Value = null,
 };
 
+/// Result type indicating whether the server has completed or needs more input (MRTR).
+pub const ResultType = enum {
+    complete,
+    input_required,
+
+    pub fn toString(self: ResultType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Cache scope for list/read results.
+pub const CacheScope = enum {
+    /// No caching permitted.
+    none,
+    /// Cache for the session lifetime.
+    session,
+
+    pub fn toString(self: CacheScope) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// An input request from the server when resultType is "input_required" (MRTR).
+pub const InputRequest = struct {
+    /// A unique identifier for this input request.
+    requestId: []const u8,
+    /// The type of input requested (e.g. "sampling", "elicitation", "roots").
+    requestType: []const u8,
+    /// Human-readable message describing what input is needed.
+    message: []const u8,
+    /// Optional parameters for the input request (e.g. schema for elicitation).
+    params: ?std.json.Value = null,
+};
+
+/// An input response from the client providing the requested input.
+pub const InputResponse = struct {
+    /// The ID of the input request this responds to.
+    requestId: []const u8,
+    /// The input content provided by the client.
+    content: std.json.Value,
+};
+
+/// Subscription filter for subscriptions/listen.
+pub const SubscriptionFilter = struct {
+    /// Glob pattern for matching URIs.
+    uriPattern: ?[]const u8 = null,
+    /// MIME types to filter by.
+    mimeTypes: ?[]const []const u8 = null,
+};
+
 /// Base result type. All results can carry _meta.
 pub const Result = struct {
     _meta: ?std.json.Value = null,

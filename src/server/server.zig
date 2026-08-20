@@ -1,11 +1,17 @@
-//! MCP Server Implementation (Spec 2025-11-25)
+//! MCP Server Implementation (Spec 2026-07-28)
 //!
-//! Provides the main MCP Server that handles client connections, protocol
-//! negotiation, capability advertisement, and request routing for tools,
-//! resources, prompts, tasks, and all standard MCP methods.
+//! Provides the main MCP Server that handles client connections, server discovery,
+//! capability advertisement, and request routing for tools, resources, prompts,
+//! tasks, and all standard MCP methods.
+//!
+//! This implementation follows the stateless per-request model of MCP 2026-07-28:
+//! - No initialize/initialized handshake (removed)
+//! - Every request carries protocol version and client info in _meta
+//! - server/discover is the mandatory entry point
+//! - Resources are served via HTTP POST + SSE (no GET endpoint)
 
 const std = @import("std");
-const http = std.http;
+const httpx = @import("httpx");
 
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 const protocol = @import("../protocol/protocol.zig");
@@ -15,25 +21,45 @@ const prompts_mod = @import("prompts.zig");
 const resources_mod = @import("resources.zig");
 const tools_mod = @import("tools.zig");
 
+/// Configuration for an MCP Server
+pub const ServerConfig = struct {
+    name: []const u8,
+    version: []const u8,
+    title: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    icons: ?[]const types.Icon = null,
+    websiteUrl: ?[]const u8 = null,
+    instructions: ?[]const u8 = null,
+};
+
+/// Current state of the server
+pub const ServerState = enum {
+    ready,
+    shutting_down,
+    stopped,
+};
+
+/// HTTP request context used for the per-request httpx transport.
 const HttpRequestTransport = struct {
     response_message: ?[]const u8 = null,
     is_closed: bool = false,
+    persistent_allocator: std.mem.Allocator = undefined,
 
     const Self = @This();
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        if (self.response_message) |msg| {
-            allocator.free(msg);
-            self.response_message = null;
-        }
+    pub fn deinit(self: *Self) void {
+        // Don't free response_message here — it's allocated with ctx.allocator
+        // (httpx's per-request arena) and will be freed when the request ends.
+        self.response_message = null;
     }
 
-    pub fn send(self: *Self, _: std.Io, allocator: std.mem.Allocator, message: []const u8) transport_mod.Transport.SendError!void {
+    pub fn send(self: *Self, _: std.Io, _: std.mem.Allocator, message: []const u8) transport_mod.Transport.SendError!void {
         if (self.is_closed) return transport_mod.Transport.SendError.ConnectionClosed;
 
-        const owned = allocator.dupe(u8, message) catch return transport_mod.Transport.SendError.OutOfMemory;
+        // Always allocate with the persistent allocator, not the arena from handleMessage
+        const owned = self.persistent_allocator.dupe(u8, message) catch return transport_mod.Transport.SendError.OutOfMemory;
         if (self.response_message) |old| {
-            allocator.free(old);
+            self.persistent_allocator.free(old);
         }
         self.response_message = owned;
     }
@@ -54,6 +80,7 @@ const HttpRequestTransport = struct {
                 .send = sendVtable,
                 .receive = receiveVtable,
                 .close = closeVtable,
+                .destroy = destroyVtable,
             },
         };
     }
@@ -72,46 +99,30 @@ const HttpRequestTransport = struct {
         const self: *Self = @ptrCast(@alignCast(ptr));
         self.close();
     }
-};
 
-/// Configuration for an MCP Server
-pub const ServerConfig = struct {
-    name: []const u8,
-    version: []const u8,
-    title: ?[]const u8 = null,
-    description: ?[]const u8 = null,
-    icons: ?[]const types.Icon = null,
-    websiteUrl: ?[]const u8 = null,
-    instructions: ?[]const u8 = null,
-};
-
-/// Current state of the server
-pub const ServerState = enum {
-    uninitialized,
-    initializing,
-    ready,
-    shutting_down,
-    stopped,
+    fn destroyVtable(ptr: *anyopaque, _: std.mem.Allocator) void {
+        const self: *Self = @ptrCast(@alignCast(ptr));
+        self.deinit();
+    }
 };
 
 /// MCP Server that handles client connections and routes requests
 pub const Server = struct {
     allocator: std.mem.Allocator,
     config: ServerConfig,
-    state: ServerState = .uninitialized,
+    state: ServerState = .ready,
     tools: std.StringHashMap(tools_mod.Tool),
     resources: std.StringHashMap(resources_mod.Resource),
     resource_templates: std.StringHashMap(resources_mod.ResourceTemplate),
     prompts: std.StringHashMap(prompts_mod.Prompt),
     tasks: std.StringHashMap(TaskEntry),
     capabilities: types.ServerCapabilities = .{},
-    client_info: ?types.Implementation = null,
-    client_capabilities: ?types.ClientCapabilities = null,
     transport: ?transport_mod.Transport = null,
     stdio_transport: ?*transport_mod.StdioTransport = null,
     next_request_id: i64 = 1,
     pending_requests: std.AutoHashMap(i64, PendingRequest),
     log_level: protocol.LogLevel = .info,
+    io: ?std.Io = null,
     pub const max_http_body_size: usize = 4 * 1024 * 1024;
 
     const Self = @This();
@@ -148,11 +159,6 @@ pub const Server = struct {
         self.prompts.deinit();
         self.deinitTasks();
         self.pending_requests.deinit();
-        if (self.client_info) |ci| {
-            self.allocator.free(ci.name);
-            self.allocator.free(ci.version);
-            self.client_info = null;
-        }
         if (self.stdio_transport) |stdio| {
             stdio.deinit(self.allocator);
             self.allocator.destroy(stdio);
@@ -175,9 +181,7 @@ pub const Server = struct {
     /// Add a resource template to the server
     pub fn addResourceTemplate(self: *Self, template: resources_mod.ResourceTemplate) !void {
         try self.resource_templates.put(template.name, template);
-        if (self.capabilities.resources == null) {
-            self.capabilities.resources = .{};
-        }
+        self.capabilities.resources = .{ .listChanged = true, .subscribe = false };
     }
 
     /// Add a prompt to the server
@@ -222,6 +226,7 @@ pub const Server = struct {
 
     /// Run the server with the specified transport
     pub fn run(self: *Self, io: std.Io, allocator: std.mem.Allocator, options: RunOptions) !void {
+        self.io = io;
         switch (options) {
             .stdio => {
                 self.log(io, "Server listening on STDIO");
@@ -238,178 +243,91 @@ pub const Server = struct {
     }
 
     fn runHttp(self: *Self, io: std.Io, allocator: std.mem.Allocator, config: HttpRunConfig) !void {
-        const bind_host = if (std.mem.eql(u8, config.host, "localhost")) "127.0.0.1" else config.host;
+        self.log(io, "Server listening on HTTP (httpx)");
 
-        const address = std.Io.net.IpAddress.resolve(io, bind_host, config.port) catch {
-            return error.AddressResolutionError;
-        };
+        var server = httpx.createServerWithConfig(allocator, .{
+            .host = config.host,
+            .port = config.port,
+            .max_body_size = max_http_body_size,
+        });
+        defer server.deinit();
 
-        var listener = try std.Io.net.IpAddress.listen(&address, io, .{});
-        defer listener.deinit(io);
-
-        while (self.state != .stopped and self.state != .shutting_down) {
-            const stream = listener.accept(io) catch |err| {
-                std.log.err("HTTP accept failed: {s}", .{@errorName(err)});
-                continue;
-            };
-
-            self.serveHttpConnection(io, allocator, stream) catch |err| {
-                std.log.err("HTTP connection error: {s}", .{@errorName(err)});
-            };
-        }
-    }
-
-    fn serveHttpConnection(self: *Self, io: std.Io, allocator: std.mem.Allocator, stream: std.Io.net.Stream) !void {
-        defer stream.close(io);
-
-        var send_buffer: [4096]u8 = undefined;
-        var recv_buffer: [4096]u8 = undefined;
-        var connection_reader = stream.reader(io, &recv_buffer);
-        var connection_writer = stream.writer(io, &send_buffer);
-        var server: http.Server = .init(&connection_reader.interface, &connection_writer.interface);
-
-        var request = server.receiveHead() catch |err| switch (err) {
-            error.HttpConnectionClosing => return,
-            else => return err,
-        };
-
-        if (request.head.method != .POST) {
-            try request.respond("Method Not Allowed", .{
-                .status = .method_not_allowed,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
-        }
-
-        try self.handleHttpJsonRpcRequest(io, allocator, &request);
-    }
-
-    fn handleHttpJsonRpcRequest(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: *http.Server.Request) !void {
-        var wants_sse = false;
-        var header_it = http.HeaderIterator.init(request.head_buffer);
-        while (header_it.next()) |header| {
-            if (std.ascii.eqlIgnoreCase(header.name, "accept")) {
-                if (std.mem.indexOf(u8, header.value, "text/event-stream") != null) {
-                    wants_sse = true;
+        // Use a pre-route hook to inject the MCP server pointer into each request context.
+        const Hook = struct {
+            var mcp_ptr: ?*Self = null;
+            fn inject(ctx: *httpx.Context) anyerror!void {
+                if (mcp_ptr) |ptr| {
+                    try ctx.data.put("mcp_server", @ptrCast(ptr));
                 }
             }
-        }
-        const content_length = request.head.content_length orelse {
-            try request.respond("Content-Length required", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
         };
+        Hook.mcp_ptr = self;
+        try server.preRoute(Hook.inject);
 
-        if (content_length == 0) {
-            try request.respond("Empty JSON-RPC payload", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
-        }
+        try server.any("/mcp", struct {
+            fn handler(ctx: *httpx.Context) anyerror!httpx.Response {
+                return handleHttpRequest(ctx);
+            }
+        }.handler);
 
-        if (content_length > max_http_body_size) {
-            try request.respond("Request body too large", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
+        try server.listen();
+    }
+
+    /// Handle an incoming HTTP request on the /mcp endpoint.
+    fn handleHttpRequest(ctx: *httpx.Context) anyerror!httpx.Response {
+        const server: *Self = @ptrCast(@alignCast(ctx.data.get("mcp_server") orelse return ctx.status(500).text("Internal server error")));
+
+        // Only POST is allowed for MCP Streamable HTTP
+        if (ctx.request.method != .POST) {
+            ctx.setHeader("Allow", "POST") catch {};
+            return ctx.status(405).text("Method Not Allowed");
         }
 
-        var read_buffer: [2048]u8 = undefined;
-        var body_reader = request.readerExpectContinue(&read_buffer) catch {
-            try request.respond("Invalid request body", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
+        // Read request body
+        const body = ctx.request.body orelse {
+            return ctx.status(400).text("Empty request body");
         };
 
-        const read_len = std.math.cast(usize, content_length) orelse {
-            try request.respond("Request body too large", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
+        // Check for SSE preference
+        const wants_sse = if (ctx.header("Accept")) |accept|
+            std.mem.indexOf(u8, accept, "text/event-stream") != null
+        else
+            false;
+
+        // Create per-request transport
+        var request_transport: HttpRequestTransport = .{
+            .persistent_allocator = ctx.allocator,
         };
+        defer request_transport.deinit();
 
-        const body_items = body_reader.readAlloc(allocator, read_len) catch {
-            try request.respond("Failed to read request body", .{
-                .status = .bad_request,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/plain" },
-                },
-            });
-            return;
-        };
-        defer allocator.free(body_items);
+        const previous_transport = server.transport;
+        server.transport = request_transport.transport();
+        defer server.transport = previous_transport;
 
-        var request_transport: HttpRequestTransport = .{};
-        defer request_transport.deinit(allocator);
-
-        const previous_transport = self.transport;
-        self.transport = request_transport.transport();
-        defer self.transport = previous_transport;
-
-        self.handleMessage(io, allocator, body_items) catch {
-            const internal_error = jsonrpc.createParseError(.{ .string = "Internal server error" });
-            const json = jsonrpc.serializeMessage(allocator, .{ .error_response = internal_error }) catch {
-                try request.respond("Internal server error", .{
-                    .status = .internal_server_error,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain" },
-                    },
-                });
-                return;
+        // Handle the JSON-RPC message
+        server.handleMessage(server.io orelse return ctx.status(500).text("Server not initialized"), ctx.allocator, body) catch {
+            const error_response = jsonrpc.createParseError(.{ .string = "Internal server error" });
+            const json = jsonrpc.serializeMessage(ctx.allocator, .{ .error_response = error_response }) catch {
+                return ctx.status(500).text("Internal server error");
             };
-            defer allocator.free(json);
-
-            try request.respond(json, .{
-                .status = .internal_server_error,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "application/json" },
-                },
-            });
-            return;
+            defer ctx.allocator.free(json);
+            try ctx.setHeader("Content-Type", "application/json");
+            return ctx.status(500).text(json);
         };
 
         if (request_transport.response_message) |response_json| {
             if (wants_sse) {
-                const sse_body = try std.fmt.allocPrint(allocator, "data: {s}\n\n", .{response_json});
-                defer allocator.free(sse_body);
-                try request.respond(sse_body, .{
-                    .status = .ok,
-                    .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/event-stream" },
-                    },
-                });
-                return;
+                const sse_body = try std.fmt.allocPrint(ctx.allocator, "data: {s}\n\n", .{response_json});
+                defer ctx.allocator.free(sse_body);
+                return ctx.status(200).text(sse_body);
             }
 
-            try request.respond(response_json, .{
-                .status = .ok,
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "application/json" },
-                },
-            });
-            return;
+            try ctx.setHeader("Content-Type", "application/json");
+            return ctx.status(200).text(response_json);
         }
 
-        try request.respond("", .{ .status = .accepted });
+        // No response (notification)
+        return ctx.status(202).text("");
     }
 
     /// Run the server with a custom transport
@@ -449,48 +367,46 @@ pub const Server = struct {
         self.state = .stopped;
     }
 
+    /// Request graceful shutdown of the server.
+    /// The server will stop after processing the current request.
+    pub fn shutdown(self: *Self) void {
+        self.state = .shutting_down;
+    }
+
+    /// Check if the server is shutting down.
+    pub fn isShuttingDown(self: *Self) bool {
+        return self.state == .shutting_down or self.state == .stopped;
+    }
+
     /// Handle an incoming message
-    fn handleMessage(self: *Self, io: std.Io, allocator: std.mem.Allocator, data: []const u8) !void {
+    pub fn handleMessage(self: *Self, io_or_alloc: anytype, allocator: std.mem.Allocator, data: []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const aa = arena.allocator();
 
         const parsed_message = jsonrpc.parseMessage(aa, data) catch {
             const error_response = jsonrpc.createParseError(null);
-            try self.sendResponse(io, aa, .{ .error_response = error_response });
+            try self.sendResponse(io_or_alloc, aa, .{ .error_response = error_response });
             return;
         };
 
         switch (parsed_message.message) {
-            .request => |req| try self.handleRequest(io, aa, req),
-            .notification => |notif| try self.handleNotification(io, notif),
+            .request => |req| try self.handleRequest(io_or_alloc, aa, req),
+            .notification => |notif| try self.handleNotification(io_or_alloc, notif),
             .response => |resp| self.handleResponse(resp),
-            .error_response => |err| self.handleErrorResponse(io, err),
+            .error_response => |err| self.handleErrorResponse(io_or_alloc, err),
         }
     }
 
     /// Handle an incoming request
-    fn handleRequest(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleRequest(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var buf: [256]u8 = undefined;
         if (std.fmt.bufPrint(&buf, "Received request: {s}", .{request.method})) |msg| {
             self.log(io, msg);
         } else |_| {}
 
-        if (self.state == .uninitialized and !std.mem.eql(u8, request.method, "initialize")) {
-            const error_response = jsonrpc.createErrorResponse(
-                request.id,
-                jsonrpc.ErrorCode.SERVER_NOT_INITIALIZED,
-                "Server not initialized",
-                null,
-            );
-            try self.sendResponse(io, allocator, .{ .error_response = error_response });
-            return;
-        }
-
-        if (std.mem.eql(u8, request.method, "initialize")) {
-            try self.handleInitialize(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "ping")) {
-            try self.handlePing(io, allocator, request);
+        if (std.mem.eql(u8, request.method, "server/discover")) {
+            try self.handleDiscover(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tools/list")) {
             try self.handleToolsList(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tools/call")) {
@@ -501,16 +417,12 @@ pub const Server = struct {
             try self.handleResourcesRead(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "resources/templates/list")) {
             try self.handleResourceTemplatesList(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "resources/subscribe")) {
-            try self.handleSubscribe(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "resources/unsubscribe")) {
-            try self.handleUnsubscribe(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "subscriptions/listen")) {
+            try self.handleSubscriptionsListen(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "prompts/list")) {
             try self.handlePromptsList(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "prompts/get")) {
             try self.handlePromptsGet(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "logging/setLevel")) {
-            try self.handleSetLogLevel(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "completion/complete")) {
             try self.handleCompletion(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tasks/get")) {
@@ -521,60 +433,62 @@ pub const Server = struct {
             try self.handleTasksList(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tasks/cancel")) {
             try self.handleTasksCancel(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "sampling/createMessage")) {
+            // Deprecated but still functional
+            try self.handleSamplingCreateMessage(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "elicitation/create")) {
+            try self.handleElicitationCreate(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "roots/list")) {
+            try self.handleRootsList(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "health/check")) {
+            try self.handleHealthCheck(io, allocator, request);
         } else {
             const error_response = jsonrpc.createMethodNotFound(request.id, request.method);
             try self.sendResponse(io, allocator, .{ .error_response = error_response });
         }
     }
 
-    /// Handle initialize request
-    fn handleInitialize(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        self.state = .initializing;
-
-        if (request.params) |params| {
-            if (params == .object) {
-                const obj = params.object;
-
-                if (obj.get("clientInfo")) |client_info_val| {
-                    if (client_info_val == .object) {
-                        const ci = client_info_val.object;
-                        const name = if (ci.get("name")) |n| if (n == .string) n.string else "unknown" else "unknown";
-                        const version = if (ci.get("version")) |v| if (v == .string) v.string else "0.0.0" else "0.0.0";
-                        if (self.client_info) |existing| {
-                            self.allocator.free(existing.name);
-                            self.allocator.free(existing.version);
-                        }
-                        self.client_info = .{
-                            .name = try self.allocator.dupe(u8, name),
-                            .version = try self.allocator.dupe(u8, version),
-                        };
-                    }
-                }
-            }
-        }
-
-        // use client's requested version if supported
-        var negotiated_version: []const u8 = protocol.VERSION;
-        if (request.params) |params| {
-            if (params == .object) {
-                if (params.object.get("protocolVersion")) |pv| {
-                    if (pv == .string) {
-                        for (protocol.SUPPORTED_VERSIONS) |sv| {
-                            if (std.mem.eql(u8, pv.string, sv)) {
-                                negotiated_version = sv;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+    /// Handle health/check request - returns server health status
+    fn handleHealthCheck(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var result: std.json.ObjectMap = .empty;
-        defer result.deinit(allocator);
 
-        try result.put(allocator, "protocolVersion", .{ .string = negotiated_version });
+        // Server status
+        const status_str: []const u8 = switch (self.state) {
+            .ready => "ready",
+            .shutting_down => "shutting_down",
+            .stopped => "stopped",
+        };
+        try result.put(allocator, "status", .{ .string = status_str });
 
+        // Server info
+        var server_info: std.json.ObjectMap = .empty;
+        try server_info.put(allocator, "name", .{ .string = self.config.name });
+        try server_info.put(allocator, "version", .{ .string = self.config.version });
+        try result.put(allocator, "serverInfo", .{ .object = server_info });
+
+        // Uptime (placeholder - would need to track start time in production)
+        try result.put(allocator, "uptime", .{ .integer = 0 });
+
+        // Active connections count
+        const active_count: i64 = if (self.transport != null) 1 else 0;
+        try result.put(allocator, "activeConnections", .{ .integer = active_count });
+
+        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
+    /// Handle server/discover request (MUST be implemented by all servers).
+    fn handleDiscover(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        var result: std.json.ObjectMap = .empty;
+
+        // supportedVersions (descending preference order)
+        var versions_array: std.json.Array = .init(allocator);
+        for (protocol.SUPPORTED_VERSIONS) |version| {
+            try versions_array.append(.{ .string = version });
+        }
+        try result.put(allocator, "supportedVersions", .{ .array = versions_array });
+
+        // capabilities
         var caps: std.json.ObjectMap = .empty;
         if (self.capabilities.tools) |t| {
             var tools_cap: std.json.ObjectMap = .empty;
@@ -611,6 +525,7 @@ pub const Server = struct {
         }
         try result.put(allocator, "capabilities", .{ .object = caps });
 
+        // serverInfo
         var server_info: std.json.ObjectMap = .empty;
         try server_info.put(allocator, "name", .{ .string = self.config.name });
         try server_info.put(allocator, "version", .{ .string = self.config.version });
@@ -636,17 +551,8 @@ pub const Server = struct {
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
-    /// Handle ping request
-    fn handlePing(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        var result: std.json.ObjectMap = .empty;
-        defer result.deinit(allocator);
-
-        const response = jsonrpc.createResponse(request.id, .{ .object = result });
-        try self.sendResponse(io, allocator, .{ .response = response });
-    }
-
     /// Handle tools/list request
-    fn handleToolsList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleToolsList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var tools_array: std.json.Array = .init(allocator);
 
         var iter = self.tools.iterator();
@@ -717,13 +623,14 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "tools", .{ .array = tools_array });
+        try result.put(allocator, "resultType", .{ .string = "complete" });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
     /// Handle tools/call request
-    fn handleToolsCall(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleToolsCall(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var tool_name: []const u8 = "";
         var arguments: ?std.json.Value = null;
         var task_meta: ?types.TaskMetadata = null;
@@ -796,6 +703,7 @@ pub const Server = struct {
                 const task_obj = try buildTaskObject(allocator, task);
                 var result: std.json.ObjectMap = .empty;
                 try result.put(allocator, "task", .{ .object = task_obj });
+                try result.put(allocator, "resultType", .{ .string = "complete" });
 
                 const response = jsonrpc.createResponse(request.id, .{ .object = result });
                 try self.sendResponse(io, allocator, .{ .response = response });
@@ -821,7 +729,7 @@ pub const Server = struct {
     }
 
     /// Handle resources/list request
-    fn handleResourcesList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleResourcesList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var resources_array: std.json.Array = .init(allocator);
 
         var iter = self.resources.iterator();
@@ -855,13 +763,14 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resources", .{ .array = resources_array });
+        try result.put(allocator, "resultType", .{ .string = "complete" });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
     /// Handle resources/read request
-    fn handleResourcesRead(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleResourcesRead(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var uri: []const u8 = "";
 
         if (request.params) |params| {
@@ -900,6 +809,7 @@ pub const Server = struct {
 
             var result: std.json.ObjectMap = .empty;
             try result.put(allocator, "contents", .{ .array = contents_array });
+            try result.put(allocator, "resultType", .{ .string = "complete" });
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
             try self.sendResponse(io, allocator, .{ .response = response });
@@ -910,7 +820,7 @@ pub const Server = struct {
     }
 
     /// Handle resources/templates/list request
-    fn handleResourceTemplatesList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleResourceTemplatesList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var templates_array: std.json.Array = .init(allocator);
 
         var iter = self.resource_templates.iterator();
@@ -941,31 +851,24 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resourceTemplates", .{ .array = templates_array });
+        try result.put(allocator, "resultType", .{ .string = "complete" });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
-    /// Handle resources/subscribe request
-    fn handleSubscribe(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        _ = request.params;
+    /// Handle subscriptions/listen request (replaces resources/subscribe + resources/unsubscribe + HTTP GET)
+    fn handleSubscriptionsListen(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        // For now, acknowledge the subscription. Full implementation would use long-lived SSE streams.
         var result: std.json.ObjectMap = .empty;
-        defer result.deinit(allocator);
-        const response = jsonrpc.createResponse(request.id, .{ .object = result });
-        try self.sendResponse(io, allocator, .{ .response = response });
-    }
+        try result.put(allocator, "resultType", .{ .string = "complete" });
 
-    /// Handle resources/unsubscribe request
-    fn handleUnsubscribe(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        _ = request.params;
-        var result: std.json.ObjectMap = .empty;
-        defer result.deinit(allocator);
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
     /// Handle prompts/list request
-    fn handlePromptsList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handlePromptsList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var prompts_array: std.json.Array = .init(allocator);
 
         var iter = self.prompts.iterator();
@@ -1008,13 +911,14 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "prompts", .{ .array = prompts_array });
+        try result.put(allocator, "resultType", .{ .string = "complete" });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
     /// Handle prompts/get request
-    fn handlePromptsGet(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handlePromptsGet(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var prompt_name: []const u8 = "";
         var arguments: ?std.json.Value = null;
 
@@ -1087,42 +991,8 @@ pub const Server = struct {
         }
     }
 
-    /// Handle logging/setLevel request
-    fn handleSetLogLevel(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        if (request.params) |params| {
-            if (params == .object) {
-                if (params.object.get("level")) |level_val| {
-                    if (level_val == .string) {
-                        const level_str = level_val.string;
-                        if (std.mem.eql(u8, level_str, "debug")) {
-                            self.log_level = .debug;
-                        } else if (std.mem.eql(u8, level_str, "info")) {
-                            self.log_level = .info;
-                        } else if (std.mem.eql(u8, level_str, "notice")) {
-                            self.log_level = .notice;
-                        } else if (std.mem.eql(u8, level_str, "warning")) {
-                            self.log_level = .warning;
-                        } else if (std.mem.eql(u8, level_str, "error")) {
-                            self.log_level = .@"error";
-                        } else if (std.mem.eql(u8, level_str, "critical")) {
-                            self.log_level = .critical;
-                        } else if (std.mem.eql(u8, level_str, "alert")) {
-                            self.log_level = .alert;
-                        } else if (std.mem.eql(u8, level_str, "emergency")) {
-                            self.log_level = .emergency;
-                        }
-                    }
-                }
-            }
-        }
-
-        const result: std.json.ObjectMap = .empty;
-        const response = jsonrpc.createResponse(request.id, .{ .object = result });
-        try self.sendResponse(io, allocator, .{ .response = response });
-    }
-
     /// Handle completion/complete request
-    fn handleCompletion(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleCompletion(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var completion: std.json.ObjectMap = .empty;
         const values_array: std.json.Array = .init(allocator);
         try completion.put(allocator, "values", .{ .array = values_array });
@@ -1135,8 +1005,30 @@ pub const Server = struct {
         try self.sendResponse(io, allocator, .{ .response = response });
     }
 
+    /// Handle sampling/createMessage request (deprecated but functional)
+    fn handleSamplingCreateMessage(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        const error_response = jsonrpc.createMethodNotFound(request.id, "sampling/createMessage");
+        try self.sendResponse(io, allocator, .{ .error_response = error_response });
+    }
+
+    /// Handle elicitation/create request
+    fn handleElicitationCreate(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        const error_response = jsonrpc.createMethodNotFound(request.id, "elicitation/create");
+        try self.sendResponse(io, allocator, .{ .error_response = error_response });
+    }
+
+    /// Handle roots/list request (deprecated but functional)
+    fn handleRootsList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        var result: std.json.ObjectMap = .empty;
+        const roots_array: std.json.Array = .init(allocator);
+        try result.put(allocator, "roots", .{ .array = roots_array });
+
+        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
     /// Handle tasks/get request
-    fn handleTasksGet(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleTasksGet(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var task_id: ?[]const u8 = null;
         if (request.params) |params| {
             if (params == .object) {
@@ -1165,7 +1057,7 @@ pub const Server = struct {
     }
 
     /// Handle tasks/result request
-    fn handleTasksResult(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleTasksResult(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var task_id: ?[]const u8 = null;
         if (request.params) |params| {
             if (params == .object) {
@@ -1210,7 +1102,7 @@ pub const Server = struct {
     }
 
     /// Handle tasks/list request
-    fn handleTasksList(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleTasksList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var result: std.json.ObjectMap = .empty;
         var tasks_array: std.json.Array = .init(allocator);
 
@@ -1226,7 +1118,7 @@ pub const Server = struct {
     }
 
     /// Handle tasks/cancel request
-    fn handleTasksCancel(self: *Self, io: std.Io, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    fn handleTasksCancel(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var task_id: ?[]const u8 = null;
         if (request.params) |params| {
             if (params == .object) {
@@ -1266,11 +1158,8 @@ pub const Server = struct {
     }
 
     /// Handle incoming notifications
-    fn handleNotification(self: *Self, io: std.Io, notification: jsonrpc.Notification) !void {
-        if (std.mem.eql(u8, notification.method, "notifications/initialized")) {
-            self.state = .ready;
-            self.log(io, "Server initialized and ready");
-        } else if (std.mem.eql(u8, notification.method, "notifications/cancelled")) {
+    fn handleNotification(self: *Self, io: anytype, notification: jsonrpc.Notification) !void {
+        if (std.mem.eql(u8, notification.method, "notifications/cancelled")) {
             if (notification.params) |params| {
                 if (params == .object) {
                     if (params.object.get("requestId")) |req_id| {
@@ -1293,7 +1182,7 @@ pub const Server = struct {
     }
 
     /// Handle incoming error response
-    fn handleErrorResponse(self: *Self, io: std.Io, err: jsonrpc.ErrorResponse) void {
+    fn handleErrorResponse(self: *Self, io: anytype, err: jsonrpc.ErrorResponse) void {
         if (err.id) |id| {
             const int_id = switch (id) {
                 .integer => |i| i,
@@ -1305,13 +1194,13 @@ pub const Server = struct {
     }
 
     /// Send a notification to the client
-    pub fn sendNotification(self: *Self, io: std.Io, allocator: std.mem.Allocator, method: []const u8, params: ?std.json.Value) !void {
+    pub fn sendNotification(self: *Self, io: anytype, allocator: std.mem.Allocator, method: []const u8, params: ?std.json.Value) !void {
         const notification = jsonrpc.createNotification(method, params);
         try self.sendResponse(io, allocator, .{ .notification = notification });
     }
 
     /// Send a log message notification
-    pub fn sendLogMessage(self: *Self, io: std.Io, allocator: std.mem.Allocator, level: protocol.LogLevel, message: []const u8) !void {
+    pub fn sendLogMessage(self: *Self, io: anytype, allocator: std.mem.Allocator, level: protocol.LogLevel, message: []const u8) !void {
         if (@intFromEnum(level) < @intFromEnum(self.log_level)) return;
 
         var params: std.json.ObjectMap = .empty;
@@ -1322,7 +1211,7 @@ pub const Server = struct {
     }
 
     /// Send a progress notification
-    pub fn sendProgress(self: *Self, io: std.Io, allocator: std.mem.Allocator, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void {
+    pub fn sendProgress(self: *Self, io: anytype, allocator: std.mem.Allocator, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void {
         var params: std.json.ObjectMap = .empty;
         try params.put(allocator, "progressToken", token);
         try params.put(allocator, "progress", .{ .float = prog });
@@ -1336,29 +1225,29 @@ pub const Server = struct {
     }
 
     /// Notify clients that tools have changed
-    pub fn notifyToolsChanged(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
+    pub fn notifyToolsChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
         try self.sendNotification(io, allocator, "notifications/tools/list_changed", null);
     }
 
     /// Notify clients that resources have changed
-    pub fn notifyResourcesChanged(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
+    pub fn notifyResourcesChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
         try self.sendNotification(io, allocator, "notifications/resources/list_changed", null);
     }
 
     /// Notify clients that a resource has been updated
-    pub fn notifyResourceUpdated(self: *Self, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void {
+    pub fn notifyResourceUpdated(self: *Self, io: anytype, allocator: std.mem.Allocator, uri: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
         try params.put(allocator, "uri", .{ .string = uri });
         try self.sendNotification(io, allocator, "notifications/resources/updated", .{ .object = params });
     }
 
     /// Notify clients that prompts have changed
-    pub fn notifyPromptsChanged(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
+    pub fn notifyPromptsChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
         try self.sendNotification(io, allocator, "notifications/prompts/list_changed", null);
     }
 
     /// Send a response message
-    fn sendResponse(self: *Self, io: std.Io, allocator: std.mem.Allocator, message: jsonrpc.Message) !void {
+    fn sendResponse(self: *Self, io: anytype, allocator: std.mem.Allocator, message: jsonrpc.Message) !void {
         if (self.transport) |t| {
             const json = jsonrpc.serializeMessage(allocator, message) catch {
                 self.logError(io, "Failed to serialize response");
@@ -1386,7 +1275,7 @@ pub const Server = struct {
         self.tasks.deinit();
     }
 
-    fn nowIsoTimestamp(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+    fn nowIsoTimestamp(io: anytype, allocator: std.mem.Allocator) ![]const u8 {
         const now_ts = std.Io.Clock.real.now(io);
         const now_secs: i64 = now_ts.toSeconds();
         const secs: u64 = if (now_secs < 0) 0 else @intCast(now_secs);
@@ -1413,7 +1302,7 @@ pub const Server = struct {
         });
     }
 
-    fn generateTaskId(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+    fn generateTaskId(io: anytype, allocator: std.mem.Allocator) ![]const u8 {
         var bytes: [16]u8 = undefined;
         io.randomSecure(&bytes) catch io.random(&bytes);
 
@@ -1467,6 +1356,7 @@ pub const Server = struct {
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "content", .{ .array = content_array });
         try result.put(allocator, "isError", .{ .bool = tool_result.is_error });
+        try result.put(allocator, "resultType", .{ .string = "complete" });
         if (tool_result.structuredContent) |sc| {
             try result.put(allocator, "structuredContent", sc);
         }
@@ -1544,13 +1434,13 @@ pub const Server = struct {
         try obj.put(allocator, "annotations", .{ .object = ann_obj });
     }
 
-    fn log(self: *Self, io: std.Io, message: []const u8) void {
+    fn log(self: *Self, io: anytype, message: []const u8) void {
         if (self.stdio_transport) |t| {
             t.writeStderr(io, message);
         }
     }
 
-    fn logError(self: *Self, io: std.Io, message: []const u8) void {
+    fn logError(self: *Self, io: anytype, message: []const u8) void {
         if (self.stdio_transport) |t| {
             var buf: [512]u8 = undefined;
             const formatted = std.fmt.bufPrint(&buf, "ERROR: {s}", .{message}) catch message;
@@ -1560,18 +1450,18 @@ pub const Server = struct {
 };
 
 test "Server initialization" {
-    var server: Server = .init(std.testing.allocator, .{
+    var server = Server.init(std.testing.allocator, .{
         .name = "test-server",
         .version = "1.0.0",
     });
     defer server.deinit();
 
-    try std.testing.expectEqual(ServerState.uninitialized, server.state);
+    try std.testing.expectEqual(ServerState.ready, server.state);
     try std.testing.expectEqualStrings("test-server", server.config.name);
 }
 
 test "Server add tool" {
-    var server: Server = .init(std.testing.allocator, .{
+    var server = Server.init(std.testing.allocator, .{
         .name = "test-server",
         .version = "1.0.0",
     });
@@ -1593,7 +1483,7 @@ test "Server add tool" {
 }
 
 test "Server add resource" {
-    var server: Server = .init(std.testing.allocator, .{
+    var server = Server.init(std.testing.allocator, .{
         .name = "test-server",
         .version = "1.0.0",
     });
@@ -1613,7 +1503,7 @@ test "Server add resource" {
 }
 
 test "Server add prompt" {
-    var server: Server = .init(std.testing.allocator, .{
+    var server = Server.init(std.testing.allocator, .{
         .name = "test-server",
         .version = "1.0.0",
     });
@@ -1633,7 +1523,7 @@ test "Server add prompt" {
 }
 
 test "Server enable capabilities" {
-    var server: Server = .init(std.testing.allocator, .{
+    var server = Server.init(std.testing.allocator, .{
         .name = "test-server",
         .version = "1.0.0",
     });
@@ -1646,4 +1536,111 @@ test "Server enable capabilities" {
     try std.testing.expect(server.capabilities.logging != null);
     try std.testing.expect(server.capabilities.completions != null);
     try std.testing.expect(server.capabilities.tasks != null);
+}
+
+test "Server shutdown" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    try std.testing.expectEqual(ServerState.ready, server.state);
+    server.shutdown();
+    try std.testing.expectEqual(ServerState.shutting_down, server.state);
+    try std.testing.expect(server.isShuttingDown());
+}
+
+test "Server isShuttingDown" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    try std.testing.expect(!server.isShuttingDown());
+    server.shutdown();
+    try std.testing.expect(server.isShuttingDown());
+}
+
+test "Server health check state" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    // Server should be ready initially
+    try std.testing.expectEqual(ServerState.ready, server.state);
+    try std.testing.expect(!server.isShuttingDown());
+
+    // After shutdown, state should change
+    server.shutdown();
+    try std.testing.expectEqual(ServerState.shutting_down, server.state);
+    try std.testing.expect(server.isShuttingDown());
+}
+
+test "Server add tool with annotations" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    const tool: tools_mod.Tool = .{
+        .name = "test_tool",
+        .description = "A test tool",
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) !tools_mod.ToolResult {
+                return .{ .content = &.{} };
+            }
+        }.handler,
+    };
+
+    try server.addTool(tool);
+    try std.testing.expect(server.tools.contains("test_tool"));
+    try std.testing.expect(server.capabilities.tools != null);
+}
+
+test "Server add resource with annotations" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    try server.addResource(.{
+        .uri = "file:///test",
+        .name = "Test",
+        .description = "A test resource",
+        .mimeType = "text/plain",
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) !resources_mod.ResourceContent {
+                return .{ .uri = uri };
+            }
+        }.handler,
+    });
+    try std.testing.expect(server.resources.contains("file:///test"));
+    try std.testing.expect(server.capabilities.resources != null);
+}
+
+test "Server add prompt with description" {
+    var server = Server.init(std.testing.allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    try server.addPrompt(.{
+        .name = "test_prompt",
+        .description = "A test prompt",
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) ![]const prompts_mod.PromptMessage {
+                return &.{};
+            }
+        }.handler,
+    });
+    try std.testing.expect(server.prompts.contains("test_prompt"));
+    try std.testing.expect(server.capabilities.prompts != null);
 }

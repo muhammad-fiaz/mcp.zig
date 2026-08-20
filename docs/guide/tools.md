@@ -1,3 +1,9 @@
+---
+title: "Tools"
+description: "Define and use MCP tools — functions that AI can call to perform actions with typed inputs and outputs."
+keywords: [MCP tools, tool definition, tool handler, input schema, tool execution, JSON Schema]
+---
+
 # Tools
 
 Tools are the primary way for AI clients to interact with your MCP server. They represent actions that can be performed.

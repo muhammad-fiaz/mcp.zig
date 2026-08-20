@@ -1,3 +1,9 @@
+---
+title: "Architecture"
+description: "Understand the MCP architecture including clients, servers, transports, and how components communicate via JSON-RPC."
+keywords: [MCP architecture, clients, servers, transports, JSON-RPC, protocol layers]
+---
+
 # Architecture Overview
 
 This overview of the Model Context Protocol (MCP) discusses its scope and core concepts, and provides an example demonstrating each core concept.

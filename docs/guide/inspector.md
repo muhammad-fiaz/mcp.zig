@@ -1,3 +1,9 @@
+---
+title: "Inspector"
+description: "Use the MCP Inspector to test and debug your MCP servers with interactive tool calls and resource reads."
+keywords: [MCP Inspector, debugging, testing, developer tools, npx, inspection]
+---
+
 # MCP Inspector
 
 The **MCP Inspector** is an interactive developer tool for testing and debugging MCP servers.

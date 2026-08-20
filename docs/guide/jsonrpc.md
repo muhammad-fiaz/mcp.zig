@@ -1,3 +1,9 @@
+---
+title: "JSON-RPC Protocol"
+description: "MCP uses JSON-RPC 2.0 for communication — understand requests, responses, notifications, and batch operations."
+keywords: [JSON-RPC 2.0, requests, responses, notifications, error codes, MCP methods]
+---
+
 # JSON-RPC Protocol
 
 mcp.zig implements JSON-RPC 2.0 for all MCP communication.
@@ -39,7 +45,7 @@ JSON-RPC is a stateless, light-weight remote procedure call (RPC) protocol that 
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "notifications/initialized"
+  "method": "notifications/roots/list_changed"
 }
 ```
 
@@ -97,7 +103,7 @@ const resp = mcp.jsonrpc.createResponse(
 
 // Notification
 const notif = mcp.jsonrpc.createNotification(
-    "notifications/initialized",
+    "notifications/roots/list_changed",
     null,
 );
 ```
@@ -154,15 +160,13 @@ const id: mcp.types.RequestId = .{ .integer = 42 };
 const id: mcp.types.RequestId = .{ .string = "request-001" };
 ```
 
-## MCP Methods
+## MCP Methods (2026-07-28)
 
 ### Lifecycle
 
-| Method                      | Type         | Description            |
-| --------------------------- | ------------ | ---------------------- |
-| `initialize`                | Request      | Initialize connection  |
-| `notifications/initialized` | Notification | Confirm initialization |
-| `ping`                      | Request      | Check connection       |
+| Method              | Type         | Description                    |
+| ------------------- | ------------ | ------------------------------ |
+| `server/discover`   | Request      | Discover server capabilities   |
 
 ### Tools
 
@@ -178,7 +182,7 @@ const id: mcp.types.RequestId = .{ .string = "request-001" };
 | `resources/list`           | Request | List resources       |
 | `resources/read`           | Request | Read a resource      |
 | `resources/templates/list` | Request | List templates       |
-| `resources/subscribe`      | Request | Subscribe to changes |
+| `subscriptions/listen`     | Request | Subscribe to changes |
 
 ### Prompts
 
@@ -187,11 +191,20 @@ const id: mcp.types.RequestId = .{ .string = "request-001" };
 | `prompts/list` | Request | List prompts |
 | `prompts/get`  | Request | Get a prompt |
 
-### Logging
+### Completion
 
-| Method             | Type    | Description   |
-| ------------------ | ------- | ------------- |
-| `logging/setLevel` | Request | Set log level |
+| Method                 | Type    | Description            |
+| ---------------------- | ------- | ---------------------- |
+| `completion/complete`  | Request | Argument completion    |
+
+### Tasks
+
+| Method          | Type    | Description         |
+| --------------- | ------- | ------------------- |
+| `tasks/get`     | Request | Get task status     |
+| `tasks/result`  | Request | Get task result     |
+| `tasks/list`    | Request | List all tasks      |
+| `tasks/cancel`  | Request | Cancel a task       |
 
 ## Complete Example
 
@@ -209,7 +222,7 @@ pub fn handleMessage(allocator: std.mem.Allocator, json: []const u8) ![]const u8
     // Handle based on message type
     switch (message) {
         .request => |req| {
-            if (std.mem.eql(u8, req.method, "ping")) {
+            if (std.mem.eql(u8, req.method, "server/discover")) {
                 const resp = mcp.jsonrpc.createResponse(req.id, null);
                 return try mcp.jsonrpc.serializeMessage(allocator, .{ .response = resp });
             }

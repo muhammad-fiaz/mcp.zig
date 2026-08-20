@@ -1,3 +1,9 @@
+---
+title: "Types Reference"
+description: "MCP type definitions — ContentBlock, Tool, Resource, Prompt, InputSchema, and all protocol types."
+keywords: [MCP types, ContentBlock, ToolResult, ResourceDefinition, Schema, RequestId, Implementation, capabilities]
+---
+
 # Types API
 
 Core type definitions used throughout mcp.zig.

@@ -1,3 +1,9 @@
+---
+title: "Protocol API Reference"
+description: "MCP protocol API reference — JSON-RPC message types, serialization, and protocol constants."
+keywords: [Protocol API, JSON-RPC, parseMessage, serializeMessage, ErrorCode, Transport, PROTOCOL_VERSION]
+---
+
 # Protocol API
 
 The protocol module provides JSON-RPC 2.0 and MCP protocol implementations.
@@ -7,7 +13,7 @@ The protocol module provides JSON-RPC 2.0 and MCP protocol implementations.
 ### `protocol.PROTOCOL_VERSION`
 
 ```zig
-pub const PROTOCOL_VERSION = "2025-11-25";
+pub const PROTOCOL_VERSION = "2026-07-28";
 pub const VERSION = PROTOCOL_VERSION; // Alias
 ```
 
@@ -17,7 +23,7 @@ The current MCP protocol version.
 
 ```zig
 pub const SUPPORTED_VERSIONS = [_][]const u8{
-    "2025-11-25",
+    "2026-07-28",
     "2025-06-18",
     "2025-03-26",
     "2024-11-05",

@@ -1,3 +1,9 @@
+---
+title: "Getting Started"
+description: "Get started with MCP.zig — install the library, create your first MCP server, and connect to AI applications in minutes."
+keywords: [getting started, MCP.zig, quickstart, first server, installation, setup]
+---
+
 # Getting Started
 
 Welcome to **mcp.zig** — the first comprehensive [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro) library for Zig!
@@ -19,7 +25,7 @@ In this guide, you'll learn how to:
 
 Before you begin, make sure you have:
 
-- [Zig 0.16.0](https://ziglang.org/download/) or later installed (use mcp.zig 0.0.5)
+- [Zig 0.16.0](https://ziglang.org/download/) or later installed (use mcp.zig 0.0.6)
 - Zig 0.15.x users should use mcp.zig 0.0.3
 - Basic familiarity with Zig programming language
 
@@ -32,7 +38,7 @@ Run the following command in your project directory:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Zig 0.16.x (recommended)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.5.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
 
 # Zig 0.15.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
@@ -66,9 +72,6 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
-    // Check for library updates in background (recommended)
-    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
-
     // Create a server
     var server: mcp.Server = .init(allocator, .{
         .name = "hello-server",
