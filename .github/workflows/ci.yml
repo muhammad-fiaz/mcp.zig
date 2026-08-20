@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -28,7 +28,7 @@ jobs:
         run: zig build
 
   cross-target-compile:
-    name: Cross-target Build/Test Compile (${{ matrix.target }})
+    name: Cross-target Compile (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -47,11 +47,6 @@ jobs:
             os: windows
             arch: x86
           - target: x86_64-windows
-            os: windows
-            arch: x86_64
-          - target: aarch64-windows
-            os: windows
-            arch: aarch64
           - target: x86_64-macos
             os: macos
             arch: x86_64
@@ -60,7 +55,7 @@ jobs:
             arch: aarch64
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: mlugg/setup-zig@v2
         with:

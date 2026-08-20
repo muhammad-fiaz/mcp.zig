@@ -13,8 +13,8 @@
     },
     .dependencies = .{
         .httpx = .{
-            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.1.7.tar.gz",
-            .hash = "httpx-0.1.7-8qj2elD8HAAdoSnPDuMrLlU2Yrixd9Ob7SNLD-KEqGBd",
+            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.1.8.tar.gz",
+            .hash = "httpx-0.1.8-8qj2evb8HADTFULyG5nHTNQGZgxXQE0lcz60SgNT_Ara",
         },
     },
 }
