@@ -84,36 +84,32 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&b.addRunArtifact(exe).step);
     }
 
-    const cross_targets = [_]struct { name: []const u8, query: std.Target.Query }{
-        .{ .name = "x86_64-linux", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux } },
-        .{ .name = "aarch64-linux", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux } },
-        .{ .name = "x86-linux", .query = .{ .cpu_arch = .x86, .os_tag = .linux } },
-        .{ .name = "x86_64-windows", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows } },
-        .{ .name = "aarch64-windows", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows } },
-        .{ .name = "x86-windows", .query = .{ .cpu_arch = .x86, .os_tag = .windows } },
-        .{ .name = "x86_64-macos", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos } },
-        .{ .name = "aarch64-macos", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos } },
-    };
-
-    const build_all_step = b.step("build-all-targets", "Build library for all supported targets");
-
-    inline for (cross_targets) |t| {
-        const target_cross = b.resolveTargetQuery(t.query);
-        const root_module_cross = b.createModule(.{
+    // Compile-only check for cross-target CI:
+    // `zig build test-compile -Dtarget=<triple>` compiles the unit tests and
+    // every example for the selected 32/64-bit target without executing
+    // anything, so it works for foreign targets that cannot run on the host.
+    const test_compile_step = b.step("test-compile", "Compile unit tests and examples for the target without running them");
+    const compile_tests = b.addTest(.{
+        .root_module = b.createModule(.{
             .root_source_file = b.path("src/mcp.zig"),
-            .target = target_cross,
+            .target = target,
             .optimize = optimize,
-        });
-        root_module_cross.addImport("httpx", httpx_module);
-        const lib_cross = b.addLibrary(.{
-            .name = "mcp-" ++ t.name,
-            .linkage = .static,
-            .root_module = root_module_cross,
-        });
+        }),
+    });
+    compile_tests.root_module.addImport("httpx", httpx_module);
+    test_compile_step.dependOn(&compile_tests.step);
 
-        const cross_step = b.step("build-" ++ t.name, "Build for " ++ t.name);
-        cross_step.dependOn(&lib_cross.step);
-
-        build_all_step.dependOn(&lib_cross.step);
+    inline for (examples) |ex| {
+        const exe_check = b.addExecutable(.{
+            .name = ex.name ++ "-check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(ex.src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        exe_check.root_module.addImport("mcp", mcp_module);
+        exe_check.root_module.addImport("httpx", httpx_module);
+        test_compile_step.dependOn(&exe_check.step);
     }
 }

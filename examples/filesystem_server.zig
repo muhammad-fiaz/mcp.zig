@@ -97,6 +97,12 @@ fn readFileHandler(_: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arg
     const path = mcp.tools.getString(args, "path") orelse
         return mcp.tools.errorResult(allocator, "Missing argument: path") catch return mcp.tools.ToolError.OutOfMemory;
 
+    if (!std.fs.path.isAbsolute(path)) {
+        const msg = std.fmt.allocPrint(allocator, "Path must be absolute: '{s}'", .{path}) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+    }
+
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Cannot open '{s}': {s}", .{ path, @errorName(err) }) catch
             return mcp.tools.ToolError.OutOfMemory;
@@ -118,6 +124,12 @@ fn readFileHandler(_: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arg
 fn listDirHandler(_: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const path = mcp.tools.getString(args, "path") orelse
         return mcp.tools.errorResult(allocator, "Missing argument: path") catch return mcp.tools.ToolError.OutOfMemory;
+
+    if (!std.fs.path.isAbsolute(path)) {
+        const msg = std.fmt.allocPrint(allocator, "Path must be absolute: '{s}'", .{path}) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+    }
 
     var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Cannot open dir '{s}': {s}", .{ path, @errorName(err) }) catch

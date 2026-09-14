@@ -33,26 +33,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86-linux
-            os: linux
-            arch: x86
-          - target: x86_64-linux
-            os: linux
-            arch: x86_64
-          - target: aarch64-linux
-            os: linux
-            arch: aarch64
-          - target: x86-windows
-            os: windows
-            arch: x86
-          - target: x86_64-windows
-          - target: x86_64-macos
-            os: macos
-            arch: x86_64
-          - target: aarch64-macos
-            os: macos
-            arch: aarch64
+        target:
+          - x86-linux
+          - x86_64-linux
+          - aarch64-linux
+          - x86-windows
+          - x86_64-windows
+          - x86_64-macos
+          - aarch64-macos
 
     steps:
       - uses: actions/checkout@v7

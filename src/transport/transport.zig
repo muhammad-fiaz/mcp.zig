@@ -98,13 +98,22 @@ pub const StdioTransport = struct {
 
         while (true) {
             var buf: [1]u8 = undefined;
-            const bytes_read = stdin.readStreaming(io, &.{&buf}) catch return Transport.ReceiveError.ReadError;
+            const bytes_read = stdin.readStreaming(io, &.{&buf}) catch |err| {
+                if (err == error.EndOfStream) {
+                    // Real EOF: process a trailing line without newline,
+                    // otherwise report end of stream.
+                    if (self.read_buffer.items.len == 0) {
+                        return Transport.ReceiveError.EndOfStream;
+                    }
+                    break;
+                }
+                return Transport.ReceiveError.ReadError;
+            };
 
             if (bytes_read == 0) {
-                if (self.read_buffer.items.len == 0) {
-                    return Transport.ReceiveError.EndOfStream;
-                }
-                break;
+                // May be spurious (can return fewer bytes than requested,
+                // including 0); retry rather than truncating the line.
+                continue;
             }
 
             const byte = buf[0];
