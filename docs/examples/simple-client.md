@@ -1,3 +1,9 @@
+---
+title: "Simple Client Example"
+description: "Connect to an MCP server with a simple client using STDIO transport."
+keywords: [simple client, MCP client example, client setup, roots, STDIO, capabilities]
+---
+
 # Simple Client Example
 
 A complete MCP client setup example using mcp.zig.
@@ -6,109 +12,79 @@ A complete MCP client setup example using mcp.zig.
 
 This example demonstrates how to:
 
-- create and initialize an MCP client
-- enable client-side MCP capabilities
-- configure roots for filesystem boundaries
-- prepare for stdio and HTTP server connections
+- Create and initialize an MCP client with `mcp.Client.init`
+- Enable client-side MCP capabilities (sampling, elicitation, tasks, roots)
+- Configure roots for filesystem boundaries
+- Connect to a server via STDIO
+- Discover server capabilities, list tools, resources, and prompts
 
 ## Full Source Code
 
 ```zig
-//! Simple MCP Client Example
-//!
-//! This example demonstrates how to create an MCP client
-//! that connects to a server.
-
 const std = @import("std");
 const mcp = @import("mcp");
 
 pub fn main(init: std.process.Init) void {
-    run(init.io, init.gpa, init.minimal.args) catch |err| {
-        mcp.reportError(err);
-    };
+    run(init.io, init.gpa, init.minimal.args) catch |err| mcp.reportError(err);
 }
 
 fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args) !void {
     var args = try std.process.Args.Iterator.initAllocator(process_args, allocator);
     defer args.deinit();
-    const exe_name = args.next() orelse "example-client";
-    const server_command = args.next();
 
-    if (server_command == null) {
-        std.debug.print("Usage: {s} <server-command>\n", .{exe_name});
-        std.debug.print("Example: {s} zig-out/bin/example-server\n", .{exe_name});
+    const exe = args.next() orelse "simple-client";
+    const server_cmd = args.next();
+
+    if (server_cmd == null) {
+        std.debug.print("Usage: {s} <server-command>\n", .{exe});
+        std.debug.print("  Example: {s} zig-out/bin/example-server\n", .{exe});
+        std.debug.print("\nThis client will:\n", .{});
+        std.debug.print("  1. Connect to the server via STDIO\n", .{});
+        std.debug.print("  2. Discover server capabilities\n", .{});
+        std.debug.print("  3. List available tools\n", .{});
+        std.debug.print("  4. Read available resources\n", .{});
+        std.debug.print("  5. List available prompts\n", .{});
         return;
     }
 
-    // Create client
-    var client: mcp.Client = .init(io, allocator, .{
+    var client = mcp.Client.init(io, allocator, .{
         .name = "simple-client",
         .version = "1.0.0",
         .title = "Simple MCP Client",
+        .description = "A simple client that demonstrates basic MCP operations",
     });
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    // Enable capabilities
     client.enableSamplingAdvanced(true, true);
     client.enableElicitation();
     client.enableTasksAdvanced(true, true);
     client.enableRoots(true);
 
-    // Add some roots
-    const docs_root = mcp.roots.fileRoot("file:///home/user/documents", "Documents");
-    const projects_root = mcp.roots.fileRoot("file:///home/user/projects", "Projects");
-    try client.addRoot(allocator, docs_root.uri, docs_root.name);
-    try client.addRoot(allocator, projects_root.uri, projects_root.name);
+    try client.addRoot("file:///tmp", "Temp");
 
-    std.debug.print("MCP Client initialized\n", .{});
-    std.debug.print("Client: {s} v{s}\n", .{ client.config.name, client.config.version });
-    std.debug.print("Roots configured: {d}\n", .{client.roots_list.items.len});
+    std.debug.print("Connecting to server: {s}...\n", .{server_cmd.?});
+    try client.connectStdio(server_cmd.?, &.{});
+    std.debug.print("Connected!\n", .{});
 
-    // In a real implementation, you would:
-    // 1. Connect to server: try client.connectStdio(io, allocator, server_command.?, &.{});
-    // 2. List tools: try client.listTools(io, allocator);
-    // 3. Call tools: try client.callTool(io, allocator, "greet", args);
-    // 4. Handle responses in an event loop
+    std.debug.print("\nDiscovering server capabilities...\n", .{});
+    try client.discover();
+    std.debug.print("Discovery complete!\n", .{});
 
-    std.debug.print("\nTo connect to a server, run:\n", .{});
-    std.debug.print("  echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{}}}}' | .\\zig-out\\bin\\example-server\n", .{});
+    std.debug.print("\nListing available tools...\n", .{});
+    try client.listTools();
+    std.debug.print("Tools listed!\n", .{});
+
+    std.debug.print("\nListing available resources...\n", .{});
+    try client.listResources();
+    std.debug.print("Resources listed!\n", .{});
+
+    std.debug.print("\nListing available prompts...\n", .{});
+    try client.listPrompts();
+    std.debug.print("Prompts listed!\n", .{});
+
+    client.disconnect();
+    std.debug.print("\nDisconnected from server.\n", .{});
 }
-```
-
-## Client-Side API Explained
-
-1. Client.init creates a client identity used during MCP initialize.
-2. enableSamplingAdvanced enables sampling with context and tool use support.
-3. enableElicitation enables user-input elicitation capability.
-4. enableTasksAdvanced enables task-related MCP methods (including request augmentation).
-5. enableRoots(true) enables roots capability and listChanged notification handling.
-6. addRoot registers filesystem roots that the server may request.
-
-## Connection APIs
-
-For stdio servers:
-
-```zig
-try client.connectStdio(io, allocator, "./zig-out/bin/example-server", &.{});
-```
-
-For HTTP servers:
-
-```zig
-try client.connectHttp(io, allocator, "http://localhost:8080");
-```
-
-## Expected Console Output
-
-When run with valid args, the program prints:
-
-```text
-MCP Client initialized
-Client: simple-client v1.0.0
-Roots configured: 2
-
-To connect to a server, run:
-    echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | .\zig-out\bin\example-server
 ```
 
 ## Build and Run
@@ -125,8 +101,54 @@ zig build
 .\zig-out\bin\example-client.exe .\zig-out\bin\example-server.exe
 ```
 
+## Client-Side API Explained
+
+1. **`Client.init`** creates a client identity with io and allocator stored internally
+2. **`enableSamplingAdvanced`** enables sampling with context and tool use support
+3. **`enableElicitation`** enables user-input elicitation capability
+4. **`enableTasksAdvanced`** enables task-related MCP methods (including request augmentation)
+5. **`enableRoots(true)`** enables roots capability and listChanged notification handling
+6. **`addRoot`** registers filesystem roots that the server may request
+
+## Connection APIs
+
+For STDIO servers:
+
+```zig
+try client.connectStdio("./zig-out/bin/example-server", &.{});
+```
+
+For HTTP servers:
+
+```zig
+try client.connectHttp("http://127.0.0.1:8080/mcp");
+```
+
+## Expected Console Output
+
+When run with a valid server command, the program prints:
+
+```text
+Connecting to server: ./zig-out/bin/example-server...
+Connected!
+
+Discovering server capabilities...
+Discovery complete!
+
+Listing available tools...
+Tools listed!
+
+Listing available resources...
+Resources listed!
+
+Listing available prompts...
+Prompts listed!
+
+Disconnected from server.
+```
+
 ## Next Steps
 
+- [Batch Client](/examples/batch-client)
 - [Client Guide](/guide/client)
 - [Transport Guide](/guide/transport)
-- [Simple Server](/examples/simple-server)

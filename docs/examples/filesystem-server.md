@@ -1,113 +1,232 @@
+---
+title: "Filesystem Server Example"
+description: "Build an MCP filesystem server for reading files and directories using MCP.zig."
+keywords: [filesystem server, file I/O, read_file, list_dir, resource template, file access]
+---
+
 # Filesystem Server
 
 The filesystem server demonstrates how to build a read-only MCP server that exposes local
 files through both tools and resources.
 
-**Source:** [`examples/filesystem_server.zig`](https://github.com/muhammad-fiaz/mcp.zig/blob/main/examples/filesystem_server.zig)
+## Overview
 
-## Run
+This example demonstrates:
 
-```bash
-zig build run-filesystem
-# or
-./zig-out/bin/filesystem-server
-```
+- Read files by absolute path with `read_file`
+- List directory contents with `list_dir`
+- Static resource for project README
+- Resource template for arbitrary file paths
 
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| `read_file` tool | Read the text content of any file by absolute path |
-| `list_dir` tool | List directory contents with kind indicators |
-| Static resource | `file:///README.md` — project readme |
-| Resource template | `file://{+path}` — access any local file as a resource |
-
-## Tools
-
-### `read_file`
-
-```json
-{
-  "name": "read_file",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "path": { "type": "string", "description": "Absolute path to the file" }
-    },
-    "required": ["path"]
-  }
-}
-```
-
-**Example call:**
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"/etc/hostname"}}}
-```
-
-### `list_dir`
-
-```json
-{
-  "name": "list_dir",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "path": { "type": "string", "description": "Absolute path to the directory" }
-    },
-    "required": ["path"]
-  }
-}
-```
-
-## Key Implementation Patterns
-
-### Real file I/O inside a tool handler
+## Full Source Code
 
 ```zig
-fn readFileHandler(
-    _: ?*anyopaque,
-    _: std.Io,
-    allocator: std.mem.Allocator,
-    args: ?std.json.Value,
-) mcp.tools.ToolError!mcp.tools.ToolResult {
+const std = @import("std");
+const mcp = @import("mcp");
+
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
+}
+
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var schema_arena = std.heap.ArenaAllocator.init(allocator);
+    defer schema_arena.deinit();
+    const sa = schema_arena.allocator();
+
+    const read_schema = try buildReadSchema(sa);
+    const list_schema = try buildListSchema(sa);
+
+    var server = mcp.Server.init(allocator, .{
+        .name = "filesystem-server",
+        .version = "1.0.0",
+        .title = "Filesystem Server",
+        .description = "Read files and list directories on the local filesystem",
+        .instructions =
+        \\Use read_file to read a text file at any absolute path.
+        \\Use list_dir to list the contents of a directory.
+        \\Access specific files as resources at file://<absolute-path>.
+        ,
+    });
+    defer server.deinit();
+
+    try server.addTool(.{
+        .name = "read_file",
+        .description = "Read the text content of a file at the given path",
+        .title = "Read File",
+        .inputSchema = read_schema,
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
+        .handler = readFileHandler,
+    });
+
+    try server.addTool(.{
+        .name = "list_dir",
+        .description = "List files and directories at the given path",
+        .title = "List Directory",
+        .inputSchema = list_schema,
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
+        .handler = listDirHandler,
+    });
+
+    try server.addResource(.{
+        .uri = "file:///README.md",
+        .name = "README",
+        .description = "Project readme file",
+        .mimeType = "text/markdown",
+        .handler = readmeHandler,
+    });
+
+    try server.addResourceTemplate(.{
+        .uriTemplate = "file://{+path}",
+        .name = "local-file",
+        .title = "Local File",
+        .description = "Access any local file by its absolute path",
+        .mimeType = "text/plain",
+    });
+
+    server.enableLogging();
+    try server.run(io, allocator, .stdio);
+}
+
+fn buildReadSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "path", "Absolute path to the file", true);
+    return b.toInputSchema(allocator);
+}
+
+fn buildListSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "path", "Absolute path to the directory", true);
+    return b.toInputSchema(allocator);
+}
+
+fn readFileHandler(_: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const path = mcp.tools.getString(args, "path") orelse
-        return mcp.tools.errorResult(allocator, "Missing argument: path")
-            catch return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, "Missing argument: path") catch return mcp.tools.ToolError.OutOfMemory;
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
-        const msg = std.fmt.allocPrint(
-            allocator, "Cannot open '{s}': {s}", .{ path, @errorName(err) }
-        ) catch return mcp.tools.ToolError.OutOfMemory;
-        return mcp.tools.errorResult(allocator, msg)
-            catch return mcp.tools.ToolError.OutOfMemory;
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Cannot open '{s}': {s}", .{ path, @errorName(err) }) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
     };
-    defer file.close();
+    defer file.close(io);
 
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
-        const msg = std.fmt.allocPrint(
-            allocator, "Cannot read '{s}': {s}", .{ path, @errorName(err) }
-        ) catch return mcp.tools.ToolError.OutOfMemory;
-        return mcp.tools.errorResult(allocator, msg)
-            catch return mcp.tools.ToolError.OutOfMemory;
+    var reader_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io, &reader_buf);
+    const content = file_reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024)) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Cannot read '{s}': {s}", .{ path, @errorName(err) }) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
     };
 
     return mcp.tools.textResult(allocator, content) catch return mcp.tools.ToolError.OutOfMemory;
 }
+
+fn listDirHandler(_: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const path = mcp.tools.getString(args, "path") orelse
+        return mcp.tools.errorResult(allocator, "Missing argument: path") catch return mcp.tools.ToolError.OutOfMemory;
+
+    var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Cannot open dir '{s}': {s}", .{ path, @errorName(err) }) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+    };
+    defer dir.close(io);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    var iter = dir.iterate();
+    while (iter.next(io) catch null) |entry| {
+        const kind: []const u8 = switch (entry.kind) {
+            .directory => "[dir]  ",
+            .file => "[file] ",
+            else => "[other]",
+        };
+        if (std.fmt.allocPrint(allocator, "{s} {s}\n", .{ kind, entry.name })) |str| {
+            buf.appendSlice(allocator, str) catch {};
+            allocator.free(str);
+        } else |_| {}
+    }
+
+    const listing = buf.toOwnedSlice(allocator) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, listing) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn readmeHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+    return .{
+        .uri = uri,
+        .mimeType = "text/markdown",
+        .text =
+        \\# Filesystem Server
+        \\
+        \\An MCP server providing read-only filesystem access.
+        \\
+        \\## Tools
+        \\- `read_file(path)` — read a text file
+        \\- `list_dir(path)` — list directory contents
+        ,
+    };
+}
 ```
 
-### Resource template for arbitrary file paths
+## Build and Run
 
-```zig
-try server.addResourceTemplate(.{
-    .uriTemplate = "file://{+path}",
-    .name = "local-file",
-    .title = "Local File",
-    .description = "Access any local file by its absolute path",
-    .mimeType = "text/plain",
-});
+```bash
+zig build
+./zig-out/bin/filesystem-server
+```
+
+PowerShell (Windows):
+
+```powershell
+zig build
+.\zig-out\bin\filesystem-server.exe
+```
+
+## Client Usage
+
+### Read a File
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"/etc/hostname"}}}' | ./zig-out/bin/filesystem-server
+```
+
+PowerShell:
+
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"C:\\Users\\user\\Downloads\\mcp.zig\\src\\version.zig"}}}' | .\zig-out\bin\filesystem-server.exe
+```
+
+### List a Directory
+
+```bash
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_dir","arguments":{"path":"/tmp"}}}' | ./zig-out/bin/filesystem-server
+```
+
+## Expected Output
+
+**read_file response:**
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"/// Current version of the MCP library\npub const version = \"0.0.6\";\n"}],"isError":false,"resultType":"complete","structuredContent":{"text":"/// Current version of the MCP library\npub const version = \"0.0.6\";\n"}}}
+```
+
+**list_dir response:**
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[dir]  src\n[dir]  docs\n[file] build.zig\n[file] README.md\n"}],"isError":false,"resultType":"complete","structuredContent":{"text":"[dir]  src\n[dir]  docs\n[file] build.zig\n[file] README.md\n"}}}
 ```
 
 ## Security Note
 
 This example grants full filesystem read access. In production, restrict paths by validating
-against allowed root directories before calling `std.fs.openFileAbsolute`.
+against allowed root directories before calling `std.Io.Dir.openFileAbsolute`.
+
+## Next Steps
+
+- [Notes Server](/examples/notes-server)
+- [Resources Guide](/guide/resources)

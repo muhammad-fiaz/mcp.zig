@@ -1,3 +1,9 @@
+---
+title: "Protocol API Reference"
+description: "MCP protocol API reference — JSON-RPC message types, serialization, and protocol constants."
+keywords: [Protocol API, JSON-RPC, parseMessage, serializeMessage, ErrorCode, Transport, PROTOCOL_VERSION]
+---
+
 # Protocol API
 
 The protocol module provides JSON-RPC 2.0 and MCP protocol implementations.
@@ -7,7 +13,7 @@ The protocol module provides JSON-RPC 2.0 and MCP protocol implementations.
 ### `protocol.PROTOCOL_VERSION`
 
 ```zig
-pub const PROTOCOL_VERSION = "2025-11-25";
+pub const PROTOCOL_VERSION = "2026-07-28";
 pub const VERSION = PROTOCOL_VERSION; // Alias
 ```
 
@@ -17,7 +23,7 @@ The current MCP protocol version.
 
 ```zig
 pub const SUPPORTED_VERSIONS = [_][]const u8{
-    "2025-11-25",
+    "2026-07-28",
     "2025-06-18",
     "2025-03-26",
     "2024-11-05",
@@ -258,10 +264,10 @@ pub const Transport = struct {
 
 ```zig
 pub const StdioTransport = struct {
-    pub fn init(allocator: std.mem.Allocator) StdioTransport;
-    pub fn deinit(self: *StdioTransport) void;
-    pub fn send(self: *StdioTransport, data: []const u8) Transport.SendError!void;
-    pub fn receive(self: *StdioTransport) Transport.ReceiveError!?[]const u8;
+    // Plain struct value, no init function: `var t: StdioTransport = .{};`
+    pub fn deinit(self: *StdioTransport, allocator: std.mem.Allocator) void;
+    pub fn send(self: *StdioTransport, io: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void;
+    pub fn receive(self: *StdioTransport, io: std.Io, allocator: std.mem.Allocator) Transport.ReceiveError!?[]const u8;
     pub fn transport(self: *StdioTransport) Transport;
 };
 ```
@@ -271,20 +277,24 @@ pub const StdioTransport = struct {
 ```zig
 pub const HttpTransport = struct {
     pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) !HttpTransport;
-    pub fn deinit(self: *HttpTransport) void;
-    pub fn send(self: *HttpTransport, message: []const u8) Transport.SendError!void;
-    pub fn receive(self: *HttpTransport) Transport.ReceiveError!?[]const u8;
-    pub fn setSessionId(self: *HttpTransport, id: []const u8) !void;
-    pub fn setAuthorizationToken(self: *HttpTransport, token: []const u8) !void;
+    pub fn deinit(self: *HttpTransport, allocator: std.mem.Allocator) void;
+    pub fn send(self: *HttpTransport, io: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void;
+    pub fn receive(self: *HttpTransport, io: std.Io, allocator: std.mem.Allocator) Transport.ReceiveError!?[]const u8;
+    pub fn setAuthorizationToken(self: *HttpTransport, allocator: std.mem.Allocator, token: []const u8) !void;
+    pub fn setClientInfo(self: *HttpTransport, allocator: std.mem.Allocator, name: []const u8, version: []const u8) !void;
     pub fn transport(self: *HttpTransport) Transport;
 };
 ```
 
 HTTP mode details:
 
-- Clients send JSON-RPC with `POST /` and `Content-Type: application/json`.
-- Server responses may include `MCP-Session-Id` for session continuity.
-- Request bodies should include a valid `Content-Length`.
+- Clients send JSON-RPC with `POST /mcp` and `Content-Type: application/json`.
+- Requests include `Accept: application/json, text/event-stream` and
+  `MCP-Protocol-Version: 2026-07-28`.
+- SSE is selected with `Accept: text/event-stream`; the server replies with
+  `Content-Type: text/event-stream` (`data: <json>\n\n`).
+- The protocol is stateless per-request; every request carries protocol version
+  and client info in `_meta`.
 
 ---
 

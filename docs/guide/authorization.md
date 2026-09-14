@@ -1,3 +1,9 @@
+---
+title: "Authorization"
+description: "MCP authorization with OAuth 2.1, Bearer tokens, and secure transport authentication."
+keywords: [authorization, OAuth 2.1, Bearer tokens, security, authentication, protected resources]
+---
+
 # Understanding Authorization in MCP
 
 Authorization in the Model Context Protocol (MCP) secures access to sensitive resources and operations exposed by MCP servers. If your MCP server handles user data or administrative actions, authorization ensures only permitted users can access its endpoints.
@@ -47,8 +53,9 @@ For MCP servers using the **STDIO transport**, you can use environment-based cre
 
 6.  **Making Authenticated Requests**: The client makes requests to the MCP server with the `Authorization` header.
     ```http
-    GET /mcp HTTP/1.1
+    POST /mcp HTTP/1.1
     Authorization: Bearer <token>
+    Content-Type: application/json
     ```
 
 The MCP server validates the token and processes the request.

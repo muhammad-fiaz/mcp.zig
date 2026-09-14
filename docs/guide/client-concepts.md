@@ -1,3 +1,9 @@
+---
+title: "Client Concepts"
+description: "Core MCP client concepts: connecting to servers, discovery, and invoking tools, resources, and prompts."
+keywords: [MCP client, elicitation, roots, sampling, client features, server connection]
+---
+
 # Understanding MCP Clients
 
 MCP clients are instantiated by host applications to communicate with MCP servers. Each client handles one direct communication with one server.

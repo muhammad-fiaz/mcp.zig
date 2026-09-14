@@ -1,46 +1,49 @@
+---
+title: "Protocol Version"
+description: "MCP protocol version support including 2026-07-28, 2025-11-25, and earlier versions with stateless per-request model."
+keywords: [MCP protocol version, 2026-07-28, 2025-11-25, stateless protocol, backward compatibility]
+---
+
 # Supported Protocol Version
 
 ::: info Official Documentation
-This library implements **Model Context Protocol (MCP) version 2025-11-25**.
+This library implements **Model Context Protocol (MCP) version 2026-07-28**.
 For the official MCP changelog and full specification, please visit [modelcontextprotocol.io](https://modelcontextprotocol.io/).
 :::
 
-## Key Changes in Protocol 2025-11-25
+## Key Changes in Protocol 2026-07-28
 
-The following changes were introduced in the MCP specification revision 2025-11-25:
+The following breaking changes were introduced in the MCP specification revision 2026-07-28:
 
-## Major changes
+## Breaking Changes
 
-- Enhance authorization server discovery with support for **OpenID Connect Discovery 1.0**.
-- Allow servers to expose **icons** as additional metadata for tools, resources, resource templates, and prompts.
-- Enhance authorization flows with **incremental scope consent** via `WWW-Authenticate`.
-- Provide guidance on **tool names**.
-- Update `ElicitResult` and `EnumSchema` to use a more standards-based approach and support titled, untitled, single-select, and multi-select enums.
-- Added support for **URL mode elicitation**.
-- Add tool calling support to **sampling** via `tools` and `toolChoice` parameters.
-- Add support for **OAuth Client ID Metadata Documents** as a recommended client registration mechanism.
-- Add experimental support for **tasks** to enable tracking durable requests with polling and deferred result retrieval.
+- **Stateless Protocol**: No more `initialize`/`notifications/initialized` handshake. Every request carries `io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities`, and optionally `io.modelcontextprotocol/clientInfo` in `_meta`.
+- **`server/discover`**: Now a mandatory RPC that servers MUST implement (replaces initialization). Returns `supportedVersions`, `capabilities`, `serverInfo`.
+- **MRTR (Multi Round-Trip Requests)**: Servers use `InputRequiredResult` with `resultType: "input_required"` and `inputRequests` field instead of server-initiated JSON-RPC requests (sampling, elicitation, roots). Client retries original request with `inputResponses`.
+- **`subscriptions/listen`**: Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint. Uses long-lived POST-response streams with notification filters.
+- **No protocol-level sessions** on Streamable HTTP. `Mcp-Session-Id` removed. Servers are stateless per-request.
+- **All results carry `resultType`**: `"complete"` or `"input_required"`.
+- **Deprecated features**: Roots, Sampling, Logging (still functional but new implementations should not adopt). HTTP+SSE transport deprecated. `ping`, `logging/setLevel`, `notifications/roots/list_changed` removed.
+- **New HTTP headers**: `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` (from tool `x-mcp-header` annotations).
+- **Caching**: `ttlMs` and `cacheScope` required on `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` results.
+- **Error codes restructured**: `-32020` (HeaderMismatch), `-32021` (MissingRequiredClientCapability), `-32022` (UnsupportedProtocolVersion).
+- **Streamable HTTP**: GET endpoint removed, SSE resumability via `Last-Event-ID` removed.
+- **OAuth 2.1** authorization framework with Protected Resource Metadata (RFC 9728).
+- **`_meta` key naming rules** with reverse DNS prefix convention.
+- **`icons` property** added to implementations, tools, prompts, resources.
+- **Tool names**: 1-128 chars, case-sensitive, alphanumeric + underscore/hyphen/dot.
+- **`outputSchema`** for structured tool results with `structuredContent` field.
+- **Completion**: `completion/complete` method for argument autocompletion.
+- **Caching utility** with TTL-based freshness and cache scope.
 
-## Minor changes
+## Backward Compatibility
 
-- Clarify that servers using stdio transport may use **stderr** for all types of logging, not just error messages.
-- Add optional `description` field to `Implementation` interface to align with MCP registry `server.json` format and provide human-readable context during initialization.
-- Clarify that servers must respond with `HTTP 403 Forbidden` for invalid Origin headers in Streamable HTTP transport.
-- Updated the **Security Best Practices** guidance.
-- Clarify that input validation errors should be returned as Tool Execution Errors rather than Protocol Errors to enable model self-correction.
-- Support polling SSE streams by allowing servers to disconnect at will.
-- Clarify GET streams support polling, resumption always via GET regardless of stream origin, event IDs should encode stream identity, disconnection includes server-initiated closure.
-- Align OAuth 2.0 Protected Resource Metadata discovery with RFC 9728, making `WWW-Authenticate` header optional with fallback to `.well-known` endpoint.
-- Add support for default values in all primitive types (string, number, enum) for elicitation schemas.
-- Establish **JSON Schema 2020-12** as the default dialect for MCP schema definitions.
+This library maintains backward compatibility with older protocol versions:
 
-## Other schema changes
-
-- Decouple request payloads from RPC method definitions into standalone parameter schemas.
-
-## Governance and process updates
-
-- Formalize Model Context Protocol governance structure.
-- Establish shared communication practices and guidelines for the MCP community.
-- Formalize Working Groups and Interest Groups in MCP governance.
-- Establish SDK tiering system with clear requirements for feature support and maintenance commitments.
+| Version    | Status        |
+| ---------- | ------------- |
+| 2026-07-28 | Supported  |
+| 2025-11-25 | Compatible |
+| 2025-06-18 | Compatible |
+| 2025-03-26 | Compatible |
+| 2024-11-05 | Compatible |

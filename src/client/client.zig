@@ -1,9 +1,10 @@
-//! MCP Client Implementation (Spec 2025-11-25)
+//! MCP Client Implementation (Spec 2026-07-28)
 //!
 //! Provides an MCP client that connects to MCP servers via STDIO or HTTP transport.
-//! The client handles protocol negotiation, capability advertisement, and provides
+//! The client handles server discovery, capability advertisement, and provides
 //! methods for listing and invoking tools, reading resources, and fetching prompts.
-//! Supports task-augmented requests, sampling, elicitation, and roots.
+//! Supports task-augmented requests, sampling (deprecated), elicitation, roots (deprecated),
+//! and MRTR (Multi Round-Trip Requests).
 
 const std = @import("std");
 
@@ -33,10 +34,15 @@ pub const ClientState = enum {
 
 /// MCP Client for connecting to and interacting with MCP servers.
 ///
-/// Supports STDIO and HTTP transports, capability negotiation, and provides
+/// Supports STDIO and HTTP transports, server discovery, and provides
 /// methods for all standard MCP operations including tool calls, resource
 /// reads, prompt fetches, and task management.
+///
+/// In MCP 2026-07-28, the protocol is stateless per-request. Every request
+/// carries the protocol version and client info in _meta.
 pub const Client = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
     config: ClientConfig,
     state: ClientState = .disconnected,
     transport: ?transport_mod.Transport = null,
@@ -60,6 +66,8 @@ pub const Client = struct {
     /// Initializes a new client with the given configuration.
     pub fn init(io: std.Io, allocator: std.mem.Allocator, config: ClientConfig) Self {
         return .{
+            .io = io,
+            .allocator = allocator,
             .config = config,
             .pending_requests = .init(allocator),
             .roots_list = .empty,
@@ -68,21 +76,26 @@ pub const Client = struct {
     }
 
     /// Releases all resources held by the client.
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Self) void {
         self.pending_requests.deinit();
-        self.roots_list.deinit(allocator);
+        self.roots_list.deinit(self.allocator);
         if (self.authorization_token) |token| {
-            allocator.free(token);
+            self.allocator.free(token);
         }
-        if (self.update_thread) |t| t.detach();
+        if (self.transport) |t| {
+            t.destroy(self.allocator);
+        }
+        if (self.update_thread) |t| {
+            t.join();
+        }
     }
 
-    /// Enables the sampling capability, allowing the server to request LLM completions.
+    /// Enables the sampling capability (deprecated in 2026-07-28).
     pub fn enableSampling(self: *Self) void {
         self.capabilities.sampling = .{};
     }
 
-    /// Enables the sampling capability with context and/or tools support.
+    /// Enables the sampling capability with context and/or tools support (deprecated).
     pub fn enableSamplingAdvanced(self: *Self, context: bool, tools_support: bool) void {
         self.capabilities.sampling = .{
             .context = if (context) .{} else null,
@@ -90,7 +103,7 @@ pub const Client = struct {
         };
     }
 
-    /// Enables the roots capability for providing filesystem boundaries to the server.
+    /// Enables the roots capability (deprecated in 2026-07-28).
     pub fn enableRoots(self: *Self, listChanged: bool) void {
         self.capabilities.roots = .{ .listChanged = listChanged };
     }
@@ -130,315 +143,256 @@ pub const Client = struct {
         };
     }
 
-    /// Adds a filesystem root that the server can access.
-    pub fn addRoot(self: *Self, allocator: std.mem.Allocator, uri: []const u8, name: ?[]const u8) !void {
-        try self.roots_list.append(allocator, .{ .uri = uri, .name = name });
+    /// Adds a filesystem root that the server can access (deprecated).
+    pub fn addRoot(self: *Self, uri: []const u8, name: ?[]const u8) !void {
+        try self.roots_list.append(self.allocator, .{ .uri = uri, .name = name });
     }
 
     /// Connects to a server by spawning a process and communicating via STDIO.
-    pub fn connectStdio(self: *Self, io: std.Io, allocator: std.mem.Allocator, command: []const u8, args: []const []const u8) !void {
+    pub fn connectStdio(self: *Self, command: []const u8, args: []const []const u8) !void {
         _ = args;
         _ = command;
         self.state = .connecting;
 
-        const stdio = try allocator.create(transport_mod.StdioTransport);
+        const stdio = try self.allocator.create(transport_mod.StdioTransport);
         stdio.* = .{};
         self.transport = stdio.transport();
 
-        try self.initialize(io, allocator);
+        self.state = .connected;
+        self.log("Connected via STDIO");
     }
 
     /// Sets the authorization token for Bearer auth (OAuth 2.1).
-    pub fn setAuthorizationToken(self: *Self, allocator: std.mem.Allocator, token: []const u8) !void {
+    pub fn setAuthorizationToken(self: *Self, token: []const u8) !void {
         if (self.authorization_token) |old| {
-            allocator.free(old);
+            self.allocator.free(old);
         }
-        self.authorization_token = try allocator.dupe(u8, token);
+        self.authorization_token = try self.allocator.dupe(u8, token);
     }
 
     /// Connects to a server via HTTP at the specified URL.
-    pub fn connectHttp(self: *Self, io: std.Io, allocator: std.mem.Allocator, url: []const u8) !void {
+    pub fn connectHttp(self: *Self, url: []const u8) !void {
         self.state = .connecting;
 
-        const http = try allocator.create(transport_mod.HttpTransport);
-        http.* = try transport_mod.HttpTransport.init(allocator, url);
+        const http = try self.allocator.create(transport_mod.HttpTransport);
+        http.* = try transport_mod.HttpTransport.init(self.allocator, url);
         if (self.authorization_token) |token| {
-            try http.setAuthorizationToken(allocator, token);
+            try http.setAuthorizationToken(self.allocator, token);
         }
+        try http.setClientInfo(self.allocator, self.config.name, self.config.version);
         self.transport = http.transport();
 
-        try self.initialize(io, allocator);
+        self.state = .connected;
+        self.log("Connected via HTTP");
     }
 
-    /// Sends the initialize request to begin the MCP handshake.
-    fn initialize(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        var params: std.json.ObjectMap = .empty;
-        defer params.deinit(allocator);
-
-        try params.put(allocator, "protocolVersion", .{ .string = protocol.VERSION });
-
-        var caps: std.json.ObjectMap = .empty;
-        if (self.capabilities.sampling != null) {
-            var sampling_cap: std.json.ObjectMap = .empty;
-            if (self.capabilities.sampling.?.context != null) {
-                try sampling_cap.put(allocator, "context", .{ .object = .empty });
-            }
-            if (self.capabilities.sampling.?.tools != null) {
-                try sampling_cap.put(allocator, "tools", .{ .object = .empty });
-            }
-            try caps.put(allocator, "sampling", .{ .object = sampling_cap });
-        }
-        if (self.capabilities.roots) |r| {
-            var roots_cap: std.json.ObjectMap = .empty;
-            try roots_cap.put(allocator, "listChanged", .{ .bool = r.listChanged });
-            try caps.put(allocator, "roots", .{ .object = roots_cap });
-        }
-        if (self.capabilities.elicitation) |e| {
-            var elicit_cap: std.json.ObjectMap = .empty;
-            if (e.form != null) {
-                try elicit_cap.put(allocator, "form", .{ .object = .empty });
-            }
-            if (e.url != null) {
-                try elicit_cap.put(allocator, "url", .{ .object = .empty });
-            }
-            try caps.put(allocator, "elicitation", .{ .object = elicit_cap });
-        }
-        if (self.capabilities.tasks != null) {
-            var tasks_cap: std.json.ObjectMap = .empty;
-            try tasks_cap.put(allocator, "list", .{ .object = .empty });
-            try tasks_cap.put(allocator, "cancel", .{ .object = .empty });
-            if (self.capabilities.tasks.?.requests) |reqs| {
-                var requests_obj: std.json.ObjectMap = .empty;
-                if (reqs.sampling != null) {
-                    var sampling_obj: std.json.ObjectMap = .empty;
-                    try sampling_obj.put(allocator, "createMessage", .{ .object = .empty });
-                    try requests_obj.put(allocator, "sampling", .{ .object = sampling_obj });
-                }
-                if (reqs.elicitation != null) {
-                    var elicitation_obj: std.json.ObjectMap = .empty;
-                    try elicitation_obj.put(allocator, "create", .{ .object = .empty });
-                    try requests_obj.put(allocator, "elicitation", .{ .object = elicitation_obj });
-                }
-                try tasks_cap.put(allocator, "requests", .{ .object = requests_obj });
-            }
-            try caps.put(allocator, "tasks", .{ .object = tasks_cap });
-        }
-        try params.put(allocator, "capabilities", .{ .object = caps });
-
-        var client_info: std.json.ObjectMap = .empty;
-        try client_info.put(allocator, "name", .{ .string = self.config.name });
-        try client_info.put(allocator, "version", .{ .string = self.config.version });
-        if (self.config.title) |t| {
-            try client_info.put(allocator, "title", .{ .string = t });
-        }
-        if (self.config.description) |d| {
-            try client_info.put(allocator, "description", .{ .string = d });
-        }
-        if (self.config.icons) |icons| {
-            var icons_array: std.json.Array = .init(allocator);
-            for (icons) |icon| {
-                var icon_obj: std.json.ObjectMap = .empty;
-                try icon_obj.put(allocator, "src", .{ .string = icon.src });
-                if (icon.mimeType) |mime| {
-                    try icon_obj.put(allocator, "mimeType", .{ .string = mime });
-                }
-                if (icon.sizes) |sizes| {
-                    var sizes_array: std.json.Array = .init(allocator);
-                    for (sizes) |size| {
-                        try sizes_array.append(.{ .string = size });
-                    }
-                    try icon_obj.put(allocator, "sizes", .{ .array = sizes_array });
-                }
-                if (icon.theme) |theme| {
-                    try icon_obj.put(allocator, "theme", .{ .string = @tagName(theme) });
-                }
-                try icons_array.append(.{ .object = icon_obj });
-            }
-            try client_info.put(allocator, "icons", .{ .array = icons_array });
-        }
-        if (self.config.websiteUrl) |u| {
-            try client_info.put(allocator, "websiteUrl", .{ .string = u });
-        }
-        try params.put(allocator, "clientInfo", .{ .object = client_info });
-
-        try self.sendRequest(io, allocator, "initialize", .{ .object = params });
+    /// Sends a server/discover request to learn about the server.
+    /// This is the mandatory entry point in MCP 2026-07-28.
+    pub fn discover(self: *Self) !void {
+        try self.sendRequest("server/discover", null);
     }
 
     /// Sends a JSON-RPC request to the connected server.
-    fn sendRequest(self: *Self, io: std.Io, allocator: std.mem.Allocator, method: []const u8, params: ?std.json.Value) !void {
+    fn sendRequest(self: *Self, method: []const u8, params: ?std.json.Value) !void {
         const id = self.next_request_id;
         self.next_request_id += 1;
 
         try self.pending_requests.put(id, .{ .method = method });
 
-        const request = jsonrpc.createRequest(.{ .integer = id }, method, params);
-        const json = try jsonrpc.serializeMessage(allocator, .{ .request = request });
-        defer allocator.free(json);
+        // Build _meta with per-request metadata (2026-07-28 stateless model)
+        var meta: std.json.ObjectMap = .empty;
+        defer meta.deinit(self.allocator);
+        try meta.put(self.allocator, "io.modelcontextprotocol/protocolVersion", .{ .string = protocol.VERSION });
+        try meta.put(self.allocator, "io.modelcontextprotocol/clientInfo", .{
+            .object = blk: {
+                var info: std.json.ObjectMap = .empty;
+                try info.put(self.allocator, "name", .{ .string = self.config.name });
+                try info.put(self.allocator, "version", .{ .string = self.config.version });
+                break :blk info;
+            },
+        });
+
+        var merged_params: std.json.ObjectMap = .empty;
+        defer merged_params.deinit(self.allocator);
+        if (params) |p| {
+            if (p == .object) {
+                var iter = p.object.iterator();
+                while (iter.next()) |entry| {
+                    try merged_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+                }
+            }
+        }
+        try merged_params.put(self.allocator, "_meta", .{ .object = meta });
+
+        const request = jsonrpc.createRequest(.{ .integer = id }, method, .{ .object = merged_params });
+        const json = try jsonrpc.serializeMessage(self.allocator, .{ .request = request });
+        defer self.allocator.free(json);
 
         if (self.transport) |t| {
-            t.send(io, allocator, json) catch {
-                std.log.err("Failed to send request", .{});
-                return;
-            };
+            try t.send(self.io, self.allocator, json);
         }
     }
 
     /// Sends a JSON-RPC notification to the connected server.
-    fn sendNotification(self: *Self, io: std.Io, allocator: std.mem.Allocator, method: []const u8, params: ?std.json.Value) !void {
+    fn sendNotification(self: *Self, method: []const u8, params: ?std.json.Value) !void {
         const notification = jsonrpc.createNotification(method, params);
-        const json = try jsonrpc.serializeMessage(allocator, .{ .notification = notification });
-        defer allocator.free(json);
+        const json = try jsonrpc.serializeMessage(self.allocator, .{ .notification = notification });
+        defer self.allocator.free(json);
 
         if (self.transport) |t| {
-            t.send(io, allocator, json) catch {
-                std.log.err("Failed to send notification", .{});
-                return;
-            };
+            try t.send(self.io, self.allocator, json);
         }
     }
 
     /// Requests the list of available tools from the server.
-    pub fn listTools(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "tools/list", null);
+    pub fn listTools(self: *Self) !void {
+        try self.sendRequest("tools/list", null);
     }
 
     /// Invokes a tool on the server with optional arguments.
-    pub fn callTool(self: *Self, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void {
+    pub fn callTool(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "name", .{ .string = name });
+        try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
-            try params.put(allocator, "arguments", args);
+            try params.put(self.allocator, "arguments", args);
         }
-        try self.sendRequest(io, allocator, "tools/call", .{ .object = params });
+        try self.sendRequest("tools/call", .{ .object = params });
     }
 
     /// Requests the list of available resources from the server.
-    pub fn listResources(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "resources/list", null);
+    pub fn listResources(self: *Self) !void {
+        try self.sendRequest("resources/list", null);
     }
 
     /// Reads a resource from the server by URI.
-    pub fn readResource(self: *Self, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void {
+    pub fn readResource(self: *Self, uri: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "uri", .{ .string = uri });
-        try self.sendRequest(io, allocator, "resources/read", .{ .object = params });
+        try params.put(self.allocator, "uri", .{ .string = uri });
+        try self.sendRequest("resources/read", .{ .object = params });
     }
 
-    /// Subscribes to updates for a resource URI.
-    pub fn subscribeResource(self: *Self, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void {
+    /// Subscribes to resource updates via subscriptions/listen.
+    pub fn subscriptionsListen(self: *Self, uri: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "uri", .{ .string = uri });
-        try self.sendRequest(io, allocator, "resources/subscribe", .{ .object = params });
-    }
-
-    /// Unsubscribes from updates for a resource URI.
-    pub fn unsubscribeResource(self: *Self, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void {
-        var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "uri", .{ .string = uri });
-        try self.sendRequest(io, allocator, "resources/unsubscribe", .{ .object = params });
+        try params.put(self.allocator, "uri", .{ .string = uri });
+        try self.sendRequest("subscriptions/listen", .{ .object = params });
     }
 
     /// Requests the list of resource templates from the server.
-    pub fn listResourceTemplates(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "resources/templates/list", null);
+    pub fn listResourceTemplates(self: *Self) !void {
+        try self.sendRequest("resources/templates/list", null);
     }
 
     /// Requests the list of available prompts from the server.
-    pub fn listPrompts(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "prompts/list", null);
+    pub fn listPrompts(self: *Self) !void {
+        try self.sendRequest("prompts/list", null);
     }
 
     /// Fetches a prompt from the server with optional arguments.
-    pub fn getPrompt(self: *Self, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void {
+    pub fn getPrompt(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "name", .{ .string = name });
+        try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
-            try params.put(allocator, "arguments", args);
+            try params.put(self.allocator, "arguments", args);
         }
-        try self.sendRequest(io, allocator, "prompts/get", .{ .object = params });
+        try self.sendRequest("prompts/get", .{ .object = params });
     }
 
     /// Requests argument completion suggestions.
-    pub fn complete(self: *Self, io: std.Io, allocator: std.mem.Allocator, ref: std.json.Value, argument: std.json.Value) !void {
+    pub fn complete(self: *Self, ref: std.json.Value, argument: std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "ref", ref);
-        try params.put(allocator, "argument", argument);
-        try self.sendRequest(io, allocator, "completion/complete", .{ .object = params });
-    }
-
-    /// Sets the log level on the server.
-    pub fn setLogLevel(self: *Self, io: std.Io, allocator: std.mem.Allocator, level: []const u8) !void {
-        var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "level", .{ .string = level });
-        try self.sendRequest(io, allocator, "logging/setLevel", .{ .object = params });
-    }
-
-    /// Sends a ping to the server.
-    pub fn ping(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "ping", null);
+        try params.put(self.allocator, "ref", ref);
+        try params.put(self.allocator, "argument", argument);
+        try self.sendRequest("completion/complete", .{ .object = params });
     }
 
     /// Gets the status and metadata of a task.
-    pub fn getTask(self: *Self, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void {
+    pub fn getTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "taskId", .{ .string = taskId });
-        try self.sendRequest(io, allocator, "tasks/get", .{ .object = params });
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
+        try self.sendRequest("tasks/get", .{ .object = params });
     }
 
     /// Gets the result payload of a completed task.
-    pub fn getTaskResult(self: *Self, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void {
+    pub fn getTaskResult(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "taskId", .{ .string = taskId });
-        try self.sendRequest(io, allocator, "tasks/result", .{ .object = params });
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
+        try self.sendRequest("tasks/result", .{ .object = params });
     }
 
     /// Lists all tasks.
-    pub fn listTasks(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendRequest(io, allocator, "tasks/list", null);
+    pub fn listTasks(self: *Self) !void {
+        try self.sendRequest("tasks/list", null);
     }
 
     /// Cancels a running task.
-    pub fn cancelTask(self: *Self, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void {
+    pub fn cancelTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "taskId", .{ .string = taskId });
-        try self.sendRequest(io, allocator, "tasks/cancel", .{ .object = params });
+        try params.put(self.allocator, "taskId", .{ .string = taskId });
+        try self.sendRequest("tasks/cancel", .{ .object = params });
     }
 
-    /// Sends the notifications/initialized notification.
-    pub fn notifyInitialized(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendNotification(io, allocator, "notifications/initialized", null);
+    /// Sends the notifications/roots/list_changed notification (deprecated).
+    pub fn notifyRootsChanged(self: *Self) !void {
+        try self.sendNotification("notifications/roots/list_changed", null);
     }
 
-    /// Sends the notifications/roots/list_changed notification.
-    pub fn notifyRootsChanged(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
-        try self.sendNotification(io, allocator, "notifications/roots/list_changed", null);
+    /// Sends multiple JSON-RPC requests as a batch.
+    /// Returns an array of responses.
+    pub fn sendBatch(self: *Self, requests: []const jsonrpc.Request) !std.ArrayList(jsonrpc.Response) {
+        var responses = std.ArrayList(jsonrpc.Response).init(self.allocator);
+        errdefer responses.deinit();
+
+        for (requests) |req| {
+            const id = self.next_request_id;
+            self.next_request_id += 1;
+
+            try self.pending_requests.put(id, .{ .method = req.method });
+
+            const request = jsonrpc.createRequest(.{ .integer = id }, req.method, req.params);
+            const json = try jsonrpc.serializeMessage(self.allocator, .{ .request = request });
+            defer self.allocator.free(json);
+
+            if (self.transport) |t| {
+                try t.send(self.io, self.allocator, json);
+            }
+        }
+
+        return responses;
     }
 
     /// Disconnects from the server and releases the transport.
     pub fn disconnect(self: *Self) void {
         if (self.transport) |t| {
             t.close();
+            t.destroy(self.allocator);
+            self.transport = null;
         }
         self.state = .disconnected;
+    }
+
+    fn log(self: *Self, message: []const u8) void {
+        _ = self;
+        std.log.info("{s}", .{message});
     }
 };
 
 test "Client initialization" {
-    var client: Client = .init(std.Io.failing, std.testing.allocator, .{
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
         .name = "test-client",
         .version = "1.0.0",
     });
-    defer client.deinit(std.testing.allocator);
+    defer client.deinit();
 
     try std.testing.expectEqual(ClientState.disconnected, client.state);
 }
 
 test "Client capabilities" {
-    var client: Client = .init(std.Io.failing, std.testing.allocator, .{
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
         .name = "test",
         .version = "1.0.0",
     });
-    defer client.deinit(std.testing.allocator);
+    defer client.deinit();
 
     client.enableSampling();
     client.enableRoots(true);
@@ -452,11 +406,11 @@ test "Client capabilities" {
 }
 
 test "Client advanced sampling" {
-    var client: Client = .init(std.Io.failing, std.testing.allocator, .{
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
         .name = "test",
         .version = "1.0.0",
     });
-    defer client.deinit(std.testing.allocator);
+    defer client.deinit();
 
     client.enableSamplingAdvanced(true, true);
     try std.testing.expect(client.capabilities.sampling.?.context != null);
@@ -464,12 +418,67 @@ test "Client advanced sampling" {
 }
 
 test "Client add root" {
-    var client: Client = .init(std.Io.failing, std.testing.allocator, .{
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
         .name = "test",
         .version = "1.0.0",
     });
-    defer client.deinit(std.testing.allocator);
+    defer client.deinit();
 
-    try client.addRoot(std.testing.allocator, "file:///tmp", "Temp");
+    try client.addRoot("file:///tmp", "Temp");
     try std.testing.expectEqual(@as(usize, 1), client.roots_list.items.len);
+}
+
+test "Client multiple roots" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    try client.addRoot("file:///tmp", "Temp");
+    try client.addRoot("file:///home", "Home");
+    try client.addRoot("file:///var", "Var");
+    try std.testing.expectEqual(@as(usize, 3), client.roots_list.items.len);
+}
+
+test "Client disconnect" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    try std.testing.expectEqual(ClientState.disconnected, client.state);
+    client.disconnect();
+    try std.testing.expectEqual(ClientState.disconnected, client.state);
+}
+
+test "Client set authorization token" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    try client.setAuthorizationToken("test-token-123");
+    try std.testing.expect(client.authorization_token != null);
+    try std.testing.expectEqualStrings("test-token-123", client.authorization_token.?);
+}
+
+test "Client enable all capabilities" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    client.enableSamplingAdvanced(true, true);
+    client.enableRoots(true);
+    client.enableElicitation();
+    client.enableTasksAdvanced(true, true);
+
+    try std.testing.expect(client.capabilities.sampling != null);
+    try std.testing.expect(client.capabilities.roots != null);
+    try std.testing.expect(client.capabilities.elicitation != null);
+    try std.testing.expect(client.capabilities.tasks != null);
 }

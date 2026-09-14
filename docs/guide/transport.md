@@ -1,3 +1,9 @@
+---
+title: "Transport"
+description: "MCP transport layer — STDIO, HTTP, and custom transports for client-server communication."
+keywords: [MCP transport, STDIO, HTTP, SSE, streamable HTTP, custom transport, communication]
+---
+
 # Transport
 
 Transports handle the communication layer between MCP clients and servers.
@@ -22,7 +28,7 @@ try server.run(io, allocator, .stdio);
 ### Client Side
 
 ```zig
-try client.connectStdio(io, allocator, "./my-server", &.{});
+try client.connectStdio("./my-server", &.{});
 ```
 
 ### How It Works
@@ -36,7 +42,7 @@ try client.connectStdio(io, allocator, "./my-server", &.{});
 Each message is a single line of JSON followed by a newline:
 
 ```
-{"jsonrpc":"2.0","method":"initialize","id":1,"params":{...}}\n
+{"jsonrpc":"2.0","method":"server/discover","id":1,"params":{...}}\n
 ```
 
 ## HTTP Transport
@@ -58,23 +64,25 @@ try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8
 ### Client Side
 
 ```zig
-try client.connectHttp(io, allocator, "http://localhost:8080");
+try client.connectHttp("http://127.0.0.1:8080/mcp");
 ```
 
 ### Endpoints
 
 | Endpoint | Method | Description       |
 | -------- | ------ | ----------------- |
-| `/`      | POST   | JSON-RPC endpoint |
+| `/mcp`   | POST   | JSON-RPC endpoint |
+
+HTTP serving is implemented with httpx.zig; the HTTP client uses the httpx client.
 
 ### HTTP Request Format
 
-Send JSON-RPC payloads as `application/json` with HTTP `POST`:
+Send JSON-RPC payloads as `application/json` with HTTP `POST` to `/mcp`:
 
 ```bash
-curl -X POST http://localhost:8080 \
+curl -X POST http://127.0.0.1:8080/mcp \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+    -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 The response body contains the JSON-RPC response.
@@ -90,10 +98,10 @@ If the client sends `Accept: text/event-stream`, the server responds with a
 single Server-Sent Events payload containing the JSON-RPC response.
 
 ```bash
-curl -X POST http://localhost:8080 \
+curl -X POST http://127.0.0.1:8080/mcp \
     -H "Content-Type: application/json" \
     -H "Accept: text/event-stream" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+    -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 ## Custom Transports
@@ -114,6 +122,10 @@ const MyTransport = struct {
         // Close the transport
     }
 
+    pub fn destroy(self: *MyTransport, allocator: std.mem.Allocator) void {
+        // Release transport resources
+    }
+
     pub fn transport(self: *MyTransport) mcp.transport.Transport {
         return .{
             .ptr = self,
@@ -121,6 +133,7 @@ const MyTransport = struct {
                 .send = send_wrapper,
                 .receive = receive_wrapper,
                 .close = close_wrapper,
+                .destroy = destroy_wrapper,
             },
         };
     }
@@ -132,7 +145,9 @@ const MyTransport = struct {
 ### STDIO Options
 
 ```zig
-const stdio_transport = mcp.transport.StdioTransport.init(allocator);
+// STDIO transport is a plain struct value (no init function):
+var stdio_transport: mcp.transport.StdioTransport = .{};
+defer stdio_transport.deinit(allocator);
 ```
 
 ### HTTP Options
@@ -140,7 +155,7 @@ const stdio_transport = mcp.transport.StdioTransport.init(allocator);
 ```zig
 const http_transport = mcp.transport.HttpTransport.init(
     allocator,
-    "http://localhost:8080",
+    "http://127.0.0.1:8080/mcp",
 );
 ```
 

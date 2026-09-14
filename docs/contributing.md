@@ -1,3 +1,9 @@
+---
+title: "Contributing"
+description: "Contribute to MCP.zig — report bugs, suggest features, improve documentation, and submit pull requests."
+keywords: [contributing, pull requests, bug reports, open source, development setup, code guidelines]
+---
+
 # Contributing
 
 Thank you for your interest in contributing to mcp.zig! We welcome contributions from the community.

@@ -1,3 +1,9 @@
+---
+title: "Schema Validation"
+description: "JSON Schema validation for MCP tool inputs — build schemas with InputSchemaBuilder for type-safe arguments."
+keywords: [JSON Schema, InputSchemaBuilder, schema validation, type-safe, tool arguments, constraints]
+---
+
 # Schema Validation
 
 mcp.zig provides utilities for working with JSON Schema, commonly used for tool input validation.

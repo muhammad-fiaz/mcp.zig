@@ -1,3 +1,9 @@
+---
+title: "What is MCP?"
+description: "Learn about the Model Context Protocol (MCP), an open standard for connecting AI applications to external systems like tools, resources, and prompts."
+keywords: [MCP, Model Context Protocol, AI integration, tools, resources, prompts, zig]
+---
+
 # What is MCP?
 
 **Model Context Protocol (MCP)** is an open-source standard for connecting AI applications to external systems.

@@ -1,3 +1,9 @@
+---
+title: "Resources"
+description: "Define and use MCP resources — read-only data sources that AI can access for context and information."
+keywords: [MCP resources, resource templates, URI, read-only data, file access, subscriptions]
+---
+
 # Resources
 
 Resources provide read access to data that AI can consume. They represent files, database records, API responses, or any other data source.

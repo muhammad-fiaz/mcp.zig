@@ -1,4 +1,4 @@
-//! MCP Prompts Module (Spec 2025-11-25)
+//! MCP Prompts Module (Spec 2026-07-28)
 //!
 //! Provides the Prompt primitive for MCP servers. Prompts are reusable templates
 //! that help structure interactions with LLMs, allowing servers to expose
@@ -91,9 +91,21 @@ pub const PromptBuilder = struct {
     }
 
     /// Builds and returns the final prompt.
+    /// The returned `arguments` slice borrows from the builder's internal list,
+    /// so the builder must outlive the prompt. Use `buildOwned` when the
+    /// builder will be deinited before the prompt is used.
     pub fn build(self: *PromptBuilder) Prompt {
         if (self.args_list.items.len > 0) {
             self.prompt.arguments = self.args_list.items;
+        }
+        return self.prompt;
+    }
+
+    /// Builds the prompt with an owned copy of the arguments list.
+    /// Safe to deinit the builder after calling this.
+    pub fn buildOwned(self: *PromptBuilder, allocator: std.mem.Allocator) !Prompt {
+        if (self.args_list.items.len > 0) {
+            self.prompt.arguments = try allocator.dupe(PromptArgument, self.args_list.items);
         }
         return self.prompt;
     }

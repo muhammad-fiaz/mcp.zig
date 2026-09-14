@@ -1,3 +1,9 @@
+---
+title: "Client API Reference"
+description: "Complete API reference for mcp.Client — connection, discovery, tools, resources, prompts, and capabilities."
+keywords: [Client API, mcp.Client, ClientConfig, connectStdio, connectHttp, discover, listTools, callTool]
+---
+
 # Client API
 
 The `Client` struct is used to connect to MCP servers and send MCP requests.
@@ -10,7 +16,7 @@ The `Client` struct is used to connect to MCP servers and send MCP requests.
 pub fn init(io: std.Io, allocator: std.mem.Allocator, config: ClientConfig) Client
 ```
 
-Create a new MCP client.
+Create a new MCP client. The `io` and `allocator` are stored internally and reused for all operations.
 
 **Config fields:**
 
@@ -30,7 +36,7 @@ var client: mcp.Client = .init(io, allocator, .{
     .name = "my-client",
     .version = "1.0.0",
 });
-defer client.deinit(allocator);
+defer client.deinit();
 ```
 
 ---
@@ -40,7 +46,7 @@ defer client.deinit(allocator);
 ### `Client.deinit`
 
 ```zig
-pub fn deinit(self: *Client, allocator: std.mem.Allocator) void
+pub fn deinit(self: *Client) void
 ```
 
 Clean up client resources and pending state.
@@ -65,7 +71,7 @@ pub fn enableTasksAdvanced(self: *Client, sampling: bool, elicitation: bool) voi
 ## Roots Management
 
 ```zig
-pub fn addRoot(self: *Client, allocator: std.mem.Allocator, uri: []const u8, name: ?[]const u8) !void
+pub fn addRoot(self: *Client, uri: []const u8, name: ?[]const u8) !void
 ```
 
 ---
@@ -73,42 +79,43 @@ pub fn addRoot(self: *Client, allocator: std.mem.Allocator, uri: []const u8, nam
 ## Connection Management
 
 ```zig
-pub fn connectStdio(self: *Client, io: std.Io, allocator: std.mem.Allocator, command: []const u8, args: []const []const u8) !void
-pub fn connectHttp(self: *Client, io: std.Io, allocator: std.mem.Allocator, url: []const u8) !void
-pub fn setAuthorizationToken(self: *Client, allocator: std.mem.Allocator, token: []const u8) !void
+pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
+pub fn connectHttp(self: *Client, url: []const u8) !void
+pub fn setAuthorizationToken(self: *Client, token: []const u8) !void
 pub fn disconnect(self: *Client) void
 ```
+
+`connectHttp` expects the full MCP endpoint URL, e.g.
+`http://127.0.0.1:8080/mcp` (server exposes `POST /mcp`).
 
 ---
 
 ## Request APIs
 
-All request APIs currently send protocol requests and return `!void`.
+All request APIs send JSON-RPC messages and return `!void`. The `io` and `allocator` are reused from initialization.
 
 ```zig
-pub fn listTools(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
-pub fn callTool(self: *Client, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void
+pub fn discover(self: *Client) !void
 
-pub fn listResources(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
-pub fn readResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
-pub fn subscribeResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
-pub fn unsubscribeResource(self: *Client, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
-pub fn listResourceTemplates(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn listTools(self: *Client) !void
+pub fn callTool(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
 
-pub fn listPrompts(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
-pub fn getPrompt(self: *Client, io: std.Io, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) !void
+pub fn listResources(self: *Client) !void
+pub fn readResource(self: *Client, uri: []const u8) !void
+pub fn subscriptionsListen(self: *Client, uri: []const u8) !void
+pub fn listResourceTemplates(self: *Client) !void
 
-pub fn complete(self: *Client, io: std.Io, allocator: std.mem.Allocator, ref: std.json.Value, argument: std.json.Value) !void
-pub fn setLogLevel(self: *Client, io: std.Io, allocator: std.mem.Allocator, level: []const u8) !void
-pub fn ping(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn listPrompts(self: *Client) !void
+pub fn getPrompt(self: *Client, name: []const u8, arguments: ?std.json.Value) !void
 
-pub fn getTask(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
-pub fn getTaskResult(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
-pub fn listTasks(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
-pub fn cancelTask(self: *Client, io: std.Io, allocator: std.mem.Allocator, taskId: []const u8) !void
+pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !void
 
-pub fn notifyInitialized(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
-pub fn notifyRootsChanged(self: *Client, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn getTask(self: *Client, taskId: []const u8) !void
+pub fn getTaskResult(self: *Client, taskId: []const u8) !void
+pub fn listTasks(self: *Client) !void
+pub fn cancelTask(self: *Client, taskId: []const u8) !void
+
+pub fn notifyRootsChanged(self: *Client) !void
 ```
 
 ---
@@ -128,12 +135,12 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "full-client",
         .version = "1.0.0",
     });
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.enableRoots(true);
     client.enableSamplingAdvanced(true, true);
 
-    try client.addRoot(allocator, "file:///home/user/docs", "Documentation");
-    try client.addRoot(allocator, "file:///home/user/code", "Source Code");
+    try client.addRoot("file:///home/user/docs", "Documentation");
+    try client.addRoot("file:///home/user/code", "Source Code");
 }
 ```

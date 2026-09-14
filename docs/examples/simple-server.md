@@ -1,3 +1,9 @@
+---
+title: "Simple Server Example"
+description: "Build a simple MCP server with tools, resources, and prompts using MCP.zig."
+keywords: [simple server, MCP server example, tools, resources, prompts, greet tool, echo tool]
+---
+
 # Simple Server Example
 
 A complete MCP server example with tools, resources, prompts, and logging.
@@ -6,23 +12,17 @@ A complete MCP server example with tools, resources, prompts, and logging.
 
 This example shows how to:
 
-- create an MCP server
-- register tools (greet, echo)
-- register a resource (info://server/about)
-- register a prompt (introduce)
-- run over stdio (and optionally HTTP)
+- Create an MCP server with `mcp.Server.init`
+- Register tools (`greet`, `echo`) with input schemas
+- Register a resource (`info://server/about`)
+- Register a prompt (`introduce`)
+- Run over STDIO transport
 
 ## Full Source Code
 
 ```zig
-//! Simple MCP Server Example
-//!
-//! This example demonstrates how to create a basic MCP server
-//! with tools, resources, and prompts.
-
 const std = @import("std");
 const mcp = @import("mcp");
-const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) void {
     run(init.io, init.gpa) catch |err| {
@@ -33,192 +33,214 @@ pub fn main(init: std.process.Init) void {
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     var schema_arena = std.heap.ArenaAllocator.init(allocator);
     defer schema_arena.deinit();
-    const schema_alloc = schema_arena.allocator();
+    const sa = schema_arena.allocator();
 
-    const greet_schema = try buildGreetSchema(schema_alloc);
-    const echo_schema = try buildEchoSchema(schema_alloc);
-    const text_output_schema = try common.buildTextResultSchema(schema_alloc, "text");
+    const greet_schema = try buildGreetSchema(sa);
+    const echo_schema = try buildEchoSchema(sa);
 
-    // Check for updates in background
-    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
-
-    // Create server
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
-        .description = "A simple example MCP server",
-        .instructions = "This server provides basic greeting and echo tools.",
-        .icons = common.defaultIcons(),
+        .description = "A minimal example MCP server demonstrating tools, resources, and prompts",
+        .instructions = "Use 'greet' to greet someone by name, or 'echo' to reflect a message back.",
     });
     defer server.deinit();
 
-    // Add a greeting tool
     try server.addTool(.{
         .name = "greet",
         .description = "Greet a user by name",
         .title = "Greeting Tool",
         .inputSchema = greet_schema,
-        .outputSchema = text_output_schema,
-        .icons = common.defaultIcons(),
-        .annotations = common.readOnlyToolAnnotations(),
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
         .handler = greetHandler,
     });
 
-    // Add an echo tool
     try server.addTool(.{
         .name = "echo",
-        .description = "Echo back the input message",
+        .description = "Echo back the input message unchanged",
         .title = "Echo Tool",
         .inputSchema = echo_schema,
-        .outputSchema = text_output_schema,
-        .icons = common.defaultIcons(),
-        .annotations = common.readOnlyToolAnnotations(),
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
         .handler = echoHandler,
     });
 
-    // Add a simple resource
     try server.addResource(.{
         .uri = "info://server/about",
         .name = "About",
         .description = "Information about this server",
         .mimeType = "text/plain",
-        .icons = common.defaultIcons(),
         .annotations = .{ .priority = 0.9 },
         .handler = aboutHandler,
     });
 
-    // Add a prompt
     try server.addPrompt(.{
         .name = "introduce",
-        .description = "Introduce the server capabilities",
-        .title = "Introduction Prompt",
+        .description = "Ask the model to introduce this server's capabilities",
+        .title = "Server Introduction",
         .arguments = &[_]mcp.prompts.PromptArgument{
-            .{ .name = "style", .description = "Introduction style (formal/casual)", .required = false },
+            .{ .name = "style", .description = "Tone: formal or casual", .required = false },
         },
-        .icons = common.defaultIcons(),
         .handler = introduceHandler,
     });
 
-    // Enable logging
     server.enableLogging();
-    server.enableTasks();
-
-    // Run the server
     try server.run(io, allocator, .stdio);
-
-    // To run with HTTP transport:
-    // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
 fn buildGreetSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
-    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
-    defer builder.deinit(allocator);
-
-    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
-    _ = try builder.addString(allocator, "name", "Name to greet", false);
-
-    return builder.toInputSchema(allocator);
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "name", "Name of the person to greet", false);
+    return b.toInputSchema(allocator);
 }
 
 fn buildEchoSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
-    var builder = mcp.schema.InputSchemaBuilder.init(allocator);
-    defer builder.deinit(allocator);
-
-    _ = builder.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
-    _ = try builder.addString(allocator, "message", "Message to echo", true);
-
-    return builder.toInputSchema(allocator);
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "message", "Message to echo back", true);
+    return b.toInputSchema(allocator);
 }
 
-fn greetHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.tools.ToolError!mcp.tools.ToolResult {
     const name = mcp.tools.getString(args, "name") orelse "World";
-
-    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to MCP.", .{name}) catch return mcp.tools.ToolError.OutOfMemory;
-
+    const greeting = std.fmt.allocPrint(allocator, "Hello, {s}! Welcome to mcp.zig.", .{name}) catch
+        return mcp.tools.ToolError.OutOfMemory;
     return mcp.tools.textResult(allocator, greeting) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn echoHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+fn echoHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.tools.ToolError!mcp.tools.ToolResult {
     const message = mcp.tools.getString(args, "message") orelse "No message provided";
-
-    // Demonstrate structured result
-    var obj: std.json.ObjectMap = .empty;
-    obj.put(allocator, "text", .{ .string = message }) catch {};
-
-    return mcp.tools.structuredResult(allocator, .{ .object = obj }) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, message) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn aboutHandler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+fn aboutHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    _: std.mem.Allocator,
+    uri: []const u8,
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
     return .{
         .uri = uri,
         .mimeType = "text/plain",
-        .text = "Simple MCP Server v1.0.0\n\nThis is an example MCP server built with mcp.zig.",
+        .text =
+        \\Simple MCP Server v1.0.0
+        \\
+        \\Built with mcp.zig — a native Zig implementation of the
+        \\Model Context Protocol (spec 2026-07-28).
+        \\
+        \\Tools:  greet, echo
+        \\Resources: info://server/about
+        \\Prompts: introduce
+        ,
     };
 }
 
-fn introduceHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
+fn introduceHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.prompts.PromptError![]const mcp.prompts.PromptMessage {
     const style = mcp.prompts.getStringArg(args, "style") orelse "casual";
-    _ = style;
-
-    const messages = allocator.alloc(mcp.prompts.PromptMessage, 1) catch return mcp.prompts.PromptError.OutOfMemory;
-    messages[0] = mcp.prompts.userMessage("Please introduce this MCP server and explain what tools it provides.");
+    const text = std.fmt.allocPrint(
+        allocator,
+        "Please introduce this MCP server in a {s} tone. Describe the 'greet' and 'echo' tools.",
+        .{style},
+    ) catch return mcp.prompts.PromptError.OutOfMemory;
+    const messages = allocator.alloc(mcp.prompts.PromptMessage, 1) catch
+        return mcp.prompts.PromptError.OutOfMemory;
+    messages[0] = mcp.prompts.userMessage(text);
     return messages;
 }
 ```
 
-## Manual Test Commands
-
-Initialize over stdio (POSIX shell):
+## Build and Run
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}' | ./zig-out/bin/example-server
+zig build
+./zig-out/bin/example-server
 ```
 
-Call greet tool over stdio (POSIX shell):
+PowerShell (Windows):
+
+```powershell
+zig build
+.\zig-out\bin\example-server.exe
+```
+
+## Client Usage
+
+### Discover Server
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' | ./zig-out/bin/example-server
+```
+
+PowerShell:
+
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"server/discover"}' | .\zig-out\bin\example-server.exe
+```
+
+### Call greet Tool
 
 ```bash
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Alice"}}}' | ./zig-out/bin/example-server
 ```
 
-PowerShell (Windows) STDIO test:
+PowerShell:
 
 ```powershell
-.\zig-out\bin\example-server.exe
+'{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Alice"}}}' | .\zig-out\bin\example-server.exe
 ```
 
-Then paste one JSON-RPC line and press Enter:
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
-```
-
-Stop the server with Ctrl+C when you are done.
-
-To test HTTP mode, switch `server.run(io, allocator, .stdio)` to HTTP in the source and then run:
+### Call echo Tool
 
 ```bash
-curl -X POST http://localhost:8080 \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"Hello World"}}}' | ./zig-out/bin/example-server
 ```
 
-PowerShell HTTP initialize (HTTP mode):
+### List Tools
 
-```powershell
-$body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
-Invoke-RestMethod -Method Post -Uri http://localhost:8080 -ContentType 'application/json' -Body $body
+```bash
+echo '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | ./zig-out/bin/example-server
 ```
 
-## Expected Output Pattern
+## Expected Output
 
-You should receive JSON-RPC responses containing:
+**Discover response:**
 
-- initialize result with server capabilities
-- tools/call result with text content from the selected tool
+```json
+{"jsonrpc":"2.0","id":1,"result":{"supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"serverInfo":{"name":"simple-server","version":"1.0.0","title":"Simple MCP Server","description":"A minimal example MCP server demonstrating tools, resources, and prompts"}}}
+```
+
+**greet("Alice") response:**
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Hello, Alice! Welcome to mcp.zig."}],"isError":false,"resultType":"complete","structuredContent":{"text":"Hello, Alice! Welcome to mcp.zig."}}}
+```
+
+**echo("Hello World") response:**
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Hello World"}],"isError":false,"resultType":"complete","structuredContent":{"text":"Hello World"}}}
+```
 
 ## Next Steps
 
+- [Simple Client](/examples/simple-client)
 - [Weather Server](/examples/weather-server)
 - [Calculator Server](/examples/calculator-server)
-- [Server Guide](/guide/server)

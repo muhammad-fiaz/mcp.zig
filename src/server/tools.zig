@@ -1,4 +1,4 @@
-//! MCP Tools Module (Spec 2025-11-25)
+//! MCP Tools Module (Spec 2026-07-28)
 //!
 //! Provides the Tool primitive for MCP servers. Tools are executable functions
 //! that AI applications can invoke to perform actions such as file operations,

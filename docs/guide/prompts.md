@@ -1,3 +1,9 @@
+---
+title: "Prompts"
+description: "Define and use MCP prompts — reusable templates for structuring AI interactions and workflows."
+keywords: [MCP prompts, prompt templates, prompt arguments, prompt messages, workflows]
+---
+
 # Prompts
 
 Prompts are reusable templates that help structure interactions with AI models.
@@ -102,13 +108,17 @@ defer builder.deinit(allocator);
 _ = try builder.addArgument(allocator, "input", "The input text", true);
 _ = try builder.addArgument(allocator, "style", "Output style", false);
 
-const prompt = builder
+const prompt = try builder
     .description("A helpful prompt")
     .handler(myHandler)
-    .build();
+    .buildOwned(allocator);
 
 try server.addPrompt(prompt);
 ```
+
+`build()` borrows the builder's argument list, so the builder must outlive the
+prompt. Use `buildOwned(allocator)` when the builder will be deinited before the
+prompt is used.
 
 ## Complete Example
 

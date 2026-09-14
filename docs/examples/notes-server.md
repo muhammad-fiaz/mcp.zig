@@ -1,35 +1,68 @@
+---
+title: "Notes Server Example"
+description: "Build an MCP notes server with create, list, and manage operations using MCP.zig."
+keywords: [notes server, stateful server, user_data, in-memory store, notifications, CRUD operations]
+---
+
 # Notes Server
 
 A stateful MCP server that stores text notes in memory. This example demonstrates the most
 important pattern for building stateful servers in mcp.zig: passing a **context struct**
 via `user_data` to share mutable state across all tool handlers.
 
-**Source:** [`examples/notes_server.zig`](https://github.com/muhammad-fiaz/mcp.zig/blob/main/examples/notes_server.zig)
+## Overview
 
-## Run
+This example demonstrates:
 
-```bash
-zig build run-notes
-# or
-./zig-out/bin/notes-server
-```
+- Stateful server with `user_data` context pattern
+- Create, read, delete, and list notes
+- Dynamic resource listing (one resource per note)
+- `notifications/resources/list_changed` on create/delete
+- Resource templates for individual notes
 
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| `create_note` tool | Create or overwrite a note by title |
-| `read_note` tool | Read a note's body by title |
-| `delete_note` tool | Delete a note by title |
-| `list_notes` tool | List all note titles |
-| `notes://index` resource | Dynamic resource listing all titles |
-| Resource template | `notes://{title}` for individual notes |
-| Notifications | `notifyResourcesChanged` on create/delete |
-
-## Key Implementation Pattern: `user_data` Context
+## Full Source Code
 
 ```zig
-// Define a context struct to hold shared mutable state
+const std = @import("std");
+const mcp = @import("mcp");
+
+const NoteStore = struct {
+    allocator: std.mem.Allocator,
+    notes: std.StringHashMap([]const u8),
+
+    fn init(allocator: std.mem.Allocator) NoteStore {
+        return .{ .allocator = allocator, .notes = .init(allocator) };
+    }
+
+    fn deinit(self: *NoteStore) void {
+        var it = self.notes.iterator();
+        while (it.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
+        self.notes.deinit();
+    }
+
+    fn add(self: *NoteStore, title: []const u8, body: []const u8) !void {
+        const k = try self.allocator.dupe(u8, title);
+        const v = try self.allocator.dupe(u8, body);
+        try self.notes.put(k, v);
+    }
+
+    fn get(self: *NoteStore, title: []const u8) ?[]const u8 {
+        return self.notes.get(title);
+    }
+
+    fn delete(self: *NoteStore, title: []const u8) bool {
+        if (self.notes.fetchRemove(title)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value);
+            return true;
+        }
+        return false;
+    }
+};
+
 const Ctx = struct {
     store: NoteStore,
     server: *mcp.Server,
@@ -37,54 +70,95 @@ const Ctx = struct {
     alloc: std.mem.Allocator,
 };
 
-// Initialize context before the server
-var ctx: Ctx = .{
-    .store = NoteStore.init(allocator),
-    .server = &server,
-    .io = io,
-    .alloc = allocator,
-};
-
-// Pass &ctx as user_data when registering tools
-try server.addTool(.{
-    .name = "create_note",
-    .user_data = &ctx,
-    .handler = createNoteHandler,
-    // ...
-});
-```
-
-Then in each handler, cast `user_data` back:
-
-```zig
-fn createNoteHandler(
-    user_data: ?*anyopaque,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    args: ?std.json.Value,
-) mcp.tools.ToolError!mcp.tools.ToolResult {
-    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
-    // ... use ctx.store ...
+pub fn main(init: std.process.Init) void {
+    run(init.io, init.gpa) catch |err| mcp.reportError(err);
 }
-```
 
-## List-Change Notifications
+fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    var sa_arena = std.heap.ArenaAllocator.init(allocator);
+    defer sa_arena.deinit();
+    const sa = sa_arena.allocator();
 
-When a note is created or deleted, the server notifies connected clients that the resource
-list has changed:
+    const create_schema = try buildCreateSchema(sa);
+    const read_schema = try buildReadSchema(sa);
+    const delete_schema = try buildReadSchema(sa);
 
-```zig
-ctx.server.notifyResourcesChanged(io, allocator) catch {};
-```
+    var server = mcp.Server.init(allocator, .{
+        .name = "notes-server",
+        .version = "1.0.0",
+        .title = "Note-Taking Server",
+        .description = "Create, read, and delete in-memory text notes",
+        .instructions = "Use create_note, read_note, delete_note, and list_notes.",
+    });
+    defer server.deinit();
 
-This triggers `notifications/resources/list_changed` on all subscribed clients,
-causing them to refresh their resource list.
+    var ctx: Ctx = .{
+        .store = NoteStore.init(allocator),
+        .server = &server,
+        .io = io,
+        .alloc = allocator,
+    };
+    defer ctx.store.deinit();
 
-## Tools Schema
+    try ctx.store.add("Welcome", "Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.6.");
+    try ctx.store.add("README", "This server stores notes in memory.\nAll notes are lost on restart.");
 
-All tools use `InputSchemaBuilder`:
+    try server.addTool(.{
+        .name = "create_note",
+        .description = "Create or overwrite a note with the given title and body",
+        .title = "Create Note",
+        .inputSchema = create_schema,
+        .annotations = .{ .destructiveHint = true },
+        .user_data = &ctx,
+        .handler = createNoteHandler,
+    });
+    try server.addTool(.{
+        .name = "read_note",
+        .description = "Read the body of a note by title",
+        .title = "Read Note",
+        .inputSchema = read_schema,
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
+        .user_data = &ctx,
+        .handler = readNoteHandler,
+    });
+    try server.addTool(.{
+        .name = "delete_note",
+        .description = "Delete a note by title",
+        .title = "Delete Note",
+        .inputSchema = delete_schema,
+        .annotations = .{ .destructiveHint = true },
+        .user_data = &ctx,
+        .handler = deleteNoteHandler,
+    });
+    try server.addTool(.{
+        .name = "list_notes",
+        .description = "List all note titles",
+        .title = "List Notes",
+        .annotations = .{ .readOnlyHint = true, .idempotentHint = true },
+        .user_data = &ctx,
+        .handler = listNotesHandler,
+    });
 
-```zig
+    try server.addResource(.{
+        .uri = "notes://index",
+        .name = "Notes Index",
+        .description = "List of all note titles",
+        .mimeType = "text/plain",
+        .user_data = &ctx,
+        .handler = notesIndexHandler,
+    });
+    try server.addResourceTemplate(.{
+        .uriTemplate = "notes://{title}",
+        .name = "note",
+        .title = "Note",
+        .description = "Access a note by its title via notes://<title>",
+        .mimeType = "text/plain",
+    });
+
+    server.enableLogging();
+    try server.run(io, allocator, .stdio);
+}
+
 fn buildCreateSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     var b = mcp.schema.InputSchemaBuilder.init(allocator);
     defer b.deinit(allocator);
@@ -93,7 +167,188 @@ fn buildCreateSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     _ = try b.addString(allocator, "body", "Note content (plain text)", true);
     return b.toInputSchema(allocator);
 }
+
+fn buildReadSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
+    var b = mcp.schema.InputSchemaBuilder.init(allocator);
+    defer b.deinit(allocator);
+    _ = b.setSchemaDialect("https://json-schema.org/draft/2020-12/schema");
+    _ = try b.addString(allocator, "title", "Note title", true);
+    return b.toInputSchema(allocator);
+}
+
+fn createNoteHandler(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+    const title = mcp.tools.getString(args, "title") orelse
+        return mcp.tools.errorResult(allocator, "Missing argument: title") catch return mcp.tools.ToolError.OutOfMemory;
+    const body = mcp.tools.getString(args, "body") orelse
+        return mcp.tools.errorResult(allocator, "Missing argument: body") catch return mcp.tools.ToolError.OutOfMemory;
+    ctx.store.add(title, body) catch return mcp.tools.ToolError.OutOfMemory;
+    ctx.server.notifyResourcesChanged(io, allocator) catch {};
+    const msg = std.fmt.allocPrint(allocator, "Note '{s}' created ({d} bytes)", .{ title, body.len }) catch
+        return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn readNoteHandler(user_data: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+    const title = mcp.tools.getString(args, "title") orelse
+        return mcp.tools.errorResult(allocator, "Missing argument: title") catch return mcp.tools.ToolError.OutOfMemory;
+    const body = ctx.store.get(title) orelse {
+        const msg = std.fmt.allocPrint(allocator, "Note not found: '{s}'", .{title}) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+    };
+    return mcp.tools.textResult(allocator, body) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn deleteNoteHandler(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+    const title = mcp.tools.getString(args, "title") orelse
+        return mcp.tools.errorResult(allocator, "Missing argument: title") catch return mcp.tools.ToolError.OutOfMemory;
+    if (!ctx.store.delete(title)) {
+        const msg = std.fmt.allocPrint(allocator, "Note not found: '{s}'", .{title}) catch
+            return mcp.tools.ToolError.OutOfMemory;
+        return mcp.tools.errorResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+    }
+    ctx.server.notifyResourcesChanged(io, allocator) catch {};
+    const msg = std.fmt.allocPrint(allocator, "Note '{s}' deleted", .{title}) catch
+        return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, msg) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn listNotesHandler(user_data: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    var it = ctx.store.notes.iterator();
+    while (it.next()) |e| {
+        if (std.fmt.allocPrint(allocator, "- {s}\n", .{e.key_ptr.*})) |str| {
+            buf.appendSlice(allocator, str) catch {};
+            allocator.free(str);
+        } else |_| {}
+    }
+    const list = buf.toOwnedSlice(allocator) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, list) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn notesIndexHandler(user_data: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, uri: []const u8) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    if (std.fmt.allocPrint(allocator, "Notes Index ({d} notes)\n\n", .{ctx.store.notes.count()})) |str| {
+        buf.appendSlice(allocator, str) catch {};
+        allocator.free(str);
+    } else |_| {}
+    var it = ctx.store.notes.iterator();
+    while (it.next()) |e| {
+        if (std.fmt.allocPrint(allocator, "- {s}\n", .{e.key_ptr.*})) |str| {
+            buf.appendSlice(allocator, str) catch {};
+            allocator.free(str);
+        } else |_| {}
+    }
+    const text = buf.toOwnedSlice(allocator) catch return mcp.resources.ResourceError.OutOfMemory;
+    return .{ .uri = uri, .mimeType = "text/plain", .text = text };
+}
 ```
+
+## Build and Run
+
+```bash
+zig build
+./zig-out/bin/notes-server
+```
+
+PowerShell (Windows):
+
+```powershell
+zig build
+.\zig-out\bin\notes-server.exe
+```
+
+## Client Usage
+
+### List Notes
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes"}}' | ./zig-out/bin/notes-server
+```
+
+### Create a Note
+
+```bash
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"Shopping","body":"Milk, eggs, bread"}}}' | ./zig-out/bin/notes-server
+```
+
+### Read a Note
+
+```bash
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_note","arguments":{"title":"Welcome"}}}' | ./zig-out/bin/notes-server
+```
+
+### Delete a Note
+
+```bash
+echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_note","arguments":{"title":"Shopping"}}}' | ./zig-out/bin/notes-server
+```
+
+PowerShell:
+
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes"}}' | .\zig-out\bin\notes-server.exe
+```
+
+## Expected Output
+
+**list_notes (initial — 2 seed notes):**
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"- Welcome\n- README\n"}],"isError":false,"resultType":"complete","structuredContent":{"text":"- Welcome\n- README\n"}}}
+```
+
+**create_note("Shopping"):**
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Note 'Shopping' created (19 bytes)"}],"isError":false,"resultType":"complete","structuredContent":{"text":"Note 'Shopping' created (19 bytes)"}}}
+```
+
+**read_note("Welcome"):**
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.6."}],"isError":false,"resultType":"complete","structuredContent":{"text":"Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.6."}}}
+```
+
+## Key Implementation Pattern: `user_data` Context
+
+```zig
+const Ctx = struct {
+    store: NoteStore,
+    server: *mcp.Server,
+    io: std.Io,
+    alloc: std.mem.Allocator,
+};
+
+var ctx: Ctx = .{ ... };
+
+try server.addTool(.{
+    .name = "create_note",
+    .user_data = &ctx,
+    .handler = createNoteHandler,
+    // ...
+});
+
+// In handler:
+const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
+```
+
+## List-Change Notifications
+
+When a note is created or deleted, the server notifies connected clients:
+
+```zig
+ctx.server.notifyResourcesChanged(io, allocator) catch {};
+```
+
+This triggers `notifications/resources/list_changed` on all subscribed clients.
 
 ## Claude Desktop Configuration
 
@@ -108,3 +363,8 @@ fn buildCreateSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
 ```
 
 Notes are in-memory and will be reset on restart.
+
+## Next Steps
+
+- [Filesystem Server](/examples/filesystem-server)
+- [Server Guide](/guide/server)

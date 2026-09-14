@@ -6,22 +6,34 @@
 //! This library provides both server and client implementations, enabling Zig developers
 //! to build MCP-compatible tools, resources, and prompts that integrate with AI applications.
 //!
+//! Supports MCP protocol version 2026-07-28 with:
+//! - Stateless per-request model (no initialize/initialized handshake)
+//! - server/discover as the mandatory entry point
+//! - MRTR (Multi Round-Trip Requests) via InputRequiredResult
+//! - subscriptions/listen for resource subscriptions
+//! - HTTP transport via httpx.zig
+//!
 //! ## Example
 //!
 //! ```zig
 //! const mcp = @import("mcp");
 //!
-//! pub fn main() !void {
-//!     var server = mcp.Server.init(.{
+//! pub fn main(init: std.process.Init) void {
+//!     run(init.io, init.gpa) catch |err| mcp.reportError(err);
+//! }
+//!
+//! fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+//!     var server: mcp.Server = .init(allocator, .{
 //!         .name = "my-server",
 //!         .version = "1.0.0",
 //!     });
+//!     defer server.deinit();
 //!     try server.addTool(.{
 //!         .name = "greet",
 //!         .description = "Greet a user",
 //!         .handler = greetHandler,
 //!     });
-//!     try server.run(.stdio);
+//!     try server.run(io, allocator, .stdio);
 //! }
 //! ```
 
@@ -85,11 +97,28 @@ pub const elicitation = @import("client/elicitation.zig");
 pub const roots = @import("client/roots.zig");
 pub const sampling = @import("client/sampling.zig");
 
+// MRTR types (2026-07-28)
+pub const InputRequest = @import("protocol/types.zig").InputRequest;
+pub const InputResponse = @import("protocol/types.zig").InputResponse;
+pub const ResultType = @import("protocol/types.zig").ResultType;
+pub const SubscriptionFilter = @import("protocol/types.zig").SubscriptionFilter;
+pub const CacheScope = @import("protocol/types.zig").CacheScope;
+
+// Protocol types
+pub const DiscoverResult = @import("protocol/protocol.zig").DiscoverResult;
+
 // Utilities
 pub const utils = @import("utils/mod.zig");
 pub const errors = @import("utils/errors.zig");
 pub const logging = @import("utils/logging.zig");
 pub const progress = @import("utils/progress.zig");
+pub const middleware = @import("utils/middleware.zig");
+
+// Convenience re-exports for middleware
+pub const RateLimiter = middleware.RateLimiter;
+pub const RequestValidator = middleware.RequestValidator;
+pub const BatchRequest = middleware.BatchRequest;
+pub const LoggingContext = middleware.LoggingContext;
 
 test {
     std.testing.refAllDecls(@This());

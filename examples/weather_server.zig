@@ -17,7 +17,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const alerts_schema = try buildAlertsSchema(sa);
     const forecast_schema = try buildForecastSchema(sa);
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "weather-server",
         .version = "1.0.0",
         .title = "Weather Server",

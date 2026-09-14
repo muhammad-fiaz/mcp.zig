@@ -1,4 +1,4 @@
-//! MCP Roots Module (Spec 2025-11-25)
+//! MCP Roots Module (Spec 2026-07-28, deprecated but functional)
 //!
 //! Provides types and utilities for filesystem roots. Roots define the
 //! boundaries within which a server may operate on the client's filesystem,

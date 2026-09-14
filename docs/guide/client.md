@@ -1,3 +1,9 @@
+---
+title: "Client API"
+description: "MCP Client API reference — connect to servers, discover capabilities, call tools, read resources, and fetch prompts."
+keywords: [MCP client, client API, connect, discover, tools, resources, prompts, capabilities]
+---
+
 # Client
 
 The `Client` allows you to connect to MCP servers and interact with their capabilities.
@@ -11,7 +17,7 @@ var client: mcp.Client = .init(io, allocator, .{
     .name = "my-client",
     .version = "1.0.0",
 });
-defer client.deinit(allocator);
+defer client.deinit();
 ```
 
 ## Configuration
@@ -26,18 +32,20 @@ defer client.deinit(allocator);
 ### STDIO Transport
 
 ```zig
-try client.connectStdio(io, allocator, "path/to/server", &.{});
+try client.connectStdio("path/to/server", &.{});
 ```
 
 ### HTTP Transport
 
 ```zig
-// Connect to localhost on port 8080
-try client.connectHttp(io, allocator, "http://localhost:8080");
+// Connect to 127.0.0.1 on port 8080 (MCP endpoint is POST /mcp)
+try client.connectHttp("http://127.0.0.1:8080/mcp");
 
 // Connect to a custom host and port
-try client.connectHttp(io, allocator, "http://192.168.1.50:9000");
+try client.connectHttp("http://192.168.1.50:9000/mcp");
 ```
+
+The HTTP client transport uses httpx.zig.
 
 ## Capabilities
 
@@ -58,7 +66,7 @@ client.enableSampling();
 ### List Available Tools
 
 ```zig
-try client.listTools(io, allocator);
+try client.listTools();
 ```
 
 ### Call a Tool
@@ -67,7 +75,7 @@ try client.listTools(io, allocator);
 var args: std.json.ObjectMap = .empty;
 try args.put(allocator, "name", .{ .string = "World" });
 
-try client.callTool(io, allocator, "greet", .{ .object = args });
+try client.callTool("greet", .{ .object = args });
 ```
 
 ## Using Resources
@@ -75,13 +83,13 @@ try client.callTool(io, allocator, "greet", .{ .object = args });
 ### List Resources
 
 ```zig
-try client.listResources(io, allocator);
+try client.listResources();
 ```
 
 ### Read a Resource
 
 ```zig
-try client.readResource(io, allocator, "file:///data.json");
+try client.readResource("file:///data.json");
 ```
 
 ## Using Prompts
@@ -89,7 +97,7 @@ try client.readResource(io, allocator, "file:///data.json");
 ### List Prompts
 
 ```zig
-try client.listPrompts(io, allocator);
+try client.listPrompts();
 ```
 
 ### Get a Prompt
@@ -98,7 +106,7 @@ try client.listPrompts(io, allocator);
 var args: std.json.ObjectMap = .empty;
 try args.put(allocator, "topic", .{ .string = "Zig programming" });
 
-try client.getPrompt(io, allocator, "summarize", .{ .object = args });
+try client.getPrompt("summarize", .{ .object = args });
 ```
 
 ## Handling Responses
@@ -107,11 +115,11 @@ All request APIs send JSON-RPC messages and return `!void`. To read responses,
 use the underlying transport and parse the incoming messages:
 
 ```zig
-try client.listTools(io, allocator);
+try client.listTools();
 
 if (client.transport) |t| {
-    if (try t.receive(io, allocator)) |json| {
-        const parsed = try mcp.jsonrpc.parseMessage(allocator, json);
+    if (try t.receive(client.io, client.allocator)) |json| {
+        const parsed = try mcp.jsonrpc.parseMessage(client.allocator, json);
         defer parsed.deinit();
 
         switch (parsed.message) {
@@ -132,8 +140,8 @@ if (client.transport) |t| {
 Roots define the file system areas the client has access to:
 
 ```zig
-try client.addRoot(allocator, "file:///home/user/project", "Project Root");
-try client.addRoot(allocator, "file:///home/user/data", "Data Directory");
+try client.addRoot("file:///home/user/project", "Project Root");
+try client.addRoot("file:///home/user/data", "Data Directory");
 ```
 
 ## Complete Example
@@ -155,24 +163,22 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .name = "demo-client",
         .version = "1.0.0",
     });
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Enable capabilities
     client.enableRoots(true);
 
     // Add roots
-    try client.addRoot(allocator, "file:///home/user/documents", "Documents");
+    try client.addRoot("file:///home/user/documents", "Documents");
 
     // Connect to a server
-    try client.connectStdio(io, allocator, "./my-server", &.{});
+    try client.connectStdio("./my-server", &.{});
 
     // List and call tools
-    const tools = try client.listTools(io, allocator);
-    std.debug.print("Available tools: {d}\n", .{tools.len});
+    try client.listTools();
 
     // Call a tool
-    const result = try client.callTool(io, allocator, "hello", null);
-    std.debug.print("Result: {any}\n", .{result});
+    try client.callTool("hello", null);
 }
 ```
 

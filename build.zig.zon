@@ -1,6 +1,6 @@
 .{
     .name = .mcp,
-    .version = "0.0.5",
+    .version = "0.0.6",
     .fingerprint = 0xa19bc83983058570,
     .minimum_zig_version = "0.16.0",
     .paths = .{
@@ -11,5 +11,10 @@
         "README.md",
         "LICENSE",
     },
-    .dependencies = .{},
+    .dependencies = .{
+        .httpx = .{
+            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.2.0.tar.gz",
+            .hash = "httpx-0.2.0-8qj2erwjBgFtCVJCJSM468fwL6eeClCwHhXs3Rs8-I4s",
+        },
+    },
 }

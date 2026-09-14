@@ -1,9 +1,10 @@
 import { defineConfig } from "vitepress";
 import llmstxt from "vitepress-plugin-llms";
+import mcpTheme from "./theme";
 
 // Site configuration
 export const SITE_URL = "https://muhammad-fiaz.github.io/mcp.zig";
-export const SITE_NAME = "mcp.zig";
+export const SITE_NAME = "MCP.zig";
 export const SITE_DESCRIPTION =
   "The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.";
 
@@ -20,7 +21,8 @@ export const KEYWORDS =
 
 export default defineConfig({
   lang: "en-US",
-  title: SITE_NAME,
+  title: "Model Context Protocol (MCP) Library for Zig",
+  titleTemplate: "%s | MCP.zig",
   description: SITE_DESCRIPTION,
   base: "/mcp.zig/",
   lastUpdated: true,
@@ -62,7 +64,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:image:alt",
-        content: "mcp.zig - Model Context Protocol for Zig",
+        content: "MCP.zig - Model Context Protocol Library for Zig",
       },
     ],
     ["meta", { property: "og:site_name", content: SITE_NAME }],
@@ -249,7 +251,7 @@ gtag('config', '${GA_ID}');`,
       author: authorSchema,
       publisher: {
         "@type": "Organization",
-        name: "mcp.zig",
+        name: "MCP.zig",
         url: SITE_URL,
         logo: {
           "@type": "ImageObject",
@@ -269,7 +271,7 @@ gtag('config', '${GA_ID}');`,
           priceCurrency: "USD",
         },
         downloadUrl: "https://github.com/muhammad-fiaz/mcp.zig",
-        softwareVersion: "0.0.5",
+        softwareVersion: "0.0.6",
         license: "https://opensource.org/licenses/MIT",
       });
     } else {
@@ -339,9 +341,11 @@ gtag('config', '${GA_ID}');`,
     ]);
   },
 
+  theme: mcpTheme,
+
   themeConfig: {
     logo: "/logo.svg",
-    siteTitle: "mcp.zig",
+    siteTitle: "MCP.zig",
 
     nav: [
       { text: "Home", link: "/" },
@@ -427,6 +431,12 @@ gtag('config', '${GA_ID}');`,
           { text: "Filesystem Server", link: "/examples/filesystem-server" },
           { text: "Notes Server", link: "/examples/notes-server" },
           { text: "HTTP Server", link: "/examples/http-server" },
+          { text: "Middleware Server", link: "/examples/middleware-server" },
+          { text: "Batch Client", link: "/examples/batch-client" },
+          { text: "Health Check", link: "/examples/health-check-example" },
+          { text: "Shutdown", link: "/examples/shutdown-example" },
+          { text: "Validator", link: "/examples/validator-example" },
+          { text: "Rate Limiter", link: "/examples/rate-limiter-example" },
         ],
       },
       {

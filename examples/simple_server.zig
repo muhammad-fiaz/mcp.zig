@@ -27,7 +27,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const greet_schema = try buildGreetSchema(sa);
     const echo_schema = try buildEchoSchema(sa);
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "simple-server",
         .version = "1.0.0",
         .title = "Simple MCP Server",
@@ -139,7 +139,7 @@ fn aboutHandler(
         \\Simple MCP Server v1.0.0
         \\
         \\Built with mcp.zig — a native Zig implementation of the
-        \\Model Context Protocol (spec 2025-11-25).
+        \\Model Context Protocol (spec 2026-07-28).
         \\
         \\Tools:  greet, echo
         \\Resources: info://server/about

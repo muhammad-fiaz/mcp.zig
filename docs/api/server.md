@@ -1,3 +1,9 @@
+---
+title: "Server API Reference"
+description: "Complete API reference for mcp.Server — initialization, configuration, tools, resources, prompts, and transport."
+keywords: [Server API, mcp.Server, ServerConfig, addTool, addResource, addPrompt, enableLogging, STDIO, HTTP]
+---
+
 # Server API
 
 `mcp.Server` is the core runtime for exposing tools, resources, prompts, and utility notifications.
@@ -33,9 +39,10 @@ Run options:
 | Option | Description |
 | --- | --- |
 | `.stdio` | Line-delimited JSON-RPC over stdin/stdout |
-| `.{ .http = .{ .host = "localhost", .port = 8080 } }` | HTTP listener with JSON-RPC POST on `/` |
+| `.{ .http = .{ .host = "127.0.0.1", .port = 8080 } }` | HTTP listener with JSON-RPC POST on `/mcp` |
 
-Note: HTTP mode accepts host names such as `localhost` and binds to loopback when appropriate.
+Note: HTTP mode accepts host names such as `127.0.0.1` and binds accordingly.
+It is implemented with httpx.zig.
 
 ## Registration
 

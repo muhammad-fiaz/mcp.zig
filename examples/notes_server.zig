@@ -69,7 +69,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     const read_schema = try buildReadSchema(sa);
     const delete_schema = try buildReadSchema(sa); // same shape: just a title field
 
-    var server: mcp.Server = .init(allocator, .{
+    var server = mcp.Server.init(allocator, .{
         .name = "notes-server",
         .version = "1.0.0",
         .title = "Note-Taking Server",
@@ -87,7 +87,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer ctx.store.deinit();
 
     // Seed some demo notes
-    try ctx.store.add("Welcome", "Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.5.");
+    try ctx.store.add("Welcome", "Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.6.");
     try ctx.store.add("README", "This server stores notes in memory.\nAll notes are lost on restart.");
 
     try server.addTool(.{

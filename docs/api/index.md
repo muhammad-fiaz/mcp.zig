@@ -1,3 +1,9 @@
+---
+title: "API Reference"
+description: "MCP.zig API reference — complete documentation for Server, Client, Protocol, and Types modules."
+keywords: [API reference, mcp.Server, mcp.Client, mcp.types, mcp.protocol, modules]
+---
+
 # API Reference
 
 This section documents the public API exported by mcp.zig.
@@ -30,8 +36,8 @@ const jsonrpc = mcp.jsonrpc;
 
 ## Versions
 
-- Library version: `0.0.5`
-- Protocol version: `2025-11-25`
+- Library version: `0.0.6`
+- Protocol version: `2026-07-28`
 
 ```zig
 const protocol_version = mcp.protocol.PROTOCOL_VERSION;
