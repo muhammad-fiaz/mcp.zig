@@ -1,6 +1,5 @@
 import { defineConfig } from "vitepress";
 import llmstxt from "vitepress-plugin-llms";
-import mcpTheme from "./theme";
 
 // Site configuration
 export const SITE_URL = "https://muhammad-fiaz.github.io/mcp.zig";
@@ -340,8 +339,6 @@ gtag('config', '${GA_ID}');`,
       }),
     ]);
   },
-
-  theme: mcpTheme,
 
   themeConfig: {
     logo: "/logo.svg",
