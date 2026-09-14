@@ -1,4 +1,4 @@
-//! MCP Type Definitions (Spec 2025-11-25)
+//! MCP Type Definitions (Spec 2026-07-28)
 //!
 //! Contains all type definitions used throughout the MCP protocol including
 //! capability structures, tool definitions, resources, prompts, content types,

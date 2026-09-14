@@ -85,6 +85,9 @@ pub fn setAuthorizationToken(self: *Client, token: []const u8) !void
 pub fn disconnect(self: *Client) void
 ```
 
+`connectHttp` expects the full MCP endpoint URL, e.g.
+`http://127.0.0.1:8080/mcp` (server exposes `POST /mcp`).
+
 ---
 
 ## Request APIs

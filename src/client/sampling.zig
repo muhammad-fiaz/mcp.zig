@@ -1,4 +1,4 @@
-//! MCP Sampling Module (Spec 2025-11-25)
+//! MCP Sampling Module (Spec 2026-07-28, deprecated but functional)
 //!
 //! Provides types and utilities for LLM sampling requests. Sampling allows
 //! servers to request language model completions from the client, enabling

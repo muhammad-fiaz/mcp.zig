@@ -115,6 +115,5 @@ pub fn build(b: *std.Build) void {
         cross_step.dependOn(&lib_cross.step);
 
         build_all_step.dependOn(&lib_cross.step);
-        b.getInstallStep().dependOn(&lib_cross.step);
     }
 }

@@ -38,12 +38,14 @@ try client.connectStdio("path/to/server", &.{});
 ### HTTP Transport
 
 ```zig
-// Connect to localhost on port 8080
-try client.connectHttp("http://localhost:8080");
+// Connect to 127.0.0.1 on port 8080 (MCP endpoint is POST /mcp)
+try client.connectHttp("http://127.0.0.1:8080/mcp");
 
 // Connect to a custom host and port
-try client.connectHttp("http://192.168.1.50:9000");
+try client.connectHttp("http://192.168.1.50:9000/mcp");
 ```
+
+The HTTP client transport uses httpx.zig.
 
 ## Capabilities
 

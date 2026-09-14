@@ -8,7 +8,7 @@
 //! - No initialize/initialized handshake (removed)
 //! - Every request carries protocol version and client info in _meta
 //! - server/discover is the mandatory entry point
-//! - Resources are served via HTTP POST + SSE (no GET endpoint)
+//! - Resources are served via HTTP POST /mcp + SSE (no GET endpoint)
 
 const std = @import("std");
 const httpx = @import("httpx");
@@ -245,48 +245,47 @@ pub const Server = struct {
     fn runHttp(self: *Self, io: std.Io, allocator: std.mem.Allocator, config: HttpRunConfig) !void {
         self.log(io, "Server listening on HTTP (httpx)");
 
-        var server = httpx.createServerWithConfig(allocator, .{
+        var server = try httpx.Server.init(allocator, io, .{
             .host = config.host,
             .port = config.port,
-            .max_body_size = max_http_body_size,
+            .maxBody = max_http_body_size,
+            .enableDocs = false,
         });
         defer server.deinit();
 
-        // Use a pre-route hook to inject the MCP server pointer into each request context.
-        const Hook = struct {
-            var mcp_ptr: ?*Self = null;
-            fn inject(ctx: *httpx.Context) anyerror!void {
-                if (mcp_ptr) |ptr| {
-                    try ctx.data.put("mcp_server", @ptrCast(ptr));
-                }
-            }
-        };
-        Hook.mcp_ptr = self;
-        try server.preRoute(Hook.inject);
+        // Pass the MCP server pointer via route user data.
+        try server.router.add(.POST, "/mcp", Self.handleHttpRequest, .{ .userData = self });
 
-        try server.any("/mcp", struct {
-            fn handler(ctx: *httpx.Context) anyerror!httpx.Response {
-                return handleHttpRequest(ctx);
-            }
-        }.handler);
-
-        try server.listen();
+        server.run();
     }
 
     /// Handle an incoming HTTP request on the /mcp endpoint.
     fn handleHttpRequest(ctx: *httpx.Context) anyerror!httpx.Response {
-        const server: *Self = @ptrCast(@alignCast(ctx.data.get("mcp_server") orelse return ctx.status(500).text("Internal server error")));
+        const mcp_server: *Self = @ptrCast(@alignCast(ctx.userData orelse return .{
+            .status = 500,
+            .body = "Internal server error",
+            .contentType = "text/plain; charset=utf-8",
+        }));
 
         // Only POST is allowed for MCP Streamable HTTP
-        if (ctx.request.method != .POST) {
-            ctx.setHeader("Allow", "POST") catch {};
-            return ctx.status(405).text("Method Not Allowed");
+        if (ctx.method != .POST) {
+            return .{
+                .status = 405,
+                .body = "Method Not Allowed",
+                .contentType = "text/plain; charset=utf-8",
+                .headers = &.{.{ .name = "Allow", .value = "POST" }},
+            };
         }
 
         // Read request body
-        const body = ctx.request.body orelse {
-            return ctx.status(400).text("Empty request body");
-        };
+        const body = ctx.body;
+        if (body.len == 0) {
+            return .{
+                .status = 400,
+                .body = "Empty request body",
+                .contentType = "text/plain; charset=utf-8",
+            };
+        }
 
         // Check for SSE preference
         const wants_sse = if (ctx.header("Accept")) |accept|
@@ -300,34 +299,55 @@ pub const Server = struct {
         };
         defer request_transport.deinit();
 
-        const previous_transport = server.transport;
-        server.transport = request_transport.transport();
-        defer server.transport = previous_transport;
+        const previous_transport = mcp_server.transport;
+        mcp_server.transport = request_transport.transport();
+        defer mcp_server.transport = previous_transport;
 
-        // Handle the JSON-RPC message
-        server.handleMessage(server.io orelse return ctx.status(500).text("Server not initialized"), ctx.allocator, body) catch {
+        // Handle the JSON-RPC message.
+        // NOTE: response bodies must be allocated with ctx.allocator (per-request
+        // arena, borrowed by the transport) — do NOT free before returning.
+        mcp_server.handleMessage(mcp_server.io orelse return .{
+            .status = 500,
+            .body = "Server not initialized",
+            .contentType = "text/plain; charset=utf-8",
+        }, ctx.allocator, body) catch {
             const error_response = jsonrpc.createParseError(.{ .string = "Internal server error" });
-            const json = jsonrpc.serializeMessage(ctx.allocator, .{ .error_response = error_response }) catch {
-                return ctx.status(500).text("Internal server error");
+            const err_json = jsonrpc.serializeMessage(ctx.allocator, .{ .error_response = error_response }) catch {
+                return .{
+                    .status = 500,
+                    .body = "Internal server error",
+                    .contentType = "text/plain; charset=utf-8",
+                };
             };
-            defer ctx.allocator.free(json);
-            try ctx.setHeader("Content-Type", "application/json");
-            return ctx.status(500).text(json);
+            return .{
+                .status = 500,
+                .body = err_json,
+                .contentType = "application/json",
+            };
         };
 
         if (request_transport.response_message) |response_json| {
             if (wants_sse) {
                 const sse_body = try std.fmt.allocPrint(ctx.allocator, "data: {s}\n\n", .{response_json});
-                defer ctx.allocator.free(sse_body);
-                return ctx.status(200).text(sse_body);
+                return .{
+                    .status = 200,
+                    .body = sse_body,
+                    .contentType = "text/event-stream",
+                };
             }
 
-            try ctx.setHeader("Content-Type", "application/json");
-            return ctx.status(200).text(response_json);
+            return .{
+                .status = 200,
+                .body = response_json,
+                .contentType = "application/json",
+            };
         }
 
         // No response (notification)
-        return ctx.status(202).text("");
+        return .{
+            .status = 202,
+            .body = "",
+        };
     }
 
     /// Run the server with a custom transport

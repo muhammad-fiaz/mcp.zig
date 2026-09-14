@@ -211,20 +211,32 @@ zig build run-advanced
 ```
 src/
 ├── mcp.zig              # Main entry point
+├── version.zig          # Library version
+├── report.zig           # Error reporting
 ├── protocol/
 │   ├── protocol.zig     # MCP protocol definitions
 │   ├── types.zig        # Type definitions
 │   ├── jsonrpc.zig      # JSON-RPC 2.0 implementation
 │   └── schema.zig       # JSON Schema utilities
 ├── transport/
-│   └── transport.zig    # STDIO and HTTP transports
+│   └── transport.zig    # STDIO and HTTP transports (httpx.zig)
 ├── server/
 │   ├── server.zig       # Server implementation
 │   ├── tools.zig        # Tool primitive
 │   ├── resources.zig    # Resource primitive
 │   └── prompts.zig      # Prompt primitive
-└── client/
-    └── client.zig       # Client implementation
+├── client/
+│   ├── client.zig       # Client implementation
+│   ├── elicitation.zig  # Elicitation support
+│   ├── roots.zig        # Roots support
+│   └── sampling.zig     # Sampling support
+└── utils/
+    ├── mod.zig          # Utility module index
+    ├── errors.zig       # Error definitions
+    ├── logging.zig      # Logging helpers
+    ├── middleware.zig   # Middleware, batching, validation
+    ├── network.zig      # Network helpers
+    └── progress.zig     # Progress reporting
 ```
 
 ## Server Features

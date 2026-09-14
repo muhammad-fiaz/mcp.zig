@@ -433,19 +433,19 @@ pub fn buildDiscoverResponse(
     };
 }
 
-/// Builds an initialize request message (backward compatibility).
+/// Builds an initialize request message (backward compatibility, deprecated).
 pub fn buildInitializeRequest(
     id: types.RequestId,
     params: InitializeParams,
 ) jsonrpc.Request {
     return jsonrpc.Request{
         .id = id,
-        .method = Method.initialize.toString(),
+        .method = "initialize",
         .params = serializeParams(params),
     };
 }
 
-/// Builds an initialize response message (backward compatibility).
+/// Builds an initialize response message (backward compatibility, deprecated).
 pub fn buildInitializeResponse(
     id: types.RequestId,
     result: InitializeResult,

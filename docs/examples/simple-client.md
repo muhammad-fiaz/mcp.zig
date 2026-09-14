@@ -121,7 +121,7 @@ try client.connectStdio("./zig-out/bin/example-server", &.{});
 For HTTP servers:
 
 ```zig
-try client.connectHttp("http://127.0.0.1:8080");
+try client.connectHttp("http://127.0.0.1:8080/mcp");
 ```
 
 ## Expected Console Output

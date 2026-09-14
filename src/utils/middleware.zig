@@ -144,9 +144,18 @@ pub const BatchRequest = struct {
     }
 
     pub fn deinit(self: *BatchRequest) void {
+        for (self.requests.items) |*item| {
+            if (item.params) |*p| {
+                if (p.* == .object) {
+                    p.object.deinit(self.allocator);
+                }
+            }
+        }
         self.requests.deinit(self.allocator);
     }
 
+    /// Adds a request. Ownership of `params`, when it is an allocated
+    /// `.object`, transfers to the batch and is released by `deinit`.
     pub fn addRequest(self: *BatchRequest, method: []const u8, params: ?std.json.Value) !void {
         try self.requests.append(self.allocator, .{ .method = method, .params = params });
     }
@@ -172,8 +181,9 @@ pub const BatchRequest = struct {
     }
 
     pub fn addToolsCall(self: *BatchRequest, name: []const u8) !void {
-        try self.addRequest("tools/call", null);
-        _ = name;
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.allocator, "name", .{ .string = name });
+        try self.addRequest("tools/call", .{ .object = params });
     }
 };
 

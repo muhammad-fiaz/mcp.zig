@@ -209,58 +209,63 @@ pub const HttpTransport = struct {
         if (self.authorization_token) |token| {
             allocator.free(token);
         }
+        if (self.client_info) |ci| {
+            allocator.free(ci.name);
+            allocator.free(ci.version);
+        }
     }
 
     /// Sends a JSON-RPC message via HTTP POST using httpx.zig client.
-    pub fn send(self: *Self, _: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void {
+    pub fn send(self: *Self, io: std.Io, allocator: std.mem.Allocator, message: []const u8) Transport.SendError!void {
         if (self.is_closed) return Transport.SendError.ConnectionClosed;
 
-        var client = httpx.createClientWithConfig(allocator, .{
-            .base_url = self.endpoint,
-            .verify_ssl = true,
-        });
+        var client = httpx.Client.init(allocator, io, .{});
         defer client.deinit();
 
         // Build headers
-        var headers: std.ArrayList([2][]const u8) = .empty;
+        var headers: std.ArrayList(httpx.Header) = .empty;
         defer headers.deinit(allocator);
 
-        try headers.append(allocator, .{ "Content-Type", "application/json" });
-        try headers.append(allocator, .{ "Accept", "application/json, text/event-stream" });
-        try headers.append(allocator, .{ "MCP-Protocol-Version", self.protocol_version });
+        try headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" });
+        try headers.append(allocator, .{ .name = "Accept", .value = "application/json, text/event-stream" });
+        try headers.append(allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version });
+
+        var bearer_buf: ?[]u8 = null;
+        defer if (bearer_buf) |b| allocator.free(b);
 
         if (self.authorization_token) |token| {
-            const bearer = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
-            defer allocator.free(bearer);
-            try headers.append(allocator, .{ "Authorization", bearer });
+            bearer_buf = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+            try headers.append(allocator, .{ .name = "Authorization", .value = bearer_buf.? });
         }
 
         // Per-request metadata with namespaced keys (2026-07-28)
+        var client_info_buf: ?[]u8 = null;
+        defer if (client_info_buf) |b| allocator.free(b);
+
         if (self.client_info) |ci| {
-            const client_info_json = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"version\":\"{s}\"}}", .{ ci.name, ci.version });
-            defer allocator.free(client_info_json);
-            try headers.append(allocator, .{ "io.modelcontextprotocol/clientInfo", client_info_json });
+            client_info_buf = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"version\":\"{s}\"}}", .{ ci.name, ci.version });
+            try headers.append(allocator, .{ .name = "io.modelcontextprotocol/clientInfo", .value = client_info_buf.? });
         }
 
-        const response = client.post(self.endpoint, .{
+        var response = client.post(self.endpoint, .{
             .body = message,
             .headers = headers.items,
         }) catch return Transport.SendError.WriteError;
         defer response.deinit();
 
         // Handle errors
-        if (response.status.code >= 400) {
+        if (response.status >= 400) {
             return Transport.SendError.WriteError;
         }
 
-        const body_text = response.text() orelse return;
+        const body_text: []const u8 = response.text();
+        if (body_text.len == 0) return;
 
         // Check for SSE content type
-        if (response.contentType()) |ctype| {
-            if (std.mem.indexOf(u8, ctype, "text/event-stream") != null) {
-                self.enqueueSseEvents(allocator, body_text) catch return Transport.SendError.OutOfMemory;
-                return;
-            }
+        const ctype = response.contentType();
+        if (std.mem.indexOf(u8, ctype, "text/event-stream") != null) {
+            self.enqueueSseEvents(allocator, body_text) catch return Transport.SendError.OutOfMemory;
+            return;
         }
 
         // Direct JSON response
@@ -296,6 +301,10 @@ pub const HttpTransport = struct {
 
     /// Sets client info for per-request metadata.
     pub fn setClientInfo(self: *Self, allocator: std.mem.Allocator, name: []const u8, version: []const u8) !void {
+        if (self.client_info) |old| {
+            allocator.free(old.name);
+            allocator.free(old.version);
+        }
         self.client_info = .{
             .name = try allocator.dupe(u8, name),
             .version = try allocator.dupe(u8, version),

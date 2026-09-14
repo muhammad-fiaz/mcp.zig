@@ -108,13 +108,17 @@ defer builder.deinit(allocator);
 _ = try builder.addArgument(allocator, "input", "The input text", true);
 _ = try builder.addArgument(allocator, "style", "Output style", false);
 
-const prompt = builder
+const prompt = try builder
     .description("A helpful prompt")
     .handler(myHandler)
-    .build();
+    .buildOwned(allocator);
 
 try server.addPrompt(prompt);
 ```
+
+`build()` borrows the builder's argument list, so the builder must outlive the
+prompt. Use `buildOwned(allocator)` when the builder will be deinited before the
+prompt is used.
 
 ## Complete Example
 

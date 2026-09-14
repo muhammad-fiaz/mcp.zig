@@ -70,7 +70,9 @@ You can also bind custom domains/hosts and ports:
 try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8443 } });
 ```
 
-The HTTP mode accepts JSON-RPC POST requests at the root path.
+The HTTP mode accepts JSON-RPC POST requests at `/mcp`.
+
+HTTP serving is implemented with httpx.zig.
 
 ## Registering Components
 
