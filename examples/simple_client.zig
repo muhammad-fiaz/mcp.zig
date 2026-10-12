@@ -3,7 +3,7 @@
 //! Demonstrates connecting to an MCP server, discovering capabilities,
 //! and listing available tools. This example shows the full client lifecycle.
 //!
-//! Run: zig build run-simple-client
+//! Run: zig build run-client
 
 const std = @import("std");
 const mcp = @import("mcp");

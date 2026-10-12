@@ -186,9 +186,11 @@ pub const ResourceContent = struct {
 ```zig
 pub const ResourceError = error{
     NotFound,
-    InvalidUri,
     AccessDenied,
+    ReadFailed,
+    InvalidUri,
     OutOfMemory,
+    Unknown,
 };
 ```
 

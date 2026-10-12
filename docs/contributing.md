@@ -126,7 +126,7 @@ test(client): add connection tests
 
 ### Prerequisites
 
-- Zig 0.15.2+
+- Zig 0.17.0+
 - Git
 - (Optional) Node.js 20+ for docs
 
@@ -134,8 +134,8 @@ test(client): add connection tests
 
 ```bash
 cd docs
-npm install
-npm run docs:dev
+bun install
+bun run docs:dev
 ```
 
 ### Project Structure

@@ -1,0 +1,23 @@
+{
+  "name": "MCP.zig — Model Context Protocol Library for Zig",
+  "short_name": "MCP.zig",
+  "description": "The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.",
+  "start_url": "/mcp.zig/",
+  "scope": "/mcp.zig/",
+  "id": "/mcp.zig/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#f7a41d",
+  "icons": [
+    {
+      "src": "/mcp.zig/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/mcp.zig/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

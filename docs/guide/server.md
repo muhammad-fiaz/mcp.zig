@@ -72,7 +72,7 @@ try server.run(io, allocator, .{ .http = .{ .host = "api.example.com", .port = 8
 
 The HTTP mode accepts JSON-RPC POST requests at `/mcp`.
 
-HTTP serving is implemented with httpx.zig.
+HTTP serving is implemented with httpx.zig 0.2.2 (Zig 0.17.0).
 
 ## Registering Components
 

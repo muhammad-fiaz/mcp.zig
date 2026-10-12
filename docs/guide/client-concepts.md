@@ -22,7 +22,7 @@ In addition to using context from servers, clients provide features _to_ servers
 
 Elicitation allows servers to pause operations and ask the user for input (e.g., via a UI form).
 
-- **Protocol**: `elicitation/requestInput`
+- **Protocol**: `elicitation/create` (with `notifications/elicitation/complete` on completion)
 - **Flow**: Server requests -> Client shows UI -> User inputs -> Client returns execution.
 
 ### Roots

@@ -4,7 +4,7 @@
 //! Shows how to ensure required fields are present before
 //! executing tool handlers.
 //!
-//! Run: zig build run-validator-example
+//! Run: zig build run-validator
 
 const std = @import("std");
 const mcp = @import("mcp");

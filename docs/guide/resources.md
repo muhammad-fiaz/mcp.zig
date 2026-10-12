@@ -42,18 +42,23 @@ fn resourceHandler(
 
 ### Example Handler
 
+```zig
 fn readmeHandler(
     _: ?*anyopaque,
+    _: std.Io,
+    _: std.mem.Allocator,
+    uri: []const u8,
+) mcp.resources.ResourceError!mcp.resources.ResourceContent {
+    return .{
+        .uri = uri,
+        .mimeType = "text/plain",
+        .text = "Hello, World!",
+    };
+}
+```
 
 Resource templates are metadata only. Your resource handler must still handle
 the concrete `uri` values that match the template.
-```zig
-return .{
-    .uri = uri,
-    .mimeType = "text/plain",
-    .text = "Hello, World!",
-};
-```
 
 ### Binary Content (Base64)
 
@@ -67,40 +72,15 @@ return .{
 
 ## Resource Templates
 
-Templates allow dynamic resource URIs with parameters:
+Templates advertise dynamic resource URIs with parameters. They carry no
+handler — a regular resource handler serves the concrete URIs:
 
 ```zig
 try server.addResourceTemplate(.{
     .uriTemplate = "file:///users/{userId}/profile",
     .name = "User Profile",
     .description = "Get a user's profile by ID",
-    .handler = profileHandler,
 });
-```
-
-### Template Handler
-
-```zig
-fn profileHandler(
-    _: ?*anyopaque,
-    _: std.Io,
-    allocator: std.mem.Allocator,
-    uri: []const u8,
-    params: std.StringHashMap([]const u8),
-) ResourceError!ResourceContent {
-    const user_id = params.get("userId") orelse {
-        return error.InvalidUri;
-    };
-
-    // Fetch user profile using user_id
-    const profile = try fetchProfile(allocator, user_id);
-
-    return .{
-        .uri = uri,
-        .mimeType = "application/json",
-        .text = profile,
-    };
-}
 ```
 
 ## Subscribing to Resources
@@ -109,7 +89,7 @@ Enable resource subscriptions for real-time updates:
 
 ```zig
 // Resource changed notification
-try server.notifyResourceUpdated("file:///data.json");
+try server.notifyResourceUpdated(io, allocator, "file:///data.json");
 ```
 
 ## Complete Example
@@ -140,10 +120,17 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .handler = configHandler,
     });
 
-    // Dynamic template
+    // Dynamic template (metadata only; recordHandler serves concrete URIs)
     try server.addResourceTemplate(.{
         .uriTemplate = "db:///records/{id}",
         .name = "Database Record",
+    });
+
+    // Handler for concrete record URIs such as "db:///records/42"
+    try server.addResource(.{
+        .uri = "db:///records/42",
+        .name = "Record 42",
+        .mimeType = "application/json",
         .handler = recordHandler,
     });
 
@@ -169,9 +156,9 @@ fn recordHandler(
     _: std.Io,
     allocator: std.mem.Allocator,
     uri: []const u8,
-    params: std.StringHashMap([]const u8),
 ) mcp.resources.ResourceError!mcp.resources.ResourceContent {
-    const id = params.get("id") orelse return error.InvalidUri;
+    // Parse the record id out of the concrete uri (e.g. "db:///records/42").
+    const id = std.fs.path.basename(uri);
 
     const content = try std.fmt.allocPrint(
         allocator,

@@ -44,7 +44,7 @@ While MCP has official SDKs for TypeScript, Python, and other languages, **Zig c
 | **Performance**    | ⚡ Native    | JIT            | Interpreted |
 | **Binary Size**    | ~100KB       | ~50MB+ (Node)  | ~100MB+     |
 | **Memory Safety**  | Compile-time | Runtime        | Runtime     |
-| **Dependencies**   | Zero         | Many (npm)     | Many (pip)  |
+| **Dependencies**   | Minimal (httpx.zig) | Many (npm)     | Many (pip)  |
 | **Cross-Platform** | ✅           | ✅             | ✅          |
 
 ## Core Concepts

@@ -4,7 +4,7 @@
 //! Shows how to properly shut down the server after
 //! processing the current request.
 //!
-//! Run: zig build run-shutdown-example
+//! Run: zig build run-shutdown
 
 const std = @import("std");
 const mcp = @import("mcp");

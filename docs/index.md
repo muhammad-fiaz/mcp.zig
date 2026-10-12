@@ -1,6 +1,7 @@
 ---
 layout: home
 title: Model Context Protocol (MCP) Library for Zig
+titleTemplate: false
 description: The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.
 keywords: zig, mcp, model context protocol, ai, llm, tools, resources, prompts, zig library, json-rpc, mcp server, mcp client, stdio transport, http transport, ai integration, ziglang
 
@@ -84,7 +85,10 @@ Run the following command to add mcp.zig to your project:
 # Latest development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.16.x (recommended)
+# Zig 0.17.x (recommended)
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
+
+# Zig 0.16.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
 
 # Zig 0.15.x
@@ -129,7 +133,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 | **Performance**    | ⚡ Native Zig speed        | Interpreted/JIT |
 | **Memory Safety**  | ✅ Compile-time guarantees | Runtime checks  |
 | **Binary Size**    | 📦 Minimal (~100KB)        | Large runtimes  |
-| **Dependencies**   | 🔗 Zero external deps      | Many packages   |
+| **Dependencies**   | 🔗 Minimal (httpx.zig)     | Many packages   |
 | **Cross-Platform** | 🌍 Linux, macOS, Windows   | Varies          |
 
 ## What is MCP?

@@ -1,0 +1,95 @@
+name: Bug Report
+description: Report a reproducible bug in mcp.zig
+title: "fix: "
+labels: ["bug"]
+assignees: ''
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in everything below so the issue can be reproduced quickly.
+        For **security vulnerabilities**, do NOT use this form — email **contact@muhammadfiaz.com** instead (see `SECURITY.md`).
+  - type: input
+    id: version
+    attributes:
+      label: mcp.zig version
+      description: Library version (see `src/version.zig`)
+      placeholder: "0.0.8"
+    validations:
+      required: true
+  - type: input
+    id: zig-version
+    attributes:
+      label: Zig version
+      description: Output of `zig version`
+      placeholder: "0.17.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: OS and architecture the bug was observed on
+      placeholder: "Windows 11 x86_64 / Ubuntu 24.04 x86_64 / macOS 15 arm64"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - Server
+        - Client
+        - Transport (STDIO)
+        - Transport (HTTP / httpx.zig)
+        - Protocol / JSON-RPC
+        - Tools / Resources / Prompts
+        - Middleware / Utils
+        - Example
+        - Documentation
+        - Build / CI
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What happened vs. what you expected
+      placeholder: "Calling tools/call with ... returns ... but I expected ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest complete code / commands / JSON-RPC exchange that reproduces the bug
+      placeholder: |
+        ```zig
+        // minimal main.zig or example invocation
+        ```
+        ```bash
+        zig build run-server
+        ```
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant output (redact secrets and tokens)
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I am on Zig 0.17.0+ with mcp.zig 0.0.8 (or stated otherwise above)
+          required: true
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I can provide a regression test if asked
+          required: false

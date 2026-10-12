@@ -438,3 +438,39 @@ test "HttpTransport initialization" {
 
     try std.testing.expectEqualStrings("http://localhost:3000", transport_impl.endpoint);
 }
+
+test "HttpTransport receive empty queue returns null" {
+    const allocator = std.testing.allocator;
+    var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
+    defer transport_impl.deinit(allocator);
+
+    const msg = try transport_impl.receive(std.Io.failing, allocator);
+    try std.testing.expect(msg == null);
+}
+
+test "HttpTransport auth token and client info ownership" {
+    const allocator = std.testing.allocator;
+    var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
+    defer transport_impl.deinit(allocator);
+
+    try transport_impl.setAuthorizationToken(allocator, "secret-token");
+    try std.testing.expectEqualStrings("secret-token", transport_impl.authorization_token.?);
+    try transport_impl.setAuthorizationToken(allocator, "rotated-token");
+    try std.testing.expectEqualStrings("rotated-token", transport_impl.authorization_token.?);
+
+    try transport_impl.setClientInfo(allocator, "test-client", "1.0.0");
+    try std.testing.expectEqualStrings("test-client", transport_impl.client_info.?.name);
+    try std.testing.expectEqualStrings("1.0.0", transport_impl.client_info.?.version);
+
+    try std.testing.expectEqualStrings("2026-07-28", transport_impl.protocol_version);
+}
+
+test "HttpTransport SSE data framing enqueues payloads" {
+    const allocator = std.testing.allocator;
+    var transport_impl = try HttpTransport.init(allocator, "http://localhost:3000");
+    defer transport_impl.deinit(allocator);
+
+    try transport_impl.enqueueSseEvents(allocator, "data: {\"a\":1}\n\n");
+    try std.testing.expectEqual(@as(usize, 1), transport_impl.pending_responses.items.len);
+    try std.testing.expectEqualStrings("{\"a\":1}", transport_impl.pending_responses.items[0]);
+}

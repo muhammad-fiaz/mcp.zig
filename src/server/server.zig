@@ -1221,7 +1221,7 @@ pub const Server = struct {
 
     /// Send a log message notification
     pub fn sendLogMessage(self: *Self, io: anytype, allocator: std.mem.Allocator, level: protocol.LogLevel, message: []const u8) !void {
-        if (@intFromEnum(level) < @intFromEnum(self.log_level)) return;
+        if (@backingInt(level) < @backingInt(self.log_level)) return;
 
         var params: std.json.ObjectMap = .empty;
         try params.put(allocator, "level", .{ .string = level.toString() });

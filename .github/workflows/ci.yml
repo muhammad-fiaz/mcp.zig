@@ -19,13 +19,16 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Run unit tests
         run: zig build test
 
       - name: Build library and examples
-        run: zig build
+        run: zig build run-all-examples
+
+      - name: Check formatting
+        run: zig fmt --check src examples build.zig
 
   cross-target-compile:
     name: Cross-target Compile (${{ matrix.target }})
@@ -47,7 +50,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Compile library and examples
         run: zig build -Dtarget=${{ matrix.target }}

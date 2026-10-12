@@ -41,7 +41,7 @@ Resources provide structured access to information (files, databases, APIs) as c
 
 - **Direct Resources**: Fixed URIs (e.g., `file:///path/doc.md`).
 - **Resource Templates**: Dynamic URIs (e.g., `travel://activities/{city}`).
-- **Operations**: list, read, subscribe.
+- **Operations**: list, read, template listing, plus `subscriptions/listen` for updates.
 
 ### Prompts
 

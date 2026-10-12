@@ -1,0 +1,33 @@
+name: Help Wanted / Question
+description: Ask for help using mcp.zig (not a bug or feature)
+title: "question: "
+labels: ["question"]
+assignees: ''
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For usage questions, check the [documentation](https://muhammad-fiaz.github.io/mcp.zig/) and [discussions](https://github.com/muhammad-fiaz/mcp.zig/discussions) first — your question may already be answered there.
+  - type: input
+    id: version
+    attributes:
+      label: Environment
+      description: mcp.zig version, Zig version (`zig version`), and OS
+      placeholder: "mcp.zig 0.0.8, Zig 0.17.0, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and where are you stuck?
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code / commands
+      description: Relevant snippet, commands run, and output (redact secrets)
+      render: text
+    validations:
+      required: false

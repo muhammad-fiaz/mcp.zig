@@ -4,7 +4,7 @@
 //! Every MCP server automatically responds to health/check requests
 //! with server status, uptime, and connection information.
 //!
-//! Run: zig build run-health-check-example
+//! Run: zig build run-health-check
 
 const std = @import("std");
 const mcp = @import("mcp");

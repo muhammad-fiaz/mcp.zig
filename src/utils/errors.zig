@@ -13,7 +13,7 @@ pub const McpError = struct {
     data: ?std.json.Value = null,
 
     pub fn format(self: McpError, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("McpError({d}): {s}", .{ @intFromEnum(self.code), self.message });
+        try writer.print("McpError({d}): {s}", .{ @backingInt(self.code), self.message });
         if (self.code == .internal_error) {
             try writer.print("\nThis might be a bug. Please report it at: {s}", .{report.ISSUES_URL});
         }
@@ -35,7 +35,7 @@ pub const ErrorCode = enum(i32) {
 
     /// Returns the integer value of this error code.
     pub fn toInt(self: ErrorCode) i32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Returns the standard message for this error code.

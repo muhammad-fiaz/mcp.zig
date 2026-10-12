@@ -21,7 +21,7 @@ export const KEYWORDS =
 export default defineConfig({
   lang: "en-US",
   title: "Model Context Protocol (MCP) Library for Zig",
-  titleTemplate: "%s | MCP.zig",
+  titleTemplate: ":title | MCP.zig",
   description: SITE_DESCRIPTION,
   base: "/mcp.zig/",
   lastUpdated: true,
@@ -29,6 +29,13 @@ export default defineConfig({
 
   sitemap: {
     hostname: SITE_URL,
+    // Project Pages are served under the "/mcp.zig/" subpath, which
+    // VitePress does not prepend to sitemap locations on its own.
+    transformItems: (items) =>
+      items.map((item) => ({
+        ...item,
+        url: `/mcp.zig/${item.url.replace(/^\//, "")}`,
+      })),
   },
 
   vite: {
@@ -270,7 +277,7 @@ gtag('config', '${GA_ID}');`,
           priceCurrency: "USD",
         },
         downloadUrl: "https://github.com/muhammad-fiaz/mcp.zig",
-        softwareVersion: "0.0.6",
+        softwareVersion: "0.0.8",
         license: "https://opensource.org/licenses/MIT",
       });
     } else {
@@ -341,7 +348,7 @@ gtag('config', '${GA_ID}');`,
   },
 
   themeConfig: {
-    logo: "/logo.svg",
+    logo: "/logo.png",
     siteTitle: "MCP.zig",
 
     nav: [

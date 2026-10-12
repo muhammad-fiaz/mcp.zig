@@ -32,7 +32,7 @@ pub const LoggingContext = struct {
     };
 
     pub fn log(self: *LoggingContext, comptime level: LogLevel, comptime fmt: []const u8, args: anytype) void {
-        if (@intFromEnum(level) >= @intFromEnum(self.log_level)) {
+        if (@backingInt(level) >= @backingInt(self.log_level)) {
             std.log.info(fmt, args);
         }
     }

@@ -16,6 +16,9 @@ Proper error handling is essential for robust MCP servers and clients.
 pub const ToolError = error{
     InvalidArguments,
     ExecutionFailed,
+    PermissionDenied,
+    ResourceNotFound,
+    Timeout,
     OutOfMemory,
     Unknown,
 };
@@ -26,9 +29,11 @@ pub const ToolError = error{
 ```zig
 pub const ResourceError = error{
     NotFound,
-    InvalidUri,
     AccessDenied,
+    ReadFailed,
+    InvalidUri,
     OutOfMemory,
+    Unknown,
 };
 ```
 

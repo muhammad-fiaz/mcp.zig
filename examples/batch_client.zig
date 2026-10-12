@@ -4,7 +4,7 @@
 //! This is useful for reducing network overhead when you need
 //! to perform multiple operations at once.
 //!
-//! Run: zig build run-batch-client
+//! Run: zig build run-batch
 
 const std = @import("std");
 const mcp = @import("mcp");

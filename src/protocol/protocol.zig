@@ -91,9 +91,10 @@ pub const Method = enum {
 
     /// Parses a method name string into the corresponding enum value.
     pub fn fromString(str: []const u8) ?Method {
-        inline for (std.meta.fields(Method)) |field| {
-            if (std.mem.eql(u8, field.name, str)) {
-                return @enumFromInt(field.value);
+        const type_info = @typeInfo(Method).@"enum";
+        inline for (type_info.field_names, type_info.field_values) |name, value| {
+            if (std.mem.eql(u8, name, str)) {
+                return @fromBackingInt(@intCast(value));
             }
         }
         return null;
@@ -528,4 +529,24 @@ test "Method enum - elicitation complete" {
 test "LogLevel enum" {
     try std.testing.expectEqualStrings("debug", LogLevel.debug.toString());
     try std.testing.expectEqualStrings("error", LogLevel.@"error".toString());
+}
+
+test "Method fromString round-trip (Zig 0.17 @typeInfo migration)" {
+    const methods = [_]Method{
+        .@"server/discover",
+        .@"tools/list",
+        .@"tools/call",
+        .@"resources/list",
+        .@"resources/read",
+        .@"prompts/list",
+        .@"prompts/get",
+        .@"subscriptions/listen",
+        .@"tasks/get",
+        .@"tasks/cancel",
+    };
+    for (methods) |m| {
+        try std.testing.expectEqual(m, Method.fromString(m.toString()).?);
+    }
+    try std.testing.expect(Method.fromString("") == null);
+    try std.testing.expect(Method.fromString("tools/unknown") == null);
 }

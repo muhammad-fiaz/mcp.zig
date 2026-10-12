@@ -3,7 +3,7 @@
 //! Demonstrates using the RateLimiter to prevent abuse of tool calls.
 //! Shows how to implement call rate limiting for sensitive operations.
 //!
-//! Run: zig build run-rate-limiter-example
+//! Run: zig build run-rate-limiter
 
 const std = @import("std");
 const mcp = @import("mcp");

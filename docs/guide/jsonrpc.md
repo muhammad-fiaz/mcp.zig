@@ -67,9 +67,10 @@ JSON-RPC is a stateless, light-weight remote procedure call (RPC) protocol that 
 ### Parse Messages
 
 ```zig
-const message = try mcp.jsonrpc.parseMessage(allocator, json_string);
+const parsed = try mcp.jsonrpc.parseMessage(allocator, json_string);
+defer parsed.deinit();
 
-switch (message) {
+switch (parsed.message) {
     .request => |req| {
         std.debug.print("Request: {s}\n", .{req.method});
     },
@@ -214,13 +215,14 @@ const mcp = @import("mcp");
 
 pub fn handleMessage(allocator: std.mem.Allocator, json: []const u8) ![]const u8 {
     // Parse incoming message
-    const message = mcp.jsonrpc.parseMessage(allocator, json) catch {
+    const parsed = mcp.jsonrpc.parseMessage(allocator, json) catch {
         const err = mcp.jsonrpc.createParseError(null);
         return try mcp.jsonrpc.serializeMessage(allocator, .{ .error_response = err });
     };
+    defer parsed.deinit();
 
     // Handle based on message type
-    switch (message) {
+    switch (parsed.message) {
         .request => |req| {
             if (std.mem.eql(u8, req.method, "server/discover")) {
                 const resp = mcp.jsonrpc.createResponse(req.id, null);

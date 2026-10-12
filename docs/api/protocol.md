@@ -24,6 +24,7 @@ The current MCP protocol version.
 ```zig
 pub const SUPPORTED_VERSIONS = [_][]const u8{
     "2026-07-28",
+    "2025-11-25",
     "2025-06-18",
     "2025-03-26",
     "2024-11-05",
@@ -256,6 +257,7 @@ pub const Transport = struct {
         send: *const fn(...) anyerror!void,
         receive: *const fn(...) anyerror!?[]const u8,
         close: *const fn(...) void,
+        destroy: *const fn(...) void,
     };
 };
 ```

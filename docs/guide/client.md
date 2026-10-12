@@ -45,7 +45,7 @@ try client.connectHttp("http://127.0.0.1:8080/mcp");
 try client.connectHttp("http://192.168.1.50:9000/mcp");
 ```
 
-The HTTP client transport uses httpx.zig.
+The HTTP client transport uses httpx.zig 0.2.2 (Zig 0.17.0).
 
 ## Capabilities
 

@@ -4,7 +4,7 @@
 //! authentication, and custom logic. Shows how middleware can intercept
 //! and modify requests before they reach the actual handler.
 //!
-//! Run: zig build run-middleware-server
+//! Run: zig build run-middleware
 
 const std = @import("std");
 const mcp = @import("mcp");

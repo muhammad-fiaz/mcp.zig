@@ -199,17 +199,19 @@ pub const Client = struct {
 
         try self.pending_requests.put(id, .{ .method = method });
 
-        // Build _meta with per-request metadata (2026-07-28 stateless model)
+        // Build _meta with per-request metadata (2026-07-28 stateless model).
+        // `info` is stored by value inside `meta`; both are deinited below
+        // after the request has been serialized and sent.
+        var info: std.json.ObjectMap = .empty;
+        defer info.deinit(self.allocator);
+        try info.put(self.allocator, "name", .{ .string = self.config.name });
+        try info.put(self.allocator, "version", .{ .string = self.config.version });
+
         var meta: std.json.ObjectMap = .empty;
         defer meta.deinit(self.allocator);
         try meta.put(self.allocator, "io.modelcontextprotocol/protocolVersion", .{ .string = protocol.VERSION });
         try meta.put(self.allocator, "io.modelcontextprotocol/clientInfo", .{
-            .object = blk: {
-                var info: std.json.ObjectMap = .empty;
-                try info.put(self.allocator, "name", .{ .string = self.config.name });
-                try info.put(self.allocator, "version", .{ .string = self.config.version });
-                break :blk info;
-            },
+            .object = info,
         });
 
         var merged_params: std.json.ObjectMap = .empty;
@@ -252,6 +254,7 @@ pub const Client = struct {
     /// Invokes a tool on the server with optional arguments.
     pub fn callTool(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
             try params.put(self.allocator, "arguments", args);
@@ -267,6 +270,7 @@ pub const Client = struct {
     /// Reads a resource from the server by URI.
     pub fn readResource(self: *Self, uri: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendRequest("resources/read", .{ .object = params });
     }
@@ -274,6 +278,7 @@ pub const Client = struct {
     /// Subscribes to resource updates via subscriptions/listen.
     pub fn subscriptionsListen(self: *Self, uri: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "uri", .{ .string = uri });
         try self.sendRequest("subscriptions/listen", .{ .object = params });
     }
@@ -291,6 +296,7 @@ pub const Client = struct {
     /// Fetches a prompt from the server with optional arguments.
     pub fn getPrompt(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
             try params.put(self.allocator, "arguments", args);
@@ -301,6 +307,7 @@ pub const Client = struct {
     /// Requests argument completion suggestions.
     pub fn complete(self: *Self, ref: std.json.Value, argument: std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "ref", ref);
         try params.put(self.allocator, "argument", argument);
         try self.sendRequest("completion/complete", .{ .object = params });
@@ -309,6 +316,7 @@ pub const Client = struct {
     /// Gets the status and metadata of a task.
     pub fn getTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/get", .{ .object = params });
     }
@@ -316,6 +324,7 @@ pub const Client = struct {
     /// Gets the result payload of a completed task.
     pub fn getTaskResult(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/result", .{ .object = params });
     }
@@ -328,6 +337,7 @@ pub const Client = struct {
     /// Cancels a running task.
     pub fn cancelTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
         try params.put(self.allocator, "taskId", .{ .string = taskId });
         try self.sendRequest("tasks/cancel", .{ .object = params });
     }
@@ -340,8 +350,8 @@ pub const Client = struct {
     /// Sends multiple JSON-RPC requests as a batch.
     /// Returns an array of responses.
     pub fn sendBatch(self: *Self, requests: []const jsonrpc.Request) !std.ArrayList(jsonrpc.Response) {
-        var responses = std.ArrayList(jsonrpc.Response).init(self.allocator);
-        errdefer responses.deinit();
+        var responses: std.ArrayList(jsonrpc.Response) = .empty;
+        errdefer responses.deinit(self.allocator);
 
         for (requests) |req| {
             const id = self.next_request_id;
@@ -481,4 +491,53 @@ test "Client enable all capabilities" {
     try std.testing.expect(client.capabilities.roots != null);
     try std.testing.expect(client.capabilities.elicitation != null);
     try std.testing.expect(client.capabilities.tasks != null);
+}
+
+test "Client request maps do not leak" {
+    // Exercises sendRequest (meta/clientInfo maps) and every params-building
+    // helper with no transport attached. std.testing.allocator fails the test
+    // on any leak.
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    try client.discover();
+    try client.listTools();
+    try client.listResources();
+    try client.listPrompts();
+    try client.listTasks();
+    try client.callTool("greet", null);
+
+    var args: std.json.ObjectMap = .empty;
+    defer args.deinit(std.testing.allocator);
+    try args.put(std.testing.allocator, "name", .{ .string = "World" });
+    try client.callTool("greet", .{ .object = args });
+    try client.getPrompt("intro", .{ .object = args });
+    try client.readResource("file:///data.json");
+    try client.subscriptionsListen("file:///data.json");
+    try client.getTask("task-1");
+    try client.getTaskResult("task-1");
+    try client.cancelTask("task-1");
+    try client.complete(.{ .string = "ref" }, .{ .string = "arg" });
+    try client.notifyRootsChanged();
+}
+
+test "Client sendBatch with unmanaged ArrayList (Zig 0.17 migration)" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    // No transport: requests are tracked as pending, responses list is empty.
+    const reqs = [_]jsonrpc.Request{
+        .{ .id = .{ .integer = 1 }, .method = "tools/list", .params = null },
+        .{ .id = .{ .integer = 2 }, .method = "resources/list", .params = null },
+    };
+    var responses = try client.sendBatch(&reqs);
+    defer responses.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), responses.items.len);
+    try std.testing.expectEqual(@as(i64, 3), client.next_request_id);
 }

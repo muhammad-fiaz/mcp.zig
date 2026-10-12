@@ -42,7 +42,7 @@ Run options:
 | `.{ .http = .{ .host = "127.0.0.1", .port = 8080 } }` | HTTP listener with JSON-RPC POST on `/mcp` |
 
 Note: HTTP mode accepts host names such as `127.0.0.1` and binds accordingly.
-It is implemented with httpx.zig.
+It is implemented with httpx.zig 0.2.2 (Zig 0.17.0).
 
 ## Registration
 
@@ -66,14 +66,14 @@ Tools/resources/prompts capabilities are advertised automatically once component
 ## Utility Notifications
 
 ```zig
-pub fn sendNotification(self: *Server, method: []const u8, params: ?std.json.Value) !void
-pub fn sendLogMessage(self: *Server, level: mcp.protocol.LogLevel, message: []const u8) !void
-pub fn sendProgress(self: *Server, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void
+pub fn sendNotification(self: *Server, io: std.Io, allocator: std.mem.Allocator, method: []const u8, params: ?std.json.Value) !void
+pub fn sendLogMessage(self: *Server, io: std.Io, allocator: std.mem.Allocator, level: mcp.protocol.LogLevel, message: []const u8) !void
+pub fn sendProgress(self: *Server, io: std.Io, allocator: std.mem.Allocator, token: std.json.Value, prog: f64, total: ?f64, message: ?[]const u8) !void
 
-pub fn notifyToolsChanged(self: *Server) !void
-pub fn notifyResourcesChanged(self: *Server) !void
-pub fn notifyResourceUpdated(self: *Server, uri: []const u8) !void
-pub fn notifyPromptsChanged(self: *Server) !void
+pub fn notifyToolsChanged(self: *Server, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn notifyResourcesChanged(self: *Server, io: std.Io, allocator: std.mem.Allocator) !void
+pub fn notifyResourceUpdated(self: *Server, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) !void
+pub fn notifyPromptsChanged(self: *Server, io: std.Io, allocator: std.mem.Allocator) !void
 ```
 
 ## Minimal Example

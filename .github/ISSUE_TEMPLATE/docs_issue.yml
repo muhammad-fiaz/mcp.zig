@@ -1,0 +1,54 @@
+name: Documentation Issue
+description: Report missing, unclear, or incorrect documentation
+title: "docs: "
+labels: ["documentation"]
+assignees: ''
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us keep the docs accurate. Link the exact page when possible.
+  - type: input
+    id: page
+    attributes:
+      label: Affected page
+      description: URL or path of the documentation page
+      placeholder: "https://muhammad-fiaz.github.io/mcp.zig/guide/transport or docs/guide/transport.md"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Issue kind
+      multiple: false
+      options:
+        - Incorrect information
+        - Outdated code example
+        - Missing topic
+        - Unclear explanation
+        - Broken link
+        - Typo / formatting
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What is wrong or missing? Quote the passage if helpful
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Proposed wording or corrected snippet
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I checked the page against mcp.zig 0.0.8 (Zig 0.17.0)
+          required: false

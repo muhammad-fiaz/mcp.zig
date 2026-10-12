@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions (Q&A, ideas)
+    url: https://github.com/muhammad-fiaz/mcp.zig/discussions
+    about: Ask questions and share ideas with the community
+  - name: Documentation
+    url: https://muhammad-fiaz.github.io/mcp.zig/
+    about: Guides, API reference, and examples
+  - name: Security reports (private)
+    url: mailto:contact@muhammadfiaz.com
+    about: Report vulnerabilities privately — see SECURITY.md

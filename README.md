@@ -4,7 +4,7 @@
 # MCP.zig
 
 <a href="https://muhammad-fiaz.github.io/mcp.zig/"><img src="https://img.shields.io/badge/docs-muhammad--fiaz.github.io-blue" alt="Documentation"></a>
-<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.16.0+-orange.svg?logo=zig" alt="Zig Version"></a>
+<a href="https://ziglang.org/"><img src="https://img.shields.io/badge/Zig-0.17.0+-orange.svg?logo=zig" alt="Zig Version"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml"><img src="https://github.com/muhammad-fiaz/mcp.zig/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig"><img src="https://img.shields.io/github/stars/muhammad-fiaz/mcp.zig" alt="GitHub stars"></a>
 <a href="https://github.com/muhammad-fiaz/mcp.zig/issues"><img src="https://img.shields.io/github/issues/muhammad-fiaz/mcp.zig" alt="GitHub issues"></a>
@@ -87,7 +87,10 @@ Run the following command to add mcp.zig to your project:
 # Latest development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.16.x (recommended)
+# Zig 0.17.x (recommended)
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
+
+# Zig 0.16.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
 
 # Zig 0.15.x
@@ -185,19 +188,28 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
 The `examples/` directory contains several example implementations:
 
-| Example                   | Description                           |
-| ------------------------- | ------------------------------------- |
-| **simple_server.zig**     | Basic server with greeting tool       |
-| **simple_client.zig**     | Basic client setup                    |
-| **weather_server.zig**    | Weather information server            |
-| **calculator_server.zig** | Calculator with arithmetic operations |
-| **advanced_server.zig**   | Advanced schemas and task support     |
+| Example                   | Description                           | Run step              |
+| ------------------------- | ------------------------------------- | --------------------- |
+| **simple_server.zig**     | Basic server with greeting tool       | `run-server`          |
+| **simple_client.zig**     | Basic client setup                    | `run-client`          |
+| **weather_server.zig**    | Weather information server            | `run-weather`         |
+| **calculator_server.zig** | Calculator with arithmetic operations | `run-calc`            |
+| **advanced_server.zig**   | Advanced schemas and task support     | `run-advanced`        |
+| **filesystem_server.zig** | Filesystem resources server           | `run-filesystem`      |
+| **notes_server.zig**      | In-memory notes server                | `run-notes`           |
+| **http_server.zig**       | HTTP transport server                 | `run-http`            |
+| **middleware_server.zig** | Middleware usage server               | `run-middleware`      |
+| **batch_client.zig**      | Batch request client                  | `run-batch`           |
+| **rate_limiter_example.zig** | Rate limiter example               | `run-rate-limiter`    |
+| **health_check_example.zig** | Health check example             | `run-health-check`    |
+| **shutdown_example.zig**  | Graceful shutdown example             | `run-shutdown`        |
+| **validator_example.zig** | Request validator example             | `run-validator`       |
 
 Run examples:
 
 ```bash
 # Build all examples
-zig build
+zig build run-all-examples
 
 # Run examples
 zig build run-server
@@ -361,7 +373,8 @@ This library implements MCP protocol version **2026-07-28**.
 
 Contributions are welcome! Please feel free to submit issues and pull requests.
 
-See [Contributing Guide](https://muhammad-fiaz.github.io/mcp.zig/contributing) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributing Guide](https://muhammad-fiaz.github.io/mcp.zig/contributing) for guidelines.
+For security vulnerabilities, see [SECURITY.md](SECURITY.md) — report privately to contact@muhammadfiaz.com.
 
 ## Support
 

@@ -77,7 +77,7 @@ All examples are included in the `examples/` directory of the repository.
 ### Build All Examples
 
 ```bash
-zig build
+zig build run-all-examples
 ```
 
 ### Run a Server Example
