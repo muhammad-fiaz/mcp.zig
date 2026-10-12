@@ -1,0 +1,18 @@
+# Enforce LF line endings so `zig fmt --check` passes identically on
+# Linux, macOS, and Windows checkouts (core.autocrlf must not convert).
+* text=auto
+*.zig text eol=lf
+*.zon text eol=lf
+*.md text eol=lf
+*.mts text eol=lf
+*.ts text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.vue text eol=lf
+*.png binary
+*.ico binary
+*.pdb binary
+*.exe binary
