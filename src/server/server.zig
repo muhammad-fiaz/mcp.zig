@@ -84,6 +84,10 @@ pub const ServerConfig = struct {
     instructions: ?[]const u8 = null,
     /// Caching hints emitted on cacheable results.
     cache: CacheConfig = .{},
+    /// Maximum entries per page on `*/list` requests. Zero (the default)
+    /// returns everything in a single page, which is valid: `nextCursor` is
+    /// then omitted entirely.
+    page_size: usize = 0,
     /// Builds the MRTR response when a handler returns `error.InputRequired`.
     ///
     /// A server that needs client input (elicitation, sampling or roots)
@@ -721,7 +725,10 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.tools), &self.tools);
         defer allocator.free(keys);
 
-        for (keys) |key| {
+        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        defer if (page.next_cursor) |c| allocator.free(c);
+
+        for (page.items) |key| {
             const entry = self.tools.get(key).?;
             var tool_obj: std.json.ObjectMap = .empty;
             try tool_obj.put(allocator, "name", .{ .string = entry.name });
@@ -789,6 +796,7 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "tools", .{ .array = tools_array });
+        try Self.putNextCursor(allocator, &result, page.next_cursor);
         try Self.putResultComplete(allocator, &result);
         try self.putListCacheHints(allocator, &result);
 
@@ -915,7 +923,10 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.resources), &self.resources);
         defer allocator.free(keys);
 
-        for (keys) |key| {
+        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        defer if (page.next_cursor) |c| allocator.free(c);
+
+        for (page.items) |key| {
             const entry = self.resources.get(key).?;
             var resource_obj: std.json.ObjectMap = .empty;
             try resource_obj.put(allocator, "uri", .{ .string = entry.uri });
@@ -946,6 +957,7 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resources", .{ .array = resources_array });
+        try Self.putNextCursor(allocator, &result, page.next_cursor);
         try Self.putResultComplete(allocator, &result);
         try self.putListCacheHints(allocator, &result);
 
@@ -1014,7 +1026,10 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.resource_templates), &self.resource_templates);
         defer allocator.free(keys);
 
-        for (keys) |key| {
+        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        defer if (page.next_cursor) |c| allocator.free(c);
+
+        for (page.items) |key| {
             const entry = self.resource_templates.get(key).?;
             var template_obj: std.json.ObjectMap = .empty;
             try template_obj.put(allocator, "uriTemplate", .{ .string = entry.uriTemplate });
@@ -1042,6 +1057,7 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resourceTemplates", .{ .array = templates_array });
+        try Self.putNextCursor(allocator, &result, page.next_cursor);
         try Self.putResultComplete(allocator, &result);
         try self.putListCacheHints(allocator, &result);
 
@@ -1180,7 +1196,10 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.prompts), &self.prompts);
         defer allocator.free(keys);
 
-        for (keys) |key| {
+        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        defer if (page.next_cursor) |c| allocator.free(c);
+
+        for (page.items) |key| {
             const entry = self.prompts.get(key).?;
             var prompt_obj: std.json.ObjectMap = .empty;
             try prompt_obj.put(allocator, "name", .{ .string = entry.name });
@@ -1220,6 +1239,7 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "prompts", .{ .array = prompts_array });
+        try Self.putNextCursor(allocator, &result, page.next_cursor);
         try Self.putResultComplete(allocator, &result);
         try self.putListCacheHints(allocator, &result);
 
@@ -1471,6 +1491,70 @@ pub const Server = struct {
             const error_response = jsonrpc.createInvalidParams(request.id, "Task not found");
             try self.sendResponse(io, allocator, .{ .error_response = error_response });
         }
+    }
+
+    /// One page of a sorted key list, plus the cursor for the page after it.
+    const Page = struct {
+        items: []const []const u8,
+        next_cursor: ?[]const u8,
+    };
+
+    /// Encodes a pagination cursor. The value is opaque to clients, so the
+    /// offset is base64-encoded rather than sent as a plain integer.
+    fn encodeCursor(allocator: std.mem.Allocator, index: usize) ![]const u8 {
+        const decimal = try std.fmt.allocPrint(allocator, "{d}", .{index});
+        defer allocator.free(decimal);
+        return protocol.base64Alloc(allocator, decimal);
+    }
+
+    /// Decodes a cursor produced by `encodeCursor`, or null when unusable.
+    ///
+    /// A malformed cursor is treated as "start from the beginning" rather
+    /// than as an error, so a client holding a stale cursor still gets a
+    /// usable response.
+    fn decodeCursor(allocator: std.mem.Allocator, cursor: []const u8) ?usize {
+        const decoder = std.base64.standard.Decoder;
+        const size = decoder.calcSizeForSlice(cursor) catch return null;
+        const buf = allocator.alloc(u8, size) catch return null;
+        defer allocator.free(buf);
+        decoder.decode(buf, cursor) catch return null;
+        return std.fmt.parseInt(usize, buf, 10) catch null;
+    }
+
+    /// Slices `keys` into the page starting at `cursor`, honouring
+    /// `page_size`. A `page_size` of zero yields everything in one page and no
+    /// cursor.
+    fn paginate(
+        allocator: std.mem.Allocator,
+        keys: []const []const u8,
+        cursor: ?[]const u8,
+        page_size: usize,
+    ) !Page {
+        const start: usize = if (cursor) |c| blk: {
+            const idx = decodeCursor(allocator, c) orelse break :blk 0;
+            break :blk @min(idx, keys.len);
+        } else 0;
+
+        if (page_size == 0 or start >= keys.len) {
+            return .{ .items = keys[start..], .next_cursor = null };
+        }
+
+        const end = @min(start + page_size, keys.len);
+        const next: ?[]const u8 = if (end < keys.len) try encodeCursor(allocator, end) else null;
+        return .{ .items = keys[start..end], .next_cursor = next };
+    }
+
+    /// Reads the `cursor` request parameter, if present.
+    fn requestCursor(params: ?std.json.Value) ?[]const u8 {
+        const p = params orelse return null;
+        if (p != .object) return null;
+        const c = p.object.get("cursor") orelse return null;
+        return if (c == .string) c.string else null;
+    }
+
+    /// Emits `nextCursor` when there is a further page.
+    fn putNextCursor(allocator: std.mem.Allocator, result: *std.json.ObjectMap, next: ?[]const u8) !void {
+        if (next) |c| try result.put(allocator, "nextCursor", .{ .string = c });
     }
 
     /// True when the client cancelled the request with the given id.
@@ -2584,6 +2668,107 @@ test "spec: tools/call returning error.InputRequired emits an MRTR result" {
     const entry = requests.get("github_login").?.object;
     try std.testing.expectEqualStrings(protocol.MRTR_METHOD_ELICITATION, entry.get("method").?.string);
     try std.testing.expect(entry.get("params") != null);
+}
+
+test "spec: paginate slices pages and round-trips the cursor" {
+    const a = std.testing.allocator;
+
+    const keys = [_][]const u8{ "a", "b", "c", "d", "e" };
+
+    const all = try Server.paginate(a, &keys, null, 0);
+    try std.testing.expectEqual(@as(usize, 5), all.items.len);
+    try std.testing.expect(all.next_cursor == null);
+
+    const first = try Server.paginate(a, &keys, null, 2);
+    defer if (first.next_cursor) |c| a.free(c);
+    try std.testing.expectEqual(@as(usize, 2), first.items.len);
+    try std.testing.expectEqualStrings("a", first.items[0]);
+    try std.testing.expect(first.next_cursor != null);
+
+    const second = try Server.paginate(a, &keys, first.next_cursor, 2);
+    defer if (second.next_cursor) |c| a.free(c);
+    try std.testing.expectEqual(@as(usize, 2), second.items.len);
+    try std.testing.expectEqualStrings("c", second.items[0]);
+
+    const third = try Server.paginate(a, &keys, second.next_cursor, 2);
+    try std.testing.expectEqual(@as(usize, 1), third.items.len);
+    try std.testing.expectEqualStrings("e", third.items[0]);
+    try std.testing.expect(third.next_cursor == null);
+
+    const stale = try Server.paginate(a, &keys, "not-base64!!", 2);
+    defer if (stale.next_cursor) |c| a.free(c);
+    try std.testing.expectEqualStrings("a", stale.items[0]);
+}
+
+test "spec: tools/list paginates and reports nextCursor" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "page-server", .version = "1.0.0", .page_size = 2 });
+    defer server.deinit();
+
+    for ([_][]const u8{ "one", "two", "three" }) |name| {
+        try server.addTool(.{
+            .name = name,
+            .description = "d",
+            .inputSchema = .{ .type = "object" },
+            .handler = struct {
+                fn h(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+                    return .{ .content = &.{} };
+                }
+            }.h,
+        });
+    }
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const req = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    try server.handleMessage(std.Io.failing, a, req);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer parsed.deinit();
+
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqual(@as(usize, 2), result.get("tools").?.array.items.len);
+    const cursor = result.get("nextCursor").?.string;
+
+    const req2 = try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{{\"cursor\":\"{s}\",\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{{}}}}}}}}", .{cursor});
+    defer a.free(req2);
+    try server.handleMessage(std.Io.failing, a, req2);
+
+    var p2 = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[1], .{});
+    defer p2.deinit();
+    const r2 = p2.value.object.get("result").?.object;
+    try std.testing.expectEqual(@as(usize, 1), r2.get("tools").?.array.items.len);
+    try std.testing.expect(r2.get("nextCursor") == null);
 }
 
 test "spec: subscriptions/listen acknowledges before closing, tagged with subscriptionId" {
