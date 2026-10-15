@@ -1079,6 +1079,63 @@ pub const Server = struct {
         }
     }
 
+    /// The client capability an MRTR input request depends on, or null when the
+    /// method needs none.
+    fn requiredCapabilityForMethod(method: []const u8) ?[]const u8 {
+        if (std.mem.eql(u8, method, protocol.MRTR_METHOD_ELICITATION)) return "elicitation";
+        if (std.mem.eql(u8, method, protocol.MRTR_METHOD_SAMPLING)) return "sampling";
+        if (std.mem.eql(u8, method, protocol.MRTR_METHOD_ROOTS)) return "roots";
+        return null;
+    }
+
+    /// Returns the first capability the client did not declare that the given
+    /// input requests need, or null when everything is declared.
+    ///
+    /// The spec forbids sending an input request the client has not declared
+    /// support for; e.g. an `elicitation/create` to a client that never
+    /// advertised elicitation.
+    fn undeclaredCapability(
+        params: ?std.json.Value,
+        input_requests: ?types.InputRequests,
+    ) ?[]const u8 {
+        const requests = input_requests orelse return null;
+        const p = params orelse return null;
+        if (p != .object) return null;
+        const meta = p.object.get("_meta") orelse return null;
+        if (meta != .object) return null;
+        const caps = meta.object.get(protocol.META_CLIENT_CAPABILITIES) orelse return null;
+        if (caps != .object) return null;
+
+        var it = requests.iterator();
+        while (it.next()) |entry| {
+            const req_obj = entry.value_ptr.*;
+            if (req_obj != .object) continue;
+            const method_val = req_obj.object.get("method") orelse continue;
+            if (method_val != .string) continue;
+
+            const capability = requiredCapabilityForMethod(method_val.string) orelse continue;
+            if (caps.object.get(capability) == null) return capability;
+        }
+        return null;
+    }
+
+    /// Builds the -32021 response for an undeclared capability.
+    ///
+    /// The spec requires `data.requiredCapabilities` to list the capabilities
+    /// that were missing.
+    fn missingCapabilityError(allocator: std.mem.Allocator, id: types.RequestId, capability: []const u8) jsonrpc.ErrorResponse {
+        var names: std.json.Array = .init(allocator);
+        names.append(.{ .string = capability }) catch {};
+        var data: std.json.ObjectMap = .empty;
+        data.put(allocator, "requiredCapabilities", .{ .array = names }) catch {};
+        return jsonrpc.createErrorResponse(
+            id,
+            jsonrpc.ErrorCode.MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Client did not declare a required capability",
+            .{ .object = data },
+        );
+    }
+
     /// Emits an MRTR `InputRequiredResult` when a handler asked for more input.
     ///
     /// Returns true when the response was sent, so callers can return early.
@@ -1097,6 +1154,14 @@ pub const Server = struct {
             request.params,
             allocator,
         );
+
+        // The server must not ask for input the client never declared support
+        // for; doing so is -32021 with data.requiredCapabilities.
+        if (Self.undeclaredCapability(request.params, input_required.inputRequests)) |capability| {
+            try self.sendResponse(io, allocator, .{ .error_response = Self.missingCapabilityError(allocator, request.id, capability) });
+            return true;
+        }
+
         try self.sendInputRequired(io, allocator, request.id, input_required);
         return true;
     }
@@ -2651,7 +2716,8 @@ test "spec: tools/call returning error.InputRequired emits an MRTR result" {
         },
     };
 
-    const req = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"needs_input\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    // The resolver asks for elicitation/create, so the client must declare it.
+    const req = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"needs_input\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{\"elicitation\":{}}}}}";
     try server.handleMessage(std.Io.failing, a, req);
 
     try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
@@ -2769,6 +2835,81 @@ test "spec: tools/list paginates and reports nextCursor" {
     const r2 = p2.value.object.get("result").?.object;
     try std.testing.expectEqual(@as(usize, 1), r2.get("tools").?.array.items.len);
     try std.testing.expect(r2.get("nextCursor") == null);
+}
+
+test "spec: MRTR refuses to ask for an undeclared client capability" {
+    const a = std.testing.allocator;
+
+    const needsInput = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.ToolError.InputRequired;
+        }
+    }.handler;
+
+    const resolver = struct {
+        fn f(_: ?*anyopaque, _: []const u8, _: ?std.json.Value, allocator: std.mem.Allocator) anyerror!types.InputRequiredResult {
+            var requests: types.InputRequests = .empty;
+            try Server.putInputRequest(allocator, &requests, "github_login", protocol.MRTR_METHOD_ELICITATION, null);
+            return .{ .inputRequests = requests };
+        }
+    }.f;
+
+    var server = Server.init(a, .{ .name = "cap-server", .version = "1.0.0", .mrtr = resolver });
+    defer server.deinit();
+    try server.addTool(.{
+        .name = "needs_input",
+        .description = "d",
+        .inputSchema = .{ .type = "object" },
+        .handler = needsInput,
+    });
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // The client declared no capabilities at all.
+    const req = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"needs_input\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    try server.handleMessage(std.Io.failing, a, req);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer parsed.deinit();
+
+    const err_obj = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqual(
+        @as(i64, jsonrpc.ErrorCode.MISSING_REQUIRED_CLIENT_CAPABILITY),
+        err_obj.get("code").?.integer,
+    );
+    // data.requiredCapabilities names what was missing.
+    try std.testing.expect(err_obj.get("data").?.object.get("requiredCapabilities") != null);
+    // No input_required result is emitted in its place.
+    try std.testing.expect(parsed.value.object.get("result") == null);
 }
 
 test "spec: subscriptions/listen acknowledges before closing, tagged with subscriptionId" {
