@@ -330,11 +330,169 @@ pub const SamplingMessageContentBlock = union(enum) {
     tool_result: ToolResultContent,
 };
 
+/// Tool selection mode for sampling requests.
+pub const ToolChoiceMode = enum {
+    /// The model must not use any tools.
+    none,
+    /// The model must use at least one tool before completing.
+    required,
+    /// The model decides. Default.
+    auto,
+
+    pub fn toString(self: ToolChoiceMode) []const u8 {
+        return @tagName(self);
+    }
+};
+
 /// Controls tool selection behavior for sampling requests.
 pub const ToolChoice = struct {
-    /// "none" | "required" | "auto"
-    mode: ?[]const u8 = null,
+    mode: ?ToolChoiceMode = null,
 };
+
+/// Content of a sampling message: either one block or an array of blocks.
+///
+/// The spec permits both. A single block carries the common case of exactly
+/// one content item; an array is required as soon as there is more than one,
+/// which is the normal shape for parallel tool uses and for tool results.
+pub const SamplingContent = union(enum) {
+    single: SamplingMessageContentBlock,
+    many: []const SamplingMessageContentBlock,
+
+    pub fn one(block: SamplingMessageContentBlock) SamplingContent {
+        return .{ .single = block };
+    }
+
+    pub fn list(blocks: []const SamplingMessageContentBlock) SamplingContent {
+        return .{ .many = blocks };
+    }
+
+    pub fn count(self: SamplingContent) usize {
+        return switch (self) {
+            .single => 1,
+            .many => self.many.len,
+        };
+    }
+
+    /// Block at `index`, or null when out of range.
+    pub fn get(self: SamplingContent, index: usize) ?SamplingMessageContentBlock {
+        return switch (self) {
+            .single => if (index == 0) self.single else null,
+            .many => if (index < self.many.len) self.many[index] else null,
+        };
+    }
+};
+
+/// Violations of the constraints the spec places on sampling messages.
+pub const SamplingValidationError = error{
+    /// A user message carried tool results mixed with other content types.
+    ToolResultMessageMixedContent,
+    /// A tool use was not answered by a matching tool result.
+    UnmatchedToolUse,
+    /// A tool result referenced an id that no tool use produced.
+    UnmatchedToolResult,
+    OutOfMemory,
+};
+
+/// True when at least one block is a tool use.
+pub fn hasToolUse(content: SamplingContent) bool {
+    var i: usize = 0;
+    while (i < content.count()) : (i += 1) {
+        switch (content.get(i).?) {
+            .tool_use => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// A user message that contains tool results MUST contain only tool results,
+/// so that provider APIs using a dedicated role for results stay compatible.
+pub fn isToolResultOnly(content: SamplingContent) bool {
+    const total = content.count();
+    if (total == 0) return false;
+    var i: usize = 0;
+    while (i < total) : (i += 1) {
+        switch (content.get(i).?) {
+            .tool_result => {},
+            else => return false,
+        }
+    }
+    return true;
+}
+
+/// True when at least one block is a tool result.
+pub fn hasToolResult(content: SamplingContent) bool {
+    var i: usize = 0;
+    while (i < content.count()) : (i += 1) {
+        switch (content.get(i).?) {
+            .tool_result => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// True when the first block is a tool result, i.e. the message is a
+/// tool-result message.
+pub fn isToolResultMessage(content: SamplingContent) bool {
+    if (content.count() == 0) return false;
+    return switch (content.get(0).?) {
+        .tool_result => true,
+        else => false,
+    };
+}
+
+/// Validates the message-level rules for sampling with tools:
+///
+///  * a user message carrying tool results contains only tool results;
+///  * every tool use is answered by a tool result with a matching `toolUseId`
+///    before any later message.
+pub fn validateSamplingMessages(messages: []const SamplingMessage) SamplingValidationError!void {
+    var pending = std.ArrayList([]const u8).empty;
+    defer pending.deinit(std.heap.page_allocator);
+
+    for (messages) |msg| {
+        switch (msg.role) {
+            .assistant => {
+                if (pending.items.len != 0) return error.UnmatchedToolUse;
+
+                var i: usize = 0;
+                while (i < msg.content.count()) : (i += 1) {
+                    switch (msg.content.get(i).?) {
+                        .tool_use => |use| {
+                            pending.append(std.heap.page_allocator, use.id) catch
+                                return error.OutOfMemory;
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .user => {
+                if (!hasToolResult(msg.content)) continue;
+                if (!isToolResultOnly(msg.content)) return error.ToolResultMessageMixedContent;
+
+                var i: usize = 0;
+                while (i < msg.content.count()) : (i += 1) {
+                    const result = switch (msg.content.get(i).?) {
+                        .tool_result => |r| r,
+                        else => unreachable,
+                    };
+                    var matched: ?usize = null;
+                    for (pending.items, 0..) |id, k| {
+                        if (std.mem.eql(u8, id, result.toolUseId)) {
+                            matched = k;
+                            break;
+                        }
+                    }
+                    const idx = matched orelse return error.UnmatchedToolResult;
+                    _ = pending.swapRemove(idx);
+                }
+            },
+        }
+    }
+
+    if (pending.items.len != 0) return error.UnmatchedToolUse;
+}
 
 /// Content of a text resource.
 pub const TextResourceContents = struct {
@@ -463,9 +621,12 @@ pub const PromptMessage = struct {
 };
 
 /// Message issued to or received from an LLM API.
+///
+/// `content` is either a single block or an array of blocks; see
+/// `SamplingContent`.
 pub const SamplingMessage = struct {
     role: Role,
-    content: SamplingMessageContentBlock,
+    content: SamplingContent,
     _meta: ?std.json.Value = null,
 };
 
