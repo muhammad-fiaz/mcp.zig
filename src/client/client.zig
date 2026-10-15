@@ -11,7 +11,6 @@ const std = @import("std");
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 const protocol = @import("../protocol/protocol.zig");
 const types = @import("../protocol/types.zig");
-const report = @import("../report.zig");
 const transport_mod = @import("../transport/transport.zig");
 
 /// Configuration options for creating an MCP client.
@@ -53,7 +52,6 @@ pub const Client = struct {
     capabilities: types.ClientCapabilities = .{},
     authorization_token: ?[]const u8 = null,
     roots_list: std.ArrayList(types.Root),
-    update_thread: ?std.Thread = null,
 
     const Self = @This();
 
@@ -71,7 +69,6 @@ pub const Client = struct {
             .config = config,
             .pending_requests = .init(allocator),
             .roots_list = .empty,
-            .update_thread = report.checkForUpdates(io, allocator),
         };
     }
 
@@ -84,9 +81,6 @@ pub const Client = struct {
         }
         if (self.transport) |t| {
             t.destroy(self.allocator);
-        }
-        if (self.update_thread) |t| {
-            t.join();
         }
     }
 

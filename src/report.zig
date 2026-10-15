@@ -1,19 +1,17 @@
-//! Report and Version Utilities
+//! Error Reporting
 //!
-//! Provides functionality for error reporting and checking for library updates.
+//! Prints actionable error messages for applications built on this library.
+//!
+//! This module deliberately performs no network access. An earlier version
+//! included an update checker that spawned a thread performing an outbound
+//! HTTPS request on every `Client.init`, which `Client.deinit` then had to
+//! join: that added tens of seconds to normal program shutdown and could hang
+//! indefinitely when the network was unavailable. The checker has been removed.
 
 const std = @import("std");
-const httpx = @import("httpx");
-const SemanticVersion = std.SemanticVersion;
-const builtin = @import("builtin");
-
-const Network = @import("utils/network.zig");
-const version_info = @import("version.zig");
-const CURRENT_VERSION: []const u8 = version_info.version;
 
 pub const ISSUES_URL = "https://github.com/muhammad-fiaz/mcp.zig/issues";
-const REPO_OWNER = "muhammad-fiaz";
-const REPO_NAME = "mcp.zig";
+
 /// Prints an error message with instructions for reporting bugs.
 pub fn reportError(err: anyerror) void {
     std.debug.print("\n[MCP ERROR] {}\n", .{err});
@@ -24,91 +22,4 @@ pub fn reportError(err: anyerror) void {
 pub fn reportErrorMessage(message: []const u8) void {
     std.debug.print("\n[MCP ERROR] {s}\n", .{message});
     std.debug.print("\nIf you believe this is a bug in mcp.zig, please report it at:\n  {s}\n\n", .{ISSUES_URL});
-}
-
-/// Static flag to ensure update check runs only once per process
-var update_check_done = false;
-var update_check_mutex: std.Io.Mutex = .init;
-
-fn stripVersionPrefix(tag: []const u8) []const u8 {
-    if (tag.len == 0) return tag;
-    return if (std.ascii.toLower(tag[0]) == 'v') tag[1..] else tag;
-}
-
-fn parseSemver(text: []const u8) ?SemanticVersion {
-    return SemanticVersion.parse(text) catch null;
-}
-
-const VersionRelation = enum { local_newer, equal, remote_newer, unknown };
-
-fn compareVersions(latest_raw: []const u8) VersionRelation {
-    const latest = stripVersionPrefix(latest_raw);
-    const current = stripVersionPrefix(CURRENT_VERSION);
-
-    // std.SemanticVersion.order implements SemVer precedence including
-    // pre-release and build metadata, which a hand-rolled major/minor/patch
-    // comparison gets wrong (e.g. 0.0.9-dev must not outrank 0.0.9).
-    if (parseSemver(current)) |cur| {
-        if (parseSemver(latest)) |lat| {
-            return switch (std.SemanticVersion.order(cur, lat)) {
-                .lt => .remote_newer,
-                .eq => .equal,
-                .gt => .local_newer,
-            };
-        }
-    }
-
-    if (std.mem.eql(u8, current, latest)) return .equal;
-    return .unknown;
-}
-
-fn fetchLatestTag(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
-    const url = std.fmt.comptimePrint("https://api.github.com/repos/{s}/{s}/releases/latest", .{ REPO_OWNER, REPO_NAME });
-    const extra_headers = [_]httpx.Header{
-        .{ .name = "Accept", .value = "application/vnd.github+json" },
-    };
-
-    const parsed = Network.fetchJson(io, allocator, url, &extra_headers) catch return error.TagMissing;
-    defer parsed.deinit();
-
-    return switch (parsed.value) {
-        .object => |obj| blk: {
-            if (obj.get("tag_name")) |tag_value| {
-                switch (tag_value) {
-                    .string => |s| break :blk try allocator.dupe(u8, s),
-                    else => break :blk error.TagMissing,
-                }
-            }
-            break :blk error.TagMissing;
-        },
-        else => error.TagMissing,
-    };
-}
-
-/// Checks for updates in a background thread (runs only once per process).
-/// Returns a thread handle so callers can optionally join during shutdown.
-/// Fails silently on errors (no internet, api limits, etc).
-pub fn checkForUpdates(io: std.Io, allocator: std.mem.Allocator) ?std.Thread {
-    if (builtin.is_test) return null;
-
-    update_check_mutex.lock(io) catch return null;
-    defer update_check_mutex.unlock(io);
-
-    // Prevent multiple concurrent update checks
-    if (update_check_done) return null;
-    update_check_done = true;
-
-    return std.Thread.spawn(.{}, checkWorker, .{ io, allocator }) catch null;
-}
-
-fn checkWorker(io: std.Io, allocator: std.mem.Allocator) void {
-    const latest_tag = fetchLatestTag(io, allocator) catch return;
-    defer allocator.free(latest_tag);
-
-    // Use ASCII-safe indicators instead of emoji for cross-platform compatibility
-    switch (compareVersions(latest_tag)) {
-        .remote_newer => std.log.info("[UPDATE] A newer release of mcp.zig is available: {s} (current {s})", .{ latest_tag, CURRENT_VERSION }),
-        .local_newer => std.log.info("[NIGHTLY] Running a dev/nightly build ahead of latest release: current {s}, latest {s}", .{ CURRENT_VERSION, latest_tag }),
-        else => {},
-    }
 }
