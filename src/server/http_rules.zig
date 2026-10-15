@@ -51,6 +51,8 @@ pub const Verdict = union(enum) {
     unknown_method: struct { method: []const u8 },
     /// The body itself is not a valid JSON-RPC message.
     invalid_request: struct { message: []const u8 },
+    /// A required `_meta` field is missing, so the request is malformed.
+    invalid_params: struct { message: []const u8 },
 };
 
 /// Decodes the Base64 sentinel format used for header values that are not
@@ -157,6 +159,18 @@ pub fn validate(
         .request => {},
     }
     const req = parsed.message.request;
+
+    // Per-request protocol fields: `protocolVersion` and `clientCapabilities`
+    // are both required on every client request. A request missing either is
+    // malformed and the spec answers -32602 (HTTP 400), so this is checked
+    // before the header/body comparison, which would otherwise report a
+    // missing body field as a header mismatch (-32020).
+    if (metaString(req.params, protocol.META_PROTOCOL_VERSION) == null) {
+        return .{ .invalid_params = .{ .message = "Missing required _meta field: io.modelcontextprotocol/protocolVersion" } };
+    }
+    if (metaValue(req.params, protocol.META_CLIENT_CAPABILITIES) == null) {
+        return .{ .invalid_params = .{ .message = "Missing required _meta field: io.modelcontextprotocol/clientCapabilities" } };
+    }
 
     // Protocol version header, when present, must match the body. It is
     // required; callers that must stay tolerant of pre-2025-06-18 clients can
@@ -272,14 +286,26 @@ fn metaString(params: ?std.json.Value, key: []const u8) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
+/// Like `metaString`, but returns the raw `_meta` value so non-string fields
+/// (such as the client capabilities object) can be presence-checked.
+fn metaValue(params: ?std.json.Value, key: []const u8) ?std.json.Value {
+    const p = params orelse return null;
+    if (p != .object) return null;
+    const meta = p.object.get("_meta") orelse return null;
+    if (meta != .object) return null;
+    return meta.object.get(key);
+}
+
 // tests
 
 const testing = std.testing;
 
+/// Builds a request body carrying the `_meta` fields the spec requires on
+/// every client request: `protocolVersion` and `clientCapabilities`.
 fn body(method: []const u8, version: ?[]const u8, extra: []const u8) []const u8 {
     const ver = if (version) |v| v else protocol.PROTOCOL_VERSION;
     return std.fmt.allocPrint(testing.allocator,
-        \\{{"jsonrpc":"2.0","id":1,"method":"{s}","params":{{"_meta":{{"io.modelcontextprotocol/protocolVersion":"{s}"}}{s}}}}}
+        \\{{"jsonrpc":"2.0","id":1,"method":"{s}","params":{{"_meta":{{"io.modelcontextprotocol/protocolVersion":"{s}","io.modelcontextprotocol/clientCapabilities":{{}}}}{s}}}}}
     , .{ method, ver, extra }) catch unreachable;
 }
 
@@ -288,6 +314,20 @@ test "validate accepts a well-formed request" {
     defer testing.allocator.free(b);
     const v = try validate(testing.allocator, .fromHeaders(protocol.PROTOCOL_VERSION, "tools/list", null), b, true);
     try testing.expect(v == .ok);
+}
+
+test "validate rejects a request missing required _meta fields" {
+    // The spec marks protocolVersion and clientCapabilities as required on
+    // every client request; a request missing either is malformed and is
+    // answered with -32602 (HTTP 400), not a header error.
+    const no_caps = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}";
+    const headers = HeaderSource.fromHeaders("2026-07-28", "tools/list", null);
+    const v1 = try validate(testing.allocator, headers, no_caps, true);
+    try testing.expect(v1 == .invalid_params);
+
+    const no_version = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    const v2 = try validate(testing.allocator, headers, no_version, true);
+    try testing.expect(v2 == .invalid_params);
 }
 
 test "validate rejects a missing protocol version header" {
@@ -392,7 +432,7 @@ test "http: Mcp-Name accepts the base64 sentinel encoding" {
 
     const req_body = try std.fmt.allocPrint(
         a,
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\",\"params\":{{\"uri\":\"{s}\",\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}}}}",
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\",\"params\":{{\"uri\":\"{s}\",\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{{}}}}}}}}",
         .{uri},
     );
     defer a.free(req_body);
@@ -412,7 +452,7 @@ test "http: Mcp-Method sentinel encoding is honoured" {
     const header_value = try std.fmt.allocPrint(a, "=?base64?{s}?=", .{b64});
     defer a.free(header_value);
 
-    const req_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"t\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}";
+    const req_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"t\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
     const headers = HeaderSource.fromHeaders("2026-07-28", header_value, "t");
 
     const verdict = try validate(a, headers, req_body, false);

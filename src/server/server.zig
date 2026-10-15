@@ -362,6 +362,10 @@ pub const Server = struct {
             .invalid_request => |d| {
                 return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_REQUEST, d.message, null);
             },
+            // A required _meta field is absent: malformed request, -32602/400.
+            .invalid_params => |d| {
+                return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_PARAMS, d.message, null);
+            },
             .missing_header => |d| {
                 return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.HEADER_MISMATCH, d.name, null);
             },
