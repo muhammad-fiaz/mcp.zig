@@ -21,6 +21,25 @@ const prompts_mod = @import("prompts.zig");
 const resources_mod = @import("resources.zig");
 const tools_mod = @import("tools.zig");
 
+/// Caching configuration for cacheable list/read results (MCP 2026-07-28).
+///
+/// Servers MUST include `ttlMs` (>= 0) and `cacheScope` on results whose
+/// `resultType` is `"complete"` for `server/discover`, `tools/list`,
+/// `prompts/list`, `resources/list`, `resources/templates/list`, and
+/// `resources/read`.
+pub const CacheConfig = struct {
+    /// Freshness hint in milliseconds. `0` means immediately stale.
+    /// Values are clamped to >= 0 by the server.
+    ttl_ms: i64 = protocol.DEFAULT_CACHE_TTL_MS,
+    /// Freshness hint for `resources/read`, which usually returns
+    /// request-specific data.
+    read_ttl_ms: i64 = protocol.DEFAULT_RESOURCE_READ_TTL_MS,
+    /// Scope for list results and `server/discover`.
+    scope: types.CacheScope = .public,
+    /// Scope for `resources/read` results, which may be user-specific.
+    read_scope: types.CacheScope = .private,
+};
+
 /// Configuration for an MCP Server
 pub const ServerConfig = struct {
     name: []const u8,
@@ -30,6 +49,8 @@ pub const ServerConfig = struct {
     icons: ?[]const types.Icon = null,
     websiteUrl: ?[]const u8 = null,
     instructions: ?[]const u8 = null,
+    /// Caching hints emitted on cacheable results.
+    cache: CacheConfig = .{},
 };
 
 /// Current state of the server
@@ -480,11 +501,8 @@ pub const Server = struct {
         };
         try result.put(allocator, "status", .{ .string = status_str });
 
-        // Server info
-        var server_info: std.json.ObjectMap = .empty;
-        try server_info.put(allocator, "name", .{ .string = self.config.name });
-        try server_info.put(allocator, "version", .{ .string = self.config.version });
-        try result.put(allocator, "serverInfo", .{ .object = server_info });
+        // Server identity belongs under the namespaced _meta key.
+        try Self.putServerInfoMeta(allocator, &result, self.config);
 
         // Uptime (placeholder - would need to track start time in production)
         try result.put(allocator, "uptime", .{ .integer = 0 });
@@ -492,6 +510,8 @@ pub const Server = struct {
         // Active connections count
         const active_count: i64 = if (self.transport != null) 1 else 0;
         try result.put(allocator, "activeConnections", .{ .integer = active_count });
+
+        try Self.putResultComplete(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -545,52 +565,69 @@ pub const Server = struct {
         }
         try result.put(allocator, "capabilities", .{ .object = caps });
 
-        // serverInfo
-        var server_info: std.json.ObjectMap = .empty;
-        try server_info.put(allocator, "name", .{ .string = self.config.name });
-        try server_info.put(allocator, "version", .{ .string = self.config.version });
-        if (self.config.title) |t| {
-            try server_info.put(allocator, "title", .{ .string = t });
-        }
-        if (self.config.description) |d| {
-            try server_info.put(allocator, "description", .{ .string = d });
-        }
-        if (self.config.icons) |icons| {
-            try putIcons(allocator, &server_info, icons);
-        }
-        if (self.config.websiteUrl) |u| {
-            try server_info.put(allocator, "websiteUrl", .{ .string = u });
-        }
-        try result.put(allocator, "serverInfo", .{ .object = server_info });
+        // serverInfo lives under the namespaced _meta key (2026-07-28).
+        try Self.putServerInfoMeta(allocator, &result, self.config);
 
         if (self.config.instructions) |inst| {
             try result.put(allocator, "instructions", .{ .string = inst });
         }
 
+        try Self.putResultComplete(allocator, &result);
+        try self.putListCacheHints(allocator, &result);
+
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
+    /// Collects map keys and sorts them so `tools/list`, `resources/list`,
+    /// `resources/templates/list`, and `prompts/list` return results in a
+    /// deterministic order. The spec asks servers to return a stable ordering
+    /// so clients can cache and cache-diff these lists reliably; iterating the
+    /// underlying hash map directly does not guarantee that.
+    fn sortedKeys(
+        allocator: std.mem.Allocator,
+        comptime Map: type,
+        map: *const Map,
+    ) ![]const []const u8 {
+        var keys: std.ArrayList([]const u8) = .empty;
+        errdefer keys.deinit(allocator);
+
+        var it = map.keyIterator();
+        while (it.next()) |key| {
+            keys.append(allocator, key.*) catch return error.OutOfMemory;
+        }
+
+        std.mem.sort([]const u8, keys.items, {}, lessThanStr);
+        return keys.toOwnedSlice(allocator);
+    }
+
+    fn lessThanStr(_: void, a: []const u8, b: []const u8) bool {
+        return std.mem.lessThan(u8, a, b);
     }
 
     /// Handle tools/list request
     fn handleToolsList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var tools_array: std.json.Array = .init(allocator);
 
-        var iter = self.tools.iterator();
-        while (iter.next()) |entry| {
+        const keys = try Self.sortedKeys(allocator, @TypeOf(self.tools), &self.tools);
+        defer allocator.free(keys);
+
+        for (keys) |key| {
+            const entry = self.tools.get(key).?;
             var tool_obj: std.json.ObjectMap = .empty;
-            try tool_obj.put(allocator, "name", .{ .string = entry.value_ptr.name });
-            if (entry.value_ptr.description) |desc| {
+            try tool_obj.put(allocator, "name", .{ .string = entry.name });
+            if (entry.description) |desc| {
                 try tool_obj.put(allocator, "description", .{ .string = desc });
             }
-            if (entry.value_ptr.title) |t| {
+            if (entry.title) |t| {
                 try tool_obj.put(allocator, "title", .{ .string = t });
             }
-            if (entry.value_ptr.icons) |icons| {
+            if (entry.icons) |icons| {
                 try putIcons(allocator, &tool_obj, icons);
             }
 
             var input_schema: std.json.ObjectMap = .empty;
-            if (entry.value_ptr.inputSchema) |schema| {
+            if (entry.inputSchema) |schema| {
                 try input_schema.put(allocator, "type", .{ .string = schema.type });
 
                 if (schema.@"$schema") |s| try input_schema.put(allocator, "$schema", .{ .string = s });
@@ -607,7 +644,7 @@ pub const Server = struct {
             }
             try tool_obj.put(allocator, "inputSchema", .{ .object = input_schema });
 
-            if (entry.value_ptr.outputSchema) |schema| {
+            if (entry.outputSchema) |schema| {
                 var output_schema: std.json.ObjectMap = .empty;
                 try output_schema.put(allocator, "type", .{ .string = schema.type });
                 if (schema.@"$schema") |s| try output_schema.put(allocator, "$schema", .{ .string = s });
@@ -620,7 +657,7 @@ pub const Server = struct {
                 try tool_obj.put(allocator, "outputSchema", .{ .object = output_schema });
             }
 
-            if (entry.value_ptr.annotations) |ann| {
+            if (entry.annotations) |ann| {
                 var ann_obj: std.json.ObjectMap = .empty;
                 if (ann.title) |t| try ann_obj.put(allocator, "title", .{ .string = t });
                 try ann_obj.put(allocator, "readOnlyHint", .{ .bool = ann.readOnlyHint });
@@ -630,7 +667,7 @@ pub const Server = struct {
                 try tool_obj.put(allocator, "annotations", .{ .object = ann_obj });
             }
 
-            if (entry.value_ptr.execution) |exec| {
+            if (entry.execution) |exec| {
                 var exec_obj: std.json.ObjectMap = .empty;
                 if (exec.taskSupport) |ts| {
                     try exec_obj.put(allocator, "taskSupport", .{ .string = ts });
@@ -643,7 +680,8 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "tools", .{ .array = tools_array });
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
+        try self.putListCacheHints(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -723,7 +761,7 @@ pub const Server = struct {
                 const task_obj = try buildTaskObject(allocator, task);
                 var result: std.json.ObjectMap = .empty;
                 try result.put(allocator, "task", .{ .object = task_obj });
-                try result.put(allocator, "resultType", .{ .string = "complete" });
+                try Self.putResultComplete(allocator, &result);
 
                 const response = jsonrpc.createResponse(request.id, .{ .object = result });
                 try self.sendResponse(io, allocator, .{ .response = response });
@@ -752,30 +790,33 @@ pub const Server = struct {
     fn handleResourcesList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var resources_array: std.json.Array = .init(allocator);
 
-        var iter = self.resources.iterator();
-        while (iter.next()) |entry| {
+        const keys = try Self.sortedKeys(allocator, @TypeOf(self.resources), &self.resources);
+        defer allocator.free(keys);
+
+        for (keys) |key| {
+            const entry = self.resources.get(key).?;
             var resource_obj: std.json.ObjectMap = .empty;
-            try resource_obj.put(allocator, "uri", .{ .string = entry.value_ptr.uri });
-            try resource_obj.put(allocator, "name", .{ .string = entry.value_ptr.name });
-            if (entry.value_ptr.title) |t| {
+            try resource_obj.put(allocator, "uri", .{ .string = entry.uri });
+            try resource_obj.put(allocator, "name", .{ .string = entry.name });
+            if (entry.title) |t| {
                 try resource_obj.put(allocator, "title", .{ .string = t });
             }
-            if (entry.value_ptr.description) |desc| {
+            if (entry.description) |desc| {
                 try resource_obj.put(allocator, "description", .{ .string = desc });
             }
-            if (entry.value_ptr.mimeType) |mime| {
+            if (entry.mimeType) |mime| {
                 try resource_obj.put(allocator, "mimeType", .{ .string = mime });
             }
-            if (entry.value_ptr.icons) |icons| {
+            if (entry.icons) |icons| {
                 try putIcons(allocator, &resource_obj, icons);
             }
-            if (entry.value_ptr.annotations) |ann| {
+            if (entry.annotations) |ann| {
                 try putAnnotations(allocator, &resource_obj, ann);
             }
-            if (entry.value_ptr.size) |s| {
+            if (entry.size) |s| {
                 try resource_obj.put(allocator, "size", .{ .integer = @intCast(s) });
             }
-            if (entry.value_ptr._meta) |meta| {
+            if (entry._meta) |meta| {
                 try resource_obj.put(allocator, "_meta", meta);
             }
             try resources_array.append(.{ .object = resource_obj });
@@ -783,7 +824,8 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resources", .{ .array = resources_array });
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
+        try self.putListCacheHints(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -829,7 +871,8 @@ pub const Server = struct {
 
             var result: std.json.ObjectMap = .empty;
             try result.put(allocator, "contents", .{ .array = contents_array });
-            try result.put(allocator, "resultType", .{ .string = "complete" });
+            try Self.putResultComplete(allocator, &result);
+            try self.putReadCacheHints(allocator, &result);
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
             try self.sendResponse(io, allocator, .{ .response = response });
@@ -843,27 +886,30 @@ pub const Server = struct {
     fn handleResourceTemplatesList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var templates_array: std.json.Array = .init(allocator);
 
-        var iter = self.resource_templates.iterator();
-        while (iter.next()) |entry| {
+        const keys = try Self.sortedKeys(allocator, @TypeOf(self.resource_templates), &self.resource_templates);
+        defer allocator.free(keys);
+
+        for (keys) |key| {
+            const entry = self.resource_templates.get(key).?;
             var template_obj: std.json.ObjectMap = .empty;
-            try template_obj.put(allocator, "uriTemplate", .{ .string = entry.value_ptr.uriTemplate });
-            try template_obj.put(allocator, "name", .{ .string = entry.value_ptr.name });
-            if (entry.value_ptr.title) |t| {
+            try template_obj.put(allocator, "uriTemplate", .{ .string = entry.uriTemplate });
+            try template_obj.put(allocator, "name", .{ .string = entry.name });
+            if (entry.title) |t| {
                 try template_obj.put(allocator, "title", .{ .string = t });
             }
-            if (entry.value_ptr.description) |desc| {
+            if (entry.description) |desc| {
                 try template_obj.put(allocator, "description", .{ .string = desc });
             }
-            if (entry.value_ptr.mimeType) |mime| {
+            if (entry.mimeType) |mime| {
                 try template_obj.put(allocator, "mimeType", .{ .string = mime });
             }
-            if (entry.value_ptr.icons) |icons| {
+            if (entry.icons) |icons| {
                 try putIcons(allocator, &template_obj, icons);
             }
-            if (entry.value_ptr.annotations) |ann| {
+            if (entry.annotations) |ann| {
                 try putAnnotations(allocator, &template_obj, ann);
             }
-            if (entry.value_ptr._meta) |meta| {
+            if (entry._meta) |meta| {
                 try template_obj.put(allocator, "_meta", meta);
             }
             try templates_array.append(.{ .object = template_obj });
@@ -871,7 +917,8 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "resourceTemplates", .{ .array = templates_array });
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
+        try self.putListCacheHints(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -881,7 +928,7 @@ pub const Server = struct {
     fn handleSubscriptionsListen(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         // For now, acknowledge the subscription. Full implementation would use long-lived SSE streams.
         var result: std.json.ObjectMap = .empty;
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -891,21 +938,24 @@ pub const Server = struct {
     fn handlePromptsList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var prompts_array: std.json.Array = .init(allocator);
 
-        var iter = self.prompts.iterator();
-        while (iter.next()) |entry| {
+        const keys = try Self.sortedKeys(allocator, @TypeOf(self.prompts), &self.prompts);
+        defer allocator.free(keys);
+
+        for (keys) |key| {
+            const entry = self.prompts.get(key).?;
             var prompt_obj: std.json.ObjectMap = .empty;
-            try prompt_obj.put(allocator, "name", .{ .string = entry.value_ptr.name });
-            if (entry.value_ptr.description) |desc| {
+            try prompt_obj.put(allocator, "name", .{ .string = entry.name });
+            if (entry.description) |desc| {
                 try prompt_obj.put(allocator, "description", .{ .string = desc });
             }
-            if (entry.value_ptr.title) |t| {
+            if (entry.title) |t| {
                 try prompt_obj.put(allocator, "title", .{ .string = t });
             }
-            if (entry.value_ptr.icons) |icons| {
+            if (entry.icons) |icons| {
                 try putIcons(allocator, &prompt_obj, icons);
             }
 
-            if (entry.value_ptr.arguments) |args| {
+            if (entry.arguments) |args| {
                 var args_array: std.json.Array = .init(allocator);
                 for (args) |arg| {
                     var arg_obj: std.json.ObjectMap = .empty;
@@ -922,7 +972,7 @@ pub const Server = struct {
                 try prompt_obj.put(allocator, "arguments", .{ .array = args_array });
             }
 
-            if (entry.value_ptr._meta) |meta| {
+            if (entry._meta) |meta| {
                 try prompt_obj.put(allocator, "_meta", meta);
             }
 
@@ -931,7 +981,8 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "prompts", .{ .array = prompts_array });
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
+        try self.putListCacheHints(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -1002,6 +1053,7 @@ pub const Server = struct {
             if (prompt.description) |desc| {
                 try result.put(allocator, "description", .{ .string = desc });
             }
+            try Self.putResultComplete(allocator, &result);
 
             const response = jsonrpc.createResponse(request.id, .{ .object = result });
             try self.sendResponse(io, allocator, .{ .response = response });
@@ -1020,6 +1072,7 @@ pub const Server = struct {
 
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "completion", .{ .object = completion });
+        try Self.putResultComplete(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -1042,6 +1095,7 @@ pub const Server = struct {
         var result: std.json.ObjectMap = .empty;
         const roots_array: std.json.Array = .init(allocator);
         try result.put(allocator, "roots", .{ .array = roots_array });
+        try Self.putResultComplete(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -1376,7 +1430,7 @@ pub const Server = struct {
         var result: std.json.ObjectMap = .empty;
         try result.put(allocator, "content", .{ .array = content_array });
         try result.put(allocator, "isError", .{ .bool = tool_result.is_error });
-        try result.put(allocator, "resultType", .{ .string = "complete" });
+        try Self.putResultComplete(allocator, &result);
         if (tool_result.structuredContent) |sc| {
             try result.put(allocator, "structuredContent", sc);
         }
@@ -1452,6 +1506,65 @@ pub const Server = struct {
             try ann_obj.put(allocator, "lastModified", .{ .string = last_modified });
         }
         try obj.put(allocator, "annotations", .{ .object = ann_obj });
+    }
+
+    /// Marks a result as fully satisfied: `resultType: "complete"`.
+    /// Every result emitted by the server carries this in MCP 2026-07-28.
+    fn putResultComplete(allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
+        try result.put(allocator, "resultType", .{ .string = protocol.RESULT_TYPE_COMPLETE });
+    }
+
+    /// Emits the mandatory caching hints on a cacheable result:
+    /// `ttlMs` (clamped to >= 0) and `cacheScope`.
+    fn putCacheHints(
+        allocator: std.mem.Allocator,
+        result: *std.json.ObjectMap,
+        ttl_ms: i64,
+        scope: types.CacheScope,
+    ) !void {
+        const clamped = if (ttl_ms < 0) 0 else ttl_ms;
+        try result.put(allocator, "ttlMs", .{ .integer = clamped });
+        try result.put(allocator, "cacheScope", .{ .string = scope.toString() });
+    }
+
+    /// Convenience: emit the standard list/discover cache hints.
+    fn putListCacheHints(self: *Self, allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
+        try Self.putCacheHints(allocator, result, self.config.cache.ttl_ms, self.config.cache.scope);
+    }
+
+    /// Convenience: emit cache hints for `resources/read` results, which are
+    /// treated as user-specific by default.
+    fn putReadCacheHints(self: *Self, allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
+        try Self.putCacheHints(allocator, result, self.config.cache.read_ttl_ms, self.config.cache.read_scope);
+    }
+
+    /// Emits the server identity under the spec-mandated namespaced `_meta`
+    /// key instead of a top-level `serverInfo` field.
+    fn putServerInfoMeta(
+        allocator: std.mem.Allocator,
+        result: *std.json.ObjectMap,
+        config: ServerConfig,
+    ) !void {
+        var server_info: std.json.ObjectMap = .empty;
+        try server_info.put(allocator, "name", .{ .string = config.name });
+        try server_info.put(allocator, "version", .{ .string = config.version });
+        if (config.title) |t| try server_info.put(allocator, "title", .{ .string = t });
+        if (config.description) |d| try server_info.put(allocator, "description", .{ .string = d });
+        if (config.icons) |icons| try putIcons(allocator, &server_info, icons);
+        if (config.websiteUrl) |u| try server_info.put(allocator, "websiteUrl", .{ .string = u });
+
+        // Preserve any caller-supplied _meta fields on the result.
+        var meta: std.json.ObjectMap = .empty;
+        if (result.get("_meta")) |existing| {
+            if (existing == .object) {
+                var it = existing.object.iterator();
+                while (it.next()) |entry| {
+                    try meta.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+                }
+            }
+        }
+        try meta.put(allocator, protocol.META_SERVER_INFO, .{ .object = server_info });
+        try result.put(allocator, "_meta", .{ .object = meta });
     }
 
     fn log(self: *Self, io: anytype, message: []const u8) void {
@@ -1663,4 +1776,302 @@ test "Server add prompt with description" {
     });
     try std.testing.expect(server.prompts.contains("test_prompt"));
     try std.testing.expect(server.capabilities.prompts != null);
+}
+
+// --- MCP 2026-07-28 spec conformance tests (issue #14) ---
+
+/// Captures the JSON a handler emits so tests can assert on the wire format.
+const CaptureTransport = struct {
+    buf: std.ArrayList(u8) = .empty,
+    allocator: std.mem.Allocator,
+    captured: ?[]const u8 = null,
+
+    fn send(self: *CaptureTransport, _: std.Io, _: std.mem.Allocator, message: []const u8) !void {
+        // `message` and the allocator we are handed both live in a per-request
+        // arena that is freed when the handler returns, so copy into storage
+        // owned by this struct using the test allocator.
+        self.buf.clearRetainingCapacity();
+        try self.buf.appendSlice(self.allocator, message);
+        self.captured = self.buf.items;
+    }
+    fn receive(_: *CaptureTransport, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+        return null;
+    }
+    fn close(_: *CaptureTransport) void {}
+    fn deinitCapture(self: *CaptureTransport) void {
+        self.buf.deinit(self.allocator);
+    }
+};
+
+/// Runs one request through the server and returns the parsed result object.
+fn runRequest(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    method: []const u8,
+    params_json: ?[]const u8,
+) !std.json.Parsed(std.json.Value) {
+    var cap = CaptureTransport{ .allocator = allocator };
+    defer cap.deinitCapture();
+    const prev_transport = server.transport;
+    defer server.transport = prev_transport;
+    server.transport = .{
+        .ptr = &cap,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, a: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.send(io, a, m);
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, a: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, a);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const raw_request = if (params_json) |p|
+        std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{s}\",\"params\":{s}}}", .{ method, p }) catch return error.OutOfMemory
+    else
+        std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{s}\"}}", .{method}) catch return error.OutOfMemory;
+    defer allocator.free(raw_request);
+
+    try server.handleMessage(std.Io.failing, allocator, raw_request);
+
+    const raw = cap.captured orelse return error.NoResponseCaptured;
+    return std.json.parseFromSlice(std.json.Value, allocator, raw, .{});
+}
+
+/// Borrows the `result` object of a parsed response. The caller must keep
+/// `parsed` alive for as long as the returned map is used.
+fn resultOf(parsed: std.json.Parsed(std.json.Value)) !std.json.ObjectMap {
+    const res_obj = parsed.value.object.get("result") orelse return error.NoResultField;
+    if (res_obj != .object) return error.ResultNotObject;
+    return res_obj.object;
+}
+
+fn expectResultType(result: std.json.ObjectMap) !void {
+    const rt = result.get("resultType") orelse return error.MissingResultType;
+    try std.testing.expectEqualStrings("complete", rt.string);
+}
+
+fn expectCacheHints(result: std.json.ObjectMap, ttl: i64, scope: []const u8) !void {
+    const ttl_val = result.get("ttlMs") orelse return error.MissingTtlMs;
+    try std.testing.expectEqual(@as(i64, ttl), ttl_val.integer);
+    const scope_val = result.get("cacheScope") orelse return error.MissingCacheScope;
+    try std.testing.expectEqualStrings(scope, scope_val.string);
+}
+
+test "spec: server/discover emits resultType, cache hints and _meta serverInfo" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{ .name = "spec-server", .version = "9.9.9" });
+    defer server.deinit();
+
+    const parsed = try runRequest(&server, allocator, "server/discover", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+
+    try expectResultType(result);
+    try expectCacheHints(result, protocol.DEFAULT_CACHE_TTL_MS, "public");
+
+    // serverInfo must live under the namespaced _meta key, not at top level.
+    try std.testing.expect(result.get("serverInfo") == null);
+    const meta = result.get("_meta") orelse return error.MissingMeta;
+    const meta_obj = meta.object;
+    const info = meta_obj.get(protocol.META_SERVER_INFO) orelse return error.MissingServerInfoMeta;
+    try std.testing.expectEqualStrings("spec-server", info.object.get("name").?.string);
+    try std.testing.expectEqualStrings("9.9.9", info.object.get("version").?.string);
+
+    // supportedVersions and capabilities remain top-level.
+    try std.testing.expect(result.get("supportedVersions") != null);
+    try std.testing.expect(result.get("capabilities") != null);
+}
+
+test "spec: cacheable list results carry ttlMs and cacheScope" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{ .name = "list-server", .version = "1.0.0" });
+    defer server.deinit();
+
+    try server.addTool(.{
+        .name = "noop",
+        .description = "does nothing",
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, a: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+                return tools_mod.textResult(a, "ok") catch return tools_mod.ToolError.OutOfMemory;
+            }
+        }.handler,
+    });
+
+    for ([_][]const u8{ "tools/list", "prompts/list", "resources/list", "resources/templates/list" }) |method| {
+        const parsed = try runRequest(&server, allocator, method, null);
+        defer parsed.deinit();
+        const result = try resultOf(parsed);
+        try expectResultType(result);
+        try expectCacheHints(result, protocol.DEFAULT_CACHE_TTL_MS, "public");
+    }
+}
+
+test "spec: resources/read uses the private read cache scope" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{ .name = "read-server", .version = "1.0.0" });
+    defer server.deinit();
+
+    try server.addResource(.{
+        .uri = "mem://thing",
+        .name = "Thing",
+        .mimeType = "text/plain",
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, uri: []const u8) resources_mod.ResourceError!resources_mod.ResourceContent {
+                return .{ .uri = uri, .mimeType = "text/plain", .text = "data" };
+            }
+        }.handler,
+    });
+
+    const parsed = try runRequest(&server, allocator, "resources/read", "{\"uri\":\"mem://thing\"}");
+    defer parsed.deinit();
+
+    const result = try resultOf(parsed);
+    try expectResultType(result);
+    try expectCacheHints(result, protocol.DEFAULT_RESOURCE_READ_TTL_MS, "private");
+    try std.testing.expect(result.get("contents") != null);
+}
+
+test "spec: cache configuration overrides defaults" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{
+        .name = "cfg-server",
+        .version = "1.0.0",
+        .cache = .{ .ttl_ms = 42, .scope = .private, .read_ttl_ms = 7, .read_scope = .public },
+    });
+    defer server.deinit();
+
+    const parsed = try runRequest(&server, allocator, "tools/list", null);
+    defer parsed.deinit();
+    const list = try resultOf(parsed);
+    try expectCacheHints(list, 42, "private");
+}
+
+test "spec: negative ttlMs is clamped to zero" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{
+        .name = "clamp-server",
+        .version = "1.0.0",
+        .cache = .{ .ttl_ms = -5000 },
+    });
+    defer server.deinit();
+
+    const parsed = try runRequest(&server, allocator, "tools/list", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+    try expectCacheHints(result, 0, "public");
+}
+
+test "spec: tools/list returns a deterministic order" {
+    const allocator = std.testing.allocator;
+
+    const Handler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, a: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.textResult(a, "ok") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    // Insert in a scrambled order across many tools; repeated calls must agree.
+    const names = [_][]const u8{ "zeta", "alpha", "mike", "bravo", "delta", "echo", "yankee", "charlie", "golf", "hotel" };
+
+    var server = Server.init(allocator, .{ .name = "order-server", .version = "1.0.0" });
+    defer server.deinit();
+    for (names) |n| {
+        try server.addTool(.{ .name = n, .description = "x", .handler = Handler.handler });
+    }
+
+    const parsed = try runRequest(&server, allocator, "tools/list", null);
+    defer parsed.deinit();
+    const first = try resultOf(parsed);
+    const first_tools = first.get("tools").?.array;
+    for (0..5) |_| {
+        const reparsed = try runRequest(&server, allocator, "tools/list", null);
+        defer reparsed.deinit();
+        const again = try resultOf(reparsed);
+        const again_tools = again.get("tools").?.array;
+        try std.testing.expectEqual(first_tools.items.len, again_tools.items.len);
+        for (first_tools.items, again_tools.items) |a, b| {
+            try std.testing.expectEqualStrings(
+                a.object.get("name").?.string,
+                b.object.get("name").?.string,
+            );
+        }
+    }
+
+    // And the order itself is sorted ascending by name.
+    for (first_tools.items, 0..) |item, i| {
+        if (i + 1 < first_tools.items.len) {
+            const cur = item.object.get("name").?.string;
+            const next = first_tools.items[i + 1].object.get("name").?.string;
+            try std.testing.expect(std.mem.lessThan(u8, cur, next));
+        }
+    }
+}
+
+test "spec: prompts/get and health/check carry resultType" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{ .name = "misc-server", .version = "1.0.0" });
+    defer server.deinit();
+
+    try server.addPrompt(.{
+        .name = "hi",
+        .description = "say hi",
+        .handler = struct {
+            fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) prompts_mod.PromptError![]const prompts_mod.PromptMessage {
+                return &.{};
+            }
+        }.handler,
+    });
+
+    const parsed = try runRequest(&server, allocator, "prompts/get", "{\"name\":\"hi\"}");
+    defer parsed.deinit();
+    const prompt = try resultOf(parsed);
+    try expectResultType(prompt);
+
+    const parsed_health = try runRequest(&server, allocator, "health/check", null);
+    defer parsed_health.deinit();
+    const health = try resultOf(parsed_health);
+    try expectResultType(health);
+    try std.testing.expect(health.get("serverInfo") == null);
+    try std.testing.expect(health.get("_meta") != null);
+}
+
+test "spec: _meta serverInfo merges with pre-existing _meta keys" {
+    const allocator = std.testing.allocator;
+    var server = Server.init(allocator, .{ .name = "merge-server", .version = "2.0.0" });
+    defer server.deinit();
+
+    var result: std.json.ObjectMap = .empty;
+    defer result.deinit(allocator);
+    var existing: std.json.ObjectMap = .empty;
+    defer existing.deinit(allocator);
+    try existing.put(allocator, "custom", .{ .string = "keep-me" });
+    try result.put(allocator, "_meta", .{ .object = existing });
+
+    try Server.putServerInfoMeta(allocator, &result, server.config);
+
+    // putServerInfoMeta builds a new _meta object; release it explicitly.
+    var built_meta = result.get("_meta").?.object;
+    defer built_meta.deinit(allocator);
+
+    const meta = built_meta;
+    try std.testing.expectEqualStrings("keep-me", meta.get("custom").?.string);
+    var info_obj = meta.get(protocol.META_SERVER_INFO).?.object;
+    defer info_obj.deinit(allocator);
+    try std.testing.expectEqualStrings("merge-server", info_obj.get("name").?.string);
 }
