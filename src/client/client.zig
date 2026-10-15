@@ -245,13 +245,68 @@ pub const Client = struct {
         try self.sendRequest("tools/list", null);
     }
 
+    /// A round of Multi Round-Trip Requests that the server asked the client to
+    /// satisfy before it could complete the original request.
+    pub const InputRequiredRound = struct {
+        /// Server-assigned request map, keyed by identifier.
+        inputRequests: types.InputRequests,
+        /// Opaque server state that MUST be echoed back verbatim on the retry.
+        requestState: ?[]const u8 = null,
+
+        /// Returns the request registered under `key`, or null.
+        pub fn request(self: InputRequiredRound, key: []const u8) ?std.json.Value {
+            return self.inputRequests.get(key);
+        }
+    };
+
+    /// Recognises an `InputRequiredResult` in a `result` object.
+    ///
+    /// Returns null for any other `resultType`, including `complete`. A
+    /// `resultType` this client does not recognise is treated as invalid by
+    /// the spec, so only the two core values are accepted here.
+    pub fn parseInputRequired(result: std.json.ObjectMap) ?InputRequiredRound {
+        const rt = result.get("resultType") orelse return null;
+        if (rt != .string) return null;
+        if (!std.mem.eql(u8, rt.string, protocol.RESULT_TYPE_INPUT_REQUIRED)) return null;
+
+        var requests: types.InputRequests = .empty;
+        if (result.get("inputRequests")) |v| {
+            if (v == .object) requests = v.object;
+        }
+        var state: ?[]const u8 = null;
+        if (result.get("requestState")) |v| {
+            if (v == .string) state = v.string;
+        }
+        return .{ .inputRequests = requests, .requestState = state };
+    }
+
     /// Invokes a tool on the server with optional arguments.
     pub fn callTool(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
+        try self.callToolRound(name, arguments, null);
+    }
+
+    /// Retries `tools/call` with the `inputResponses` and `requestState` from
+    /// a previous `InputRequiredResult`.
+    ///
+    /// The retry is a fresh request and therefore gets a fresh JSON-RPC id.
+    /// Pass `round.requestState` back unchanged; it is opaque to the client.
+    pub fn callToolRound(
+        self: *Self,
+        name: []const u8,
+        arguments: ?std.json.Value,
+        round: ?InputRequiredRound,
+    ) !void {
         var params: std.json.ObjectMap = .empty;
         defer params.deinit(self.allocator);
         try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
             try params.put(self.allocator, "arguments", args);
+        }
+        if (round) |r| {
+            try params.put(self.allocator, "inputResponses", .{ .object = r.inputRequests });
+            if (r.requestState) |state| {
+                try params.put(self.allocator, "requestState", .{ .string = state });
+            }
         }
         try self.sendRequest("tools/call", .{ .object = params });
     }
@@ -534,4 +589,80 @@ test "Client sendBatch with unmanaged ArrayList (Zig 0.17 migration)" {
     defer responses.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), responses.items.len);
     try std.testing.expectEqual(@as(i64, 3), client.next_request_id);
+}
+
+test "parseInputRequired recognises only the input_required resultType" {
+    const a = std.testing.allocator;
+
+    const body =
+        \\{"resultType":"input_required","inputRequests":{"github_login":{"method":"elicitation/create","params":{"mode":"form"}}},"requestState":"opaque"}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, body, .{});
+    defer parsed.deinit();
+
+    const round = Client.parseInputRequired(parsed.value.object).?;
+    try std.testing.expectEqualStrings("opaque", round.requestState.?);
+    try std.testing.expectEqualStrings("elicitation/create", round.request("github_login").?.object.get("method").?.string);
+
+    // `complete` is not an MRTR round, and an absent resultType is treated as
+    // complete for backwards compatibility, so neither yields a round.
+    const complete = "{\"resultType\":\"complete\",\"content\":[]}";
+    var p2 = try std.json.parseFromSlice(std.json.Value, a, complete, .{});
+    defer p2.deinit();
+    try std.testing.expect(Client.parseInputRequired(p2.value.object) == null);
+
+    const legacy = "{\"content\":[]}";
+    var p3 = try std.json.parseFromSlice(std.json.Value, a, legacy, .{});
+    defer p3.deinit();
+    try std.testing.expect(Client.parseInputRequired(p3.value.object) == null);
+}
+
+test "callToolRound echoes inputResponses and requestState on the retry" {
+    const a = std.testing.allocator;
+
+    var sent = std.ArrayList([]u8).empty;
+    defer {
+        for (sent.items) |m| a.free(m);
+        sent.deinit(a);
+    }
+
+    var client = Client.init(std.Io.failing, a, .{ .name = "mrtr-client", .version = "1.0.0" });
+    defer client.deinit();
+    client.transport = .{
+        .ptr = &sent,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, _: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const list: *std.ArrayList([]u8) = @ptrCast(@alignCast(p));
+                    list.append(al, try al.dupe(u8, m)) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(_: *anyopaque, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    return null;
+                }
+            }.f,
+            .close = struct {
+                fn f(_: *anyopaque) void {}
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    var responses: types.InputRequests = .empty;
+    defer responses.deinit(a);
+    try responses.put(a, "github_login", .{ .string = "octocat" });
+
+    try client.callToolRound("greet", null, .{ .inputRequests = responses, .requestState = "opaque" });
+
+    try std.testing.expectEqual(@as(usize, 1), sent.items.len);
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, sent.items[0], .{});
+    defer parsed.deinit();
+
+    const params = parsed.value.object.get("params").?.object;
+    try std.testing.expectEqualStrings("greet", params.get("name").?.string);
+    try std.testing.expectEqualStrings("octocat", params.get("inputResponses").?.object.get("github_login").?.string);
+    try std.testing.expectEqualStrings("opaque", params.get("requestState").?.string);
 }

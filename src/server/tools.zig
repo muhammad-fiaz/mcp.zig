@@ -54,6 +54,10 @@ pub const ToolError = error{
     ResourceNotFound,
     Timeout,
     OutOfMemory,
+    /// The tool cannot finish yet and needs more input from the client.
+    /// The server turns this into an MRTR `InputRequiredResult` using the
+    /// resolver configured on `ServerConfig.mrtr`.
+    InputRequired,
     Unknown,
 };
 

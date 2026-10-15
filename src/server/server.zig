@@ -84,6 +84,22 @@ pub const ServerConfig = struct {
     instructions: ?[]const u8 = null,
     /// Caching hints emitted on cacheable results.
     cache: CacheConfig = .{},
+    /// Builds the MRTR response when a handler returns `error.InputRequired`.
+    ///
+    /// A server that needs client input (elicitation, sampling or roots)
+    /// signals it from a tool, resource or prompt handler by returning
+    /// `error.InputRequired`; this hook turns that into the
+    /// `InputRequiredResult` the client is asked to satisfy. It receives the
+    /// request params so it can inspect any `inputResponses` and
+    /// `requestState` echoed back on a retry.
+    mrtr: ?*const fn (
+        user_data: ?*anyopaque,
+        method: []const u8,
+        params: ?std.json.Value,
+        allocator: std.mem.Allocator,
+    ) anyerror!types.InputRequiredResult = null,
+    /// Passed to the `mrtr` hook.
+    mrtr_user_data: ?*anyopaque = null,
 };
 
 /// Current state of the server
@@ -857,6 +873,11 @@ pub const Server = struct {
             }
 
             const tool_result = tool.handler(tool.user_data, io, allocator, arguments) catch |err| {
+                // A handler that needs more client input opts into MRTR by
+                // returning error.InputRequired.
+                if (err == error.InputRequired) {
+                    if (try self.sendInputRequiredIfRequested(io, allocator, request)) return;
+                }
                 var content = try allocator.alloc(types.ContentBlock, 1);
                 content[0] = .{ .text = .{ .text = @errorName(err) } };
                 const result_value = try buildToolCallResultValue(allocator, .{ .content = content, .is_error = true });
@@ -1024,6 +1045,28 @@ pub const Server = struct {
             .integer => |i| try meta.put(allocator, protocol.META_SUBSCRIPTION_ID, .{ .integer = i }),
             .string => |s| try meta.put(allocator, protocol.META_SUBSCRIPTION_ID, .{ .string = s }),
         }
+    }
+
+    /// Emits an MRTR `InputRequiredResult` when a handler asked for more input.
+    ///
+    /// Returns true when the response was sent, so callers can return early.
+    /// Without a configured `mrtr` hook there is nothing to build from, so this
+    /// reports false and the caller falls back to a normal error response.
+    fn sendInputRequiredIfRequested(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        request: jsonrpc.Request,
+    ) !bool {
+        const hook = self.config.mrtr orelse return false;
+        const input_required = try hook(
+            self.config.mrtr_user_data,
+            request.method,
+            request.params,
+            allocator,
+        );
+        try self.sendInputRequired(io, allocator, request.id, input_required);
+        return true;
     }
 
     /// Handle a `subscriptions/listen` request.
@@ -1742,7 +1785,7 @@ pub const Server = struct {
         self: *Self,
         io: anytype,
         allocator: std.mem.Allocator,
-        id: jsonrpc.RequestId,
+        id: types.RequestId,
         input_required: types.InputRequiredResult,
     ) !void {
         const result = try Self.buildInputRequiredResult(allocator, input_required);
@@ -2383,6 +2426,109 @@ test "spec: subscriptionId _meta key matches the spec namespace" {
         "io.modelcontextprotocol/subscriptionId",
         protocol.META_SUBSCRIPTION_ID,
     );
+}
+
+test "spec: tools/call returning error.InputRequired emits an MRTR result" {
+    const a = std.testing.allocator;
+
+    // A handler that always needs more input.
+    const needsInput = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.ToolError.InputRequired;
+        }
+    }.handler;
+
+    // The resolver builds the elicitation request the client must satisfy.
+    const resolver = struct {
+        fn f(_: ?*anyopaque, method: []const u8, _: ?std.json.Value, allocator: std.mem.Allocator) anyerror!types.InputRequiredResult {
+            std.debug.assert(std.mem.eql(u8, method, "tools/call"));
+
+            var schema: std.json.ObjectMap = .empty;
+            var props: std.json.ObjectMap = .empty;
+            try props.put(allocator, "name", .{ .string = "string" });
+            try schema.put(allocator, "type", .{ .string = "object" });
+            try schema.put(allocator, "properties", .{ .object = props });
+
+            var params: std.json.ObjectMap = .empty;
+            try params.put(allocator, "mode", .{ .string = "form" });
+            try params.put(allocator, "message", .{ .string = "Provide your GitHub username" });
+            try params.put(allocator, "requestedSchema", .{ .object = schema });
+
+            var requests: types.InputRequests = .empty;
+            try Server.putInputRequest(
+                allocator,
+                &requests,
+                "github_login",
+                protocol.MRTR_METHOD_ELICITATION,
+                .{ .object = params },
+            );
+
+            return .{ .inputRequests = requests, .requestState = "opaque-state" };
+        }
+    }.f;
+
+    var server = Server.init(a, .{
+        .name = "mrtr-server",
+        .version = "1.0.0",
+        .mrtr = resolver,
+    });
+    defer server.deinit();
+
+    try server.addTool(.{
+        .name = "needs_input",
+        .description = "Needs more input",
+        .inputSchema = .{ .type = "object" },
+        .handler = needsInput,
+    });
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev_transport = server.transport;
+    defer server.transport = prev_transport;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const req = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"needs_input\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    try server.handleMessage(std.Io.failing, a, req);
+
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer parsed.deinit();
+
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("input_required", result.get("resultType").?.string);
+    try std.testing.expectEqualStrings("opaque-state", result.get("requestState").?.string);
+
+    // inputRequests is a map keyed by the server-assigned identifier.
+    const requests = result.get("inputRequests").?.object;
+    const entry = requests.get("github_login").?.object;
+    try std.testing.expectEqualStrings(protocol.MRTR_METHOD_ELICITATION, entry.get("method").?.string);
+    try std.testing.expect(entry.get("params") != null);
 }
 
 test "spec: subscriptions/listen acknowledges before closing, tagged with subscriptionId" {
