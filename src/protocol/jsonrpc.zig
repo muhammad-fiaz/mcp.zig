@@ -107,15 +107,36 @@ pub const Message = union(enum) {
 };
 
 /// Standard JSON-RPC 2.0 error codes and MCP extensions.
+///
+/// MCP partitions the JSON-RPC server-error range:
+/// `-32000..-32019` is legacy/implementation-defined and new code MUST NOT
+/// be allocated there; `-32020..-32099` is reserved for the specification.
 pub const ErrorCode = struct {
     pub const PARSE_ERROR: i32 = -32700;
     pub const INVALID_REQUEST: i32 = -32600;
     pub const METHOD_NOT_FOUND: i32 = -32601;
     pub const INVALID_PARAMS: i32 = -32602;
     pub const INTERNAL_ERROR: i32 = -32603;
-    pub const SERVER_NOT_INITIALIZED: i32 = -32002;
+
+    // Reserved for the MCP specification (2026-07-28).
+    /// HTTP headers do not match the request body, or required headers are
+    /// missing/malformed.
+    pub const HEADER_MISMATCH: i32 = -32020;
+    /// The request needs a client capability the client did not declare.
+    pub const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
+    /// The server does not implement the requested protocol version.
+    pub const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+
     pub const REQUEST_CANCELLED: i32 = -32800;
     pub const CONTENT_TOO_LARGE: i32 = -32801;
+
+    // Deprecated by earlier protocol versions. Implementations of
+    // 2026-07-28 MUST NOT emit these; clients SHOULD still accept them from
+    // older servers.
+    /// Resource not found (2025-11-25 and earlier; replaced by -32602).
+    pub const DEPRECATED_RESOURCE_NOT_FOUND: i32 = -32002;
+    /// URL elicitation required (2025-11-25 only).
+    pub const DEPRECATED_URL_ELICITATION_REQUIRED: i32 = -32042;
 };
 
 /// Errors that can occur during message parsing.

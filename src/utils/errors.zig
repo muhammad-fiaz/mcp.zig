@@ -21,16 +21,30 @@ pub const McpError = struct {
 };
 
 /// Standard JSON-RPC 2.0 error codes with MCP-specific extensions.
+///
+/// `-32020..-32099` is reserved for the MCP specification. The `-32002`
+/// and `-32042` codes come from earlier revisions and MUST NOT be emitted by
+/// a 2026-07-28 implementation; they are kept only so callers can recognise
+/// them from older peers.
 pub const ErrorCode = enum(i32) {
     parse_error = -32700,
     invalid_request = -32600,
     method_not_found = -32601,
     invalid_params = -32602,
     internal_error = -32603,
-    server_not_initialized = -32002,
-    url_elicitation_required = -32042,
+
+    /// HTTP headers do not match the request body, or required headers are
+    /// missing/malformed.
+    header_mismatch = -32020,
+    /// Processing requires a client capability that was not declared.
+    missing_required_client_capability = -32021,
+    /// The requested protocol version is not supported by this server.
+    unsupported_protocol_version = -32022,
+
     request_cancelled = -32800,
     content_too_large = -32801,
+
+    /// Deprecated: user rejected an interaction. Not a JSON-RPC code.
     user_rejected = -1,
 
     /// Returns the integer value of this error code.
@@ -46,8 +60,9 @@ pub const ErrorCode = enum(i32) {
             .method_not_found => "Method not found",
             .invalid_params => "Invalid params",
             .internal_error => "Internal error",
-            .server_not_initialized => "Server not initialized",
-            .url_elicitation_required => "URL Elicitation Required",
+            .header_mismatch => "Header mismatch",
+            .missing_required_client_capability => "Missing required client capability",
+            .unsupported_protocol_version => "Unsupported protocol version",
             .request_cancelled => "Request cancelled",
             .content_too_large => "Content too large",
             .user_rejected => "User rejected",

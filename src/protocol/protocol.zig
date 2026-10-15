@@ -55,6 +55,14 @@ pub const DEFAULT_RESOURCE_READ_TTL_MS: i64 = 60_000;
 /// `resultType` value for a fully-satisfied request.
 pub const RESULT_TYPE_COMPLETE = "complete";
 
+/// Returns true when `version` is one of the versions this library speaks.
+pub fn supportsVersion(version: []const u8) bool {
+    for (SUPPORTED_VERSIONS) |v| {
+        if (std.mem.eql(u8, v, version)) return true;
+    }
+    return false;
+}
+
 /// All MCP method names as defined in the 2026-07-28 protocol specification.
 pub const Method = enum {
     // Discovery & Lifecycle

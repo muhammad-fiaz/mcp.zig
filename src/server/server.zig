@@ -20,6 +20,38 @@ const transport_mod = @import("../transport/transport.zig");
 const prompts_mod = @import("prompts.zig");
 const resources_mod = @import("resources.zig");
 const tools_mod = @import("tools.zig");
+const http_rules = @import("http_rules.zig");
+
+/// Streamable HTTP rules (header validation, Origin checks).
+pub const HttpRules = http_rules;
+
+fn isLoopbackHost(host: []const u8) bool {
+    return http_rules.isLoopbackHostName(if (host.len == 0) "localhost" else host);
+}
+
+/// Builds a JSON-RPC error body wrapped in an HTTP response, used for the
+/// status-code mapping required by the Streamable HTTP binding.
+///
+/// The serialized body is allocated from `allocator`, which is the httpx
+/// per-request arena and is released once the response has been written.
+fn jsonRpcHttpError(
+    allocator: std.mem.Allocator,
+    status: u16,
+    id: ?types.RequestId,
+    code: i32,
+    message: []const u8,
+    data: ?std.json.Value,
+) httpx.Response {
+    const response = jsonrpc.createErrorResponse(id, code, message, data);
+    const json = jsonrpc.serializeMessage(allocator, .{ .error_response = response }) catch {
+        return .{ .status = status, .body = message, .contentType = "application/json" };
+    };
+    return .{
+        .status = status,
+        .body = json,
+        .contentType = "application/json",
+    };
+}
 
 /// Caching configuration for cacheable list/read results (MCP 2026-07-28).
 ///
@@ -143,6 +175,8 @@ pub const Server = struct {
     next_request_id: i64 = 1,
     pending_requests: std.AutoHashMap(i64, PendingRequest),
     log_level: protocol.LogLevel = .info,
+    /// Host the HTTP listener is bound to, used for Origin validation.
+    http_host: ?[]const u8 = null,
     io: ?std.Io = null,
     pub const max_http_body_size: usize = 4 * 1024 * 1024;
 
@@ -265,6 +299,7 @@ pub const Server = struct {
 
     fn runHttp(self: *Self, io: std.Io, allocator: std.mem.Allocator, config: HttpRunConfig) !void {
         self.log(io, "Server listening on HTTP (httpx)");
+        self.http_host = config.host;
 
         var server = try httpx.Server.init(allocator, io, .{
             .host = config.host,
@@ -287,6 +322,7 @@ pub const Server = struct {
             .body = "Internal server error",
             .contentType = "text/plain; charset=utf-8",
         }));
+        const config = mcp_server.http_host orelse "127.0.0.1";
 
         // Only POST is allowed for MCP Streamable HTTP
         if (ctx.method != .POST) {
@@ -301,11 +337,53 @@ pub const Server = struct {
         // Read request body
         const body = ctx.body;
         if (body.len == 0) {
-            return .{
-                .status = 400,
-                .body = "Empty request body",
-                .contentType = "text/plain; charset=utf-8",
-            };
+            return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_REQUEST, "Empty request body", null);
+        }
+
+        // Streamable HTTP conformance: validate headers against the body and
+        // map the outcome onto the status codes the spec prescribes.
+        const verdict = http_rules.validate(
+            ctx.allocator,
+            .{ .context = ctx },
+            body,
+            // Servers bound to a loopback host reject cross-origin browser
+            // requests (DNS rebinding protection).
+            isLoopbackHost(config),
+        ) catch |err| {
+            std.log.warn("HTTP request validation failed: {s}", .{@errorName(err)});
+            return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_REQUEST, "Invalid request", null);
+        };
+
+        switch (verdict) {
+            .forbidden_origin => {
+                return .{ .status = 403, .body = "Forbidden", .contentType = "text/plain; charset=utf-8" };
+            },
+            .invalid_request => |d| {
+                return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_REQUEST, d.message, null);
+            },
+            .missing_header => |d| {
+                return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.HEADER_MISMATCH, d.name, null);
+            },
+            .mismatch => |d| {
+                return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.HEADER_MISMATCH, d.message, null);
+            },
+            .unsupported_version => |d| {
+                var supported: std.json.Array = .init(ctx.allocator);
+                for (d.supported) |v| supported.append(.{ .string = v }) catch {};
+                var info_map: std.json.ObjectMap = .empty;
+                info_map.put(ctx.allocator, "supported", .{ .array = supported }) catch {};
+                info_map.put(ctx.allocator, "requested", .{ .string = d.requested }) catch {};
+
+                return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version", .{ .object = info_map });
+            },
+            .accepted_notification => {
+                return .{ .status = 202, .body = "" };
+            },
+            .unknown_method => |d| {
+                // Spec: unknown RPC method is 404 with -32601.
+                return jsonRpcHttpError(ctx.allocator, 404, null, jsonrpc.ErrorCode.METHOD_NOT_FOUND, d.method, null);
+            },
+            .ok => {},
         }
 
         // Check for SSE preference
