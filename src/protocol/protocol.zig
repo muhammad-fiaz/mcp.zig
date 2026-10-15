@@ -30,6 +30,31 @@ pub const SUPPORTED_VERSIONS = [_][]const u8{
 /// JSON-RPC version used by MCP.
 pub const JSONRPC_VERSION = "2.0";
 
+/// `_meta` key carrying server identity in results (MCP 2026-07-28).
+/// Servers SHOULD populate this on `server/discover` results.
+pub const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+
+/// `_meta` key carrying the protocol version on requests.
+pub const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
+
+/// `_meta` key carrying client identity on requests.
+pub const META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
+
+/// `_meta` key carrying client capabilities on requests.
+pub const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+
+/// Default freshness hint (ms) emitted on cacheable list/read results.
+/// Servers MUST emit a `ttlMs` >= 0; this default keeps results fresh for
+/// five minutes unless configured otherwise.
+pub const DEFAULT_CACHE_TTL_MS: i64 = 300_000;
+
+/// Default `ttlMs` for `resources/read`, which frequently returns
+/// authorization- or request-specific data.
+pub const DEFAULT_RESOURCE_READ_TTL_MS: i64 = 60_000;
+
+/// `resultType` value for a fully-satisfied request.
+pub const RESULT_TYPE_COMPLETE = "complete";
+
 /// All MCP method names as defined in the 2026-07-28 protocol specification.
 pub const Method = enum {
     // Discovery & Lifecycle

@@ -645,12 +645,16 @@ pub const ResultType = enum {
     }
 };
 
-/// Cache scope for list/read results.
+/// Cache scope for list/read results (MCP 2026-07-28 caching).
+/// `public` results contain no user-specific data and may be shared between
+/// callers; `private` results are bound to one authorization context and MUST
+/// NOT be served from a cache shared across callers.
 pub const CacheScope = enum {
-    /// No caching permitted.
-    none,
-    /// Cache for the session lifetime.
-    session,
+    /// The response contains no user-specific data; any cache may store it.
+    public,
+    /// The response contains user-specific data; caches must not be shared
+    /// across authorization contexts.
+    private,
 
     pub fn toString(self: CacheScope) []const u8 {
         return @tagName(self);
