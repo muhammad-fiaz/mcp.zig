@@ -39,6 +39,9 @@ pub const PromptError = error{
     InvalidArguments,
     GenerationFailed,
     OutOfMemory,
+    /// The prompt cannot be generated until the client supplies more input.
+    /// The server turns this into an MRTR `InputRequiredResult`.
+    InputRequired,
     Unknown,
 };
 

@@ -956,6 +956,9 @@ pub const Server = struct {
 
         if (self.resources.get(uri)) |resource| {
             const content = resource.handler(resource.user_data, io, allocator, uri) catch |err| {
+                if (err == error.InputRequired) {
+                    if (try self.sendInputRequiredIfRequested(io, allocator, request)) return;
+                }
                 const error_response = jsonrpc.createInternalError(request.id, .{ .string = @errorName(err) });
                 try self.sendResponse(io, allocator, .{ .error_response = error_response });
                 return;
@@ -1229,6 +1232,9 @@ pub const Server = struct {
 
         if (self.prompts.get(prompt_name)) |prompt| {
             const messages = prompt.handler(prompt.user_data, io, allocator, arguments) catch |err| {
+                if (err == error.InputRequired) {
+                    if (try self.sendInputRequiredIfRequested(io, allocator, request)) return;
+                }
                 const error_response = jsonrpc.createInternalError(request.id, .{ .string = @errorName(err) });
                 try self.sendResponse(io, allocator, .{ .error_response = error_response });
                 return;

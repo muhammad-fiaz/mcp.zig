@@ -51,6 +51,9 @@ pub const ResourceError = error{
     ReadFailed,
     InvalidUri,
     OutOfMemory,
+    /// The resource cannot be produced until the client supplies more input.
+    /// The server turns this into an MRTR `InputRequiredResult`.
+    InputRequired,
     Unknown,
 };
 

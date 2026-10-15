@@ -303,10 +303,7 @@ pub const Client = struct {
             try params.put(self.allocator, "arguments", args);
         }
         if (round) |r| {
-            try params.put(self.allocator, "inputResponses", .{ .object = r.inputRequests });
-            if (r.requestState) |state| {
-                try params.put(self.allocator, "requestState", .{ .string = state });
-            }
+            try self.putRoundParams(r, &params);
         }
         try self.sendRequest("tools/call", .{ .object = params });
     }
@@ -318,9 +315,16 @@ pub const Client = struct {
 
     /// Reads a resource from the server by URI.
     pub fn readResource(self: *Self, uri: []const u8) !void {
+        try self.readResourceRound(uri, null);
+    }
+
+    /// Retries `resources/read` with the `inputResponses` and `requestState`
+    /// from a previous `InputRequiredResult`.
+    pub fn readResourceRound(self: *Self, uri: []const u8, round: ?InputRequiredRound) !void {
         var params: std.json.ObjectMap = .empty;
         defer params.deinit(self.allocator);
         try params.put(self.allocator, "uri", .{ .string = uri });
+        try self.putRoundParams(round, &params);
         try self.sendRequest("resources/read", .{ .object = params });
     }
 
@@ -344,13 +348,32 @@ pub const Client = struct {
 
     /// Fetches a prompt from the server with optional arguments.
     pub fn getPrompt(self: *Self, name: []const u8, arguments: ?std.json.Value) !void {
+        try self.getPromptRound(name, arguments, null);
+    }
+
+    /// Retries `prompts/get` with the `inputResponses` and `requestState`
+    /// from a previous `InputRequiredResult`.
+    pub fn getPromptRound(self: *Self, name: []const u8, arguments: ?std.json.Value, round: ?InputRequiredRound) !void {
         var params: std.json.ObjectMap = .empty;
         defer params.deinit(self.allocator);
         try params.put(self.allocator, "name", .{ .string = name });
         if (arguments) |args| {
             try params.put(self.allocator, "arguments", args);
         }
+        try self.putRoundParams(round, &params);
         try self.sendRequest("prompts/get", .{ .object = params });
+    }
+
+    /// Copies an MRTR round into request params.
+    ///
+    /// `requestState` is opaque to the client and is echoed back verbatim; the
+    /// spec forbids inspecting or modifying it.
+    fn putRoundParams(self: *Self, round: ?InputRequiredRound, params: *std.json.ObjectMap) !void {
+        const r = round orelse return;
+        try params.put(self.allocator, "inputResponses", .{ .object = r.inputRequests });
+        if (r.requestState) |state| {
+            try params.put(self.allocator, "requestState", .{ .string = state });
+        }
     }
 
     /// Requests argument completion suggestions.
