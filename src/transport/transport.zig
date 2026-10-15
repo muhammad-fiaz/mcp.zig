@@ -203,6 +203,37 @@ fn methodIdentity(method: []const u8, params: ?std.json.Value) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
+/// Mirrors top-level request params into `Mcp-Param-<name>` headers so an
+/// intermediary can route without parsing the body.
+///
+/// Returns owned header values appended to `out`; the caller frees the array.
+/// Values that are not header-safe use the spec's base64 sentinel, which the
+/// server decodes before comparing.
+pub fn appendParamHeaders(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(httpx.Header),
+    params: std.json.ObjectMap,
+) !void {
+    var it = params.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        // Only scalar values mirror cleanly; nested objects and arrays are
+        // omitted rather than flattened into an ambiguous header.
+        const value: ?[]const u8 = switch (entry.value_ptr.*) {
+            .string => |s| s,
+            .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+            .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
+            .bool => |b| if (b) "true" else "false",
+            else => null,
+        };
+        const raw = value orelse continue;
+
+        const header_name = try std.fmt.allocPrint(allocator, protocol.HEADER_PARAM_PREFIX ++ "{s}", .{name});
+        const header_value = try protocol.encodeHeaderValue(allocator, raw);
+        try out.append(allocator, .{ .name = header_name, .value = header_value });
+    }
+}
+
 /// HTTP transport for remote server communication using httpx.zig.
 /// Sends requests via HTTP POST and receives JSON or SSE responses.
 /// Stateless per-request model (MCP 2026-07-28).
@@ -275,6 +306,10 @@ pub const HttpTransport = struct {
                             const name_hdr = try protocol.encodeHeaderValue(allocator, ident);
                             defer allocator.free(name_hdr);
                             try headers.append(allocator, .{ .name = protocol.HEADER_NAME, .value = name_hdr });
+                        }
+
+                        if (req.params) |p| {
+                            if (p == .object) try appendParamHeaders(allocator, &headers, p.object);
                         }
                     },
                     .notification, .response, .error_response => {},

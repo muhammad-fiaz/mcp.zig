@@ -113,10 +113,12 @@ containing non-ASCII characters) are sent using the spec's base64 sentinel,
 `=?base64?<base64>?=`. The server decodes this form before comparing, so both
 forms validate. The `HttpTransport` client does this automatically.
 
-::: tip Not yet implemented
-The spec also defines an `x-mcp-header` request header carrying a
-`Mcp-Param-<name>: <value>` header per parameter. mcp.zig does not yet emit or
-validate those; only the three headers above are supported.
+::: warning Implemented for top-level params
+mcp.zig mirrors top-level request parameters into `Mcp-Param-<name>` headers
+and validates them against the body. Nested structures (such as a tool's
+`arguments` object) are not flattened into headers; only scalar values are
+mirrored. Values that are not header-safe use the `=?base64?<base64>?=`
+sentinel, which the server decodes before comparing.
 :::
 
 The response body contains the JSON-RPC response.

@@ -214,14 +214,68 @@ pub fn validate(
         return .{ .unknown_method = .{ .method = req.method } };
     }
 
+    // Mirrored per-parameter headers must agree with the body.
+    if (!try validateParamHeaders(allocator, headers, req.params)) {
+        return .{ .mismatch = .{ .message = "Mcp-Param-* header does not match request params" } };
+    }
+
     return .ok;
 }
+
+/// Validates every `Mcp-Param-<name>` header against the matching body field.
+///
+/// A mirrored parameter that disagrees with the body is a header mismatch
+/// (`-32020`). Parameters the server did not mirror are ignored, so a partial
+/// set of headers is still valid.
+pub fn validateParamHeaders(
+    allocator: std.mem.Allocator,
+    source: HeaderSource,
+    params: ?std.json.Value,
+) !bool {
+    const p = params orelse return true;
+    if (p != .object) return true;
+
+    const mirrored = try source.collectParamHeaders(allocator);
+    defer if (mirrored.owned) allocator.free(mirrored.items);
+
+    for (mirrored.items) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, header_param_prefix)) continue;
+
+        const field = entry.name[header_param_prefix.len..];
+        if (field.len == 0) return false;
+
+        const body_value = p.object.get(field) orelse return false;
+
+        var expected: ?[]const u8 = null;
+        defer if (expected) |e| allocator.free(e);
+        switch (body_value) {
+            .string => |s| expected = try allocator.dupe(u8, s),
+            .integer => |i| expected = try std.fmt.allocPrint(allocator, "{d}", .{i}),
+            .float => |f| expected = try std.fmt.allocPrint(allocator, "{d}", .{f}),
+            .bool => |b| expected = try allocator.dupe(u8, if (b) "true" else "false"),
+            else => continue,
+        }
+        const want = expected orelse continue;
+
+        if (!try headerMatchesBody(allocator, entry.value, want)) return false;
+    }
+    return true;
+}
+
+/// A mirrored `Mcp-Param-*` header pair.
+pub const ParamHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 /// The subset of `httpx.Context` this module needs, so tests can supply a
 /// plain map.
 pub const HeaderSource = struct {
     context: ?*const anyopaque = null,
     fallback: ?*const [3]?[]const u8 = null,
+    /// Mirrored parameter headers, supplied directly by tests. Real requests
+    /// read these off the httpx context instead.
+    params: []const ParamHeader = &.{},
 
     pub fn fromHeaders(protocol_version: ?[]const u8, method_header: ?[]const u8, name_header: ?[]const u8) HeaderSource {
         return .{ .fallback = &[_]?[]const u8{ protocol_version, method_header, name_header } };
@@ -254,6 +308,29 @@ pub const HeaderSource = struct {
             return ctx.header("Origin");
         }
         return null;
+    }
+
+    /// Collects the `Mcp-Param-*` headers. Caller frees the slice.
+    /// Mirrored parameter headers plus whether the slice is owned by the caller.
+    const CollectedParams = struct {
+        items: []const ParamHeader,
+        owned: bool,
+    };
+
+    fn collectParamHeaders(self: HeaderSource, allocator: std.mem.Allocator) !CollectedParams {
+        if (self.params.len != 0) return .{ .items = self.params, .owned = false };
+
+        if (self.context == null) return .{ .items = &.{}, .owned = false };
+
+        const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(self.context.?));
+        var list: std.ArrayList(ParamHeader) = .empty;
+        errdefer list.deinit(allocator);
+        for (ctx.headers) |h| {
+            if (std.ascii.startsWithIgnoreCase(h.name, header_param_prefix)) {
+                try list.append(allocator, .{ .name = h.name, .value = h.value });
+            }
+        }
+        return .{ .items = try list.toOwnedSlice(allocator), .owned = true };
     }
 };
 
@@ -416,6 +493,36 @@ test "sentinel decoding round-trips and passes through plain values" {
     try testing.expectEqualStrings("Hello, \u{4e16}\u{754c}", decoded);
 
     try testing.expect((try decodeSentinel(testing.allocator, "plain-value")) == null);
+}
+
+test "spec: Mcp-Param-* headers are validated against the body" {
+    const a = testing.allocator;
+
+    const req_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"greet\",\"arguments\":{\"who\":\"Zig\",\"times\":3},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+
+    const makeSource = struct {
+        fn f(params: []const ParamHeader) HeaderSource {
+            return .{
+                .fallback = &[_]?[]const u8{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
+                .params = params,
+            };
+        }
+    }.f;
+
+    const agree = [_]ParamHeader{
+        .{ .name = "Mcp-Param-name", .value = "greet" },
+    };
+    try testing.expect(try validate(a, makeSource(&agree), req_body, false) == .ok);
+
+    const disagree = [_]ParamHeader{
+        .{ .name = "Mcp-Param-name", .value = "other" },
+    };
+    try testing.expect(try validate(a, makeSource(&disagree), req_body, false) == .mismatch);
+
+    const unknown = [_]ParamHeader{
+        .{ .name = "Mcp-Param-nope", .value = "x" },
+    };
+    try testing.expect(try validate(a, makeSource(&unknown), req_body, false) == .mismatch);
 }
 
 test "http: Mcp-Name accepts the base64 sentinel encoding" {
