@@ -1592,6 +1592,62 @@ pub const Server = struct {
         try result.put(allocator, "resultType", .{ .string = protocol.RESULT_TYPE_COMPLETE });
     }
 
+    /// Builds an MRTR `InputRequiredResult` payload.
+    ///
+    /// The 2026-07-28 spec requires at least one of `inputRequests` or
+    /// `requestState` on every such result, so returning neither is rejected
+    /// here rather than emitted as a spec-invalid response.
+    pub fn buildInputRequiredResult(
+        allocator: std.mem.Allocator,
+        input_required: types.InputRequiredResult,
+    ) !std.json.ObjectMap {
+        if (input_required.inputRequests == null and input_required.requestState == null) {
+            return error.EmptyInputRequiredResult;
+        }
+
+        var result: std.json.ObjectMap = .empty;
+        try result.put(allocator, "resultType", .{ .string = protocol.RESULT_TYPE_INPUT_REQUIRED });
+        if (input_required.inputRequests) |requests| {
+            try result.put(allocator, "inputRequests", .{ .object = requests });
+        }
+        if (input_required.requestState) |state| {
+            try result.put(allocator, "requestState", .{ .string = state });
+        }
+        return result;
+    }
+
+    /// Adds one server-to-client request to an MRTR `InputRequests` map.
+    ///
+    /// `key` is the server-assigned identifier the client echoes back in the
+    /// matching `InputResponses` entry, and must be unique within the request.
+    pub fn putInputRequest(
+        allocator: std.mem.Allocator,
+        requests: *types.InputRequests,
+        key: []const u8,
+        method: []const u8,
+        params: ?std.json.Value,
+    ) !void {
+        var request_obj: std.json.ObjectMap = .empty;
+        try request_obj.put(allocator, "method", .{ .string = method });
+        if (params) |p| {
+            try request_obj.put(allocator, "params", p);
+        }
+        try requests.put(allocator, key, .{ .object = request_obj });
+    }
+
+    /// Sends an MRTR `InputRequiredResult` as the response to `id`.
+    pub fn sendInputRequired(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        id: jsonrpc.RequestId,
+        input_required: types.InputRequiredResult,
+    ) !void {
+        const result = try Self.buildInputRequiredResult(allocator, input_required);
+        const response = jsonrpc.createResponse(id, .{ .object = result });
+        try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
     /// Emits the mandatory caching hints on a cacheable result:
     /// `ttlMs` (clamped to >= 0) and `cacheScope`.
     fn putCacheHints(
@@ -2152,4 +2208,67 @@ test "spec: _meta serverInfo merges with pre-existing _meta keys" {
     var info_obj = meta.get(protocol.META_SERVER_INFO).?.object;
     defer info_obj.deinit(allocator);
     try std.testing.expectEqualStrings("merge-server", info_obj.get("name").?.string);
+}
+
+test "spec: MRTR InputRequiredResult carries inputRequests and requestState" {
+    const allocator = std.testing.allocator;
+
+    var requests: types.InputRequests = .empty;
+    defer requests.deinit(allocator);
+
+    var schema: std.json.ObjectMap = .empty;
+    defer schema.deinit(allocator);
+    var props: std.json.ObjectMap = .empty;
+    defer props.deinit(allocator);
+    try props.put(allocator, "name", .{ .string = "string" });
+    try schema.put(allocator, "type", .{ .string = "object" });
+    try schema.put(allocator, "properties", .{ .object = props });
+
+    var params: std.json.ObjectMap = .empty;
+    defer params.deinit(allocator);
+    try params.put(allocator, "message", .{ .string = "Provide your GitHub username" });
+    try params.put(allocator, "requestedSchema", .{ .object = schema });
+
+    try Server.putInputRequest(allocator, &requests, "github_login", protocol.MRTR_METHOD_ELICITATION, .{ .object = params });
+
+    var result = try Server.buildInputRequiredResult(allocator, .{
+        .inputRequests = requests,
+        .requestState = "opaque-blob",
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("input_required", result.get("resultType").?.string);
+    try std.testing.expectEqualStrings("opaque-blob", result.get("requestState").?.string);
+
+    // inputRequests is a map keyed by the server-assigned identifier.
+    const emitted = result.get("inputRequests").?.object;
+    var entry = emitted.get("github_login").?.object;
+    defer entry.deinit(allocator);
+    try std.testing.expectEqualStrings("elicitation/create", entry.get("method").?.string);
+    try std.testing.expect(entry.get("params") != null);
+}
+
+test "spec: MRTR rejects a result with neither inputRequests nor requestState" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.EmptyInputRequiredResult,
+        Server.buildInputRequiredResult(allocator, .{}),
+    );
+}
+
+test "spec: MRTR inputRequests may be omitted when only requestState is used" {
+    const allocator = std.testing.allocator;
+
+    var result = try Server.buildInputRequiredResult(allocator, .{ .requestState = "state-only" });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("input_required", result.get("resultType").?.string);
+    try std.testing.expect(result.get("inputRequests") == null);
+}
+
+test "spec: subscriptionId _meta key matches the spec namespace" {
+    try std.testing.expectEqualStrings(
+        "io.modelcontextprotocol/subscriptionId",
+        protocol.META_SUBSCRIPTION_ID,
+    );
 }

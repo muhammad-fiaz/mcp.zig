@@ -55,6 +55,24 @@ pub const DEFAULT_RESOURCE_READ_TTL_MS: i64 = 60_000;
 /// `resultType` value for a fully-satisfied request.
 pub const RESULT_TYPE_COMPLETE = "complete";
 
+/// `resultType` value for a request awaiting client-supplied input (MRTR).
+pub const RESULT_TYPE_INPUT_REQUIRED = "input_required";
+
+/// `resultType` value for a request bound to an extension task.
+pub const RESULT_TYPE_TASK = "task";
+
+/// `_meta` key carrying the JSON-RPC id of the originating
+/// `subscriptions/listen` request on every subscription notification.
+pub const META_SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId";
+
+/// `_meta` key carrying an opaque server-side MRTR state blob.
+pub const META_REQUEST_STATE = "io.modelcontextprotocol/requestState";
+
+/// Server-to-client requests a server MAY embed in MRTR `inputRequests`.
+pub const MRTR_METHOD_ELICITATION = "elicitation/create";
+pub const MRTR_METHOD_SAMPLING = "sampling/createMessage";
+pub const MRTR_METHOD_ROOTS = "roots/list";
+
 /// Returns true when `version` is one of the versions this library speaks.
 pub fn supportsVersion(version: []const u8) bool {
     for (SUPPORTED_VERSIONS) |v| {
@@ -196,8 +214,10 @@ pub const ToolCallResult = struct {
     isError: ?bool = null,
     /// Whether more input is required from the client (MRTR).
     resultType: ?types.ResultType = null,
-    /// Input requests when resultType is "input_required".
-    inputRequests: ?[]const types.InputRequest = null,
+    /// Server-assigned map of requests the client must fulfill before retrying.
+    inputRequests: ?types.InputRequests = null,
+    /// Opaque server state echoed back verbatim by the client on retry (MRTR).
+    requestState: ?[]const u8 = null,
 };
 
 /// Result of listing available resources.
@@ -232,13 +252,13 @@ pub const ResourceTemplatesListResult = struct {
     ttlMs: ?u64 = null,
 };
 
-/// Parameters for subscribing to resource updates via subscriptions/listen.
+/// Parameters for opening a notification stream via `subscriptions/listen`.
+///
+/// The `notifications` filter selects which notification types the client
+/// wants; the server MUST NOT send any type the client did not request.
 pub const SubscriptionListenParams = struct {
     _meta: ?std.json.Value = null,
-    /// URI pattern to subscribe to (exact or glob).
-    uri: []const u8,
-    /// Optional notification filter.
-    filter: ?types.SubscriptionFilter = null,
+    notifications: types.SubscriptionFilter = .{},
 };
 
 /// Parameters for resource updated notification.

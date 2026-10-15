@@ -99,7 +99,9 @@ pub const sampling = @import("client/sampling.zig");
 
 // MRTR types (2026-07-28)
 pub const InputRequest = @import("protocol/types.zig").InputRequest;
-pub const InputResponse = @import("protocol/types.zig").InputResponse;
+pub const InputRequests = @import("protocol/types.zig").InputRequests;
+pub const InputResponses = @import("protocol/types.zig").InputResponses;
+pub const InputRequiredResult = @import("protocol/types.zig").InputRequiredResult;
 pub const ResultType = @import("protocol/types.zig").ResultType;
 pub const SubscriptionFilter = @import("protocol/types.zig").SubscriptionFilter;
 pub const CacheScope = @import("protocol/types.zig").CacheScope;

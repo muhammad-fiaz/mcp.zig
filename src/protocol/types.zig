@@ -661,32 +661,52 @@ pub const CacheScope = enum {
     }
 };
 
-/// An input request from the server when resultType is "input_required" (MRTR).
+/// A single server-to-client request carried inside `InputRequests`.
+///
+/// This is a JSON-RPC request object *without* an `id`, one of
+/// `ElicitRequest`, `CreateMessageRequest` or `ListRootsRequest`.
 pub const InputRequest = struct {
-    /// A unique identifier for this input request.
-    requestId: []const u8,
-    /// The type of input requested (e.g. "sampling", "elicitation", "roots").
-    requestType: []const u8,
-    /// Human-readable message describing what input is needed.
-    message: []const u8,
-    /// Optional parameters for the input request (e.g. schema for elicitation).
+    /// The MCP method the client must service (e.g. "elicitation/create").
+    method: []const u8,
+    /// Method parameters.
     params: ?std.json.Value = null,
 };
 
-/// An input response from the client providing the requested input.
-pub const InputResponse = struct {
-    /// The ID of the input request this responds to.
-    requestId: []const u8,
-    /// The input content provided by the client.
-    content: std.json.Value,
+/// `InputRequests`: map of server-assigned identifiers to request objects.
+///
+/// Keys are server assigned and MUST be unique within the scope of one request.
+pub const InputRequests = std.json.ObjectMap;
+
+/// `InputResponses`: map of the same identifiers to the client's results
+/// (`ElicitResult`, `CreateMessageResult`, `ListRootsResult`, ...).
+pub const InputResponses = std.json.ObjectMap;
+
+/// Returned when a request cannot complete until the client supplies more
+/// input. See "Multi Round-Trip Requests" in the MCP 2026-07-28 spec.
+///
+/// Servers MAY emit this for `tools/call`, `resources/read` and `prompts/get`
+/// only, and MUST include at least one of `inputRequests` or `requestState`.
+pub const InputRequiredResult = struct {
+    /// Requests the client must fulfill before retrying the original request.
+    inputRequests: ?InputRequests = null,
+    /// Opaque server state. Clients MUST echo it back verbatim on retry and
+    /// MUST NOT inspect, parse, or modify it.
+    requestState: ?[]const u8 = null,
 };
 
-/// Subscription filter for subscriptions/listen.
+/// Notification filter for `subscriptions/listen`.
+///
+/// Every field is optional; omitting a field means the client did not
+/// subscribe to that notification type.
 pub const SubscriptionFilter = struct {
-    /// Glob pattern for matching URIs.
-    uriPattern: ?[]const u8 = null,
-    /// MIME types to filter by.
-    mimeTypes: ?[]const []const u8 = null,
+    /// Receive `notifications/tools/list_changed`.
+    toolsListChanged: bool = false,
+    /// Receive `notifications/prompts/list_changed`.
+    promptsListChanged: bool = false,
+    /// Receive `notifications/resources/list_changed`.
+    resourcesListChanged: bool = false,
+    /// Receive `notifications/resources/updated` for these resource URIs.
+    resourceSubscriptions: ?[]const []const u8 = null,
 };
 
 /// Base result type. All results can carry _meta.
