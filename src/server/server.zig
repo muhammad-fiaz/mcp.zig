@@ -1013,13 +1013,105 @@ pub const Server = struct {
     }
 
     /// Handle subscriptions/listen request (replaces resources/subscribe + resources/unsubscribe + HTTP GET)
+    /// Builds the `io.modelcontextprotocol/subscriptionId` `_meta` object that
+    /// every message on a subscription stream must carry.
+    fn putSubscriptionIdMeta(
+        allocator: std.mem.Allocator,
+        meta: *std.json.ObjectMap,
+        id: types.RequestId,
+    ) !void {
+        switch (id) {
+            .integer => |i| try meta.put(allocator, protocol.META_SUBSCRIPTION_ID, .{ .integer = i }),
+            .string => |s| try meta.put(allocator, protocol.META_SUBSCRIPTION_ID, .{ .string = s }),
+        }
+    }
+
+    /// Handle a `subscriptions/listen` request.
+    ///
+    /// The server must acknowledge first, carrying the subscription's id in
+    /// `_meta`, and must not send any other notification for that subscription
+    /// before the acknowledgment. The `notifications` field reflects the subset
+    /// of the requested filter the server agreed to honour; unsupported types
+    /// are omitted. The closing response then signals a graceful end.
     fn handleSubscriptionsListen(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
-        // For now, acknowledge the subscription. Full implementation would use long-lived SSE streams.
+        var requested: types.SubscriptionFilter = .{};
+        if (request.params) |params| {
+            if (params == .object) {
+                if (params.object.get("notifications")) |n| {
+                    if (n == .object) requested = Self.parseSubscriptionFilter(allocator, n.object);
+                }
+            }
+        }
+
+        // Honour only what this server actually supports.
+        const agreed = types.SubscriptionFilter{
+            .toolsListChanged = requested.toolsListChanged and
+                self.capabilities.tools != null and self.capabilities.tools.?.listChanged,
+            .promptsListChanged = requested.promptsListChanged and
+                self.capabilities.prompts != null and self.capabilities.prompts.?.listChanged,
+            .resourcesListChanged = requested.resourcesListChanged and
+                self.capabilities.resources != null and self.capabilities.resources.?.listChanged,
+            .resourceSubscriptions = if (self.capabilities.resources != null)
+                requested.resourceSubscriptions
+            else
+                null,
+        };
+
+        var ack_meta: std.json.ObjectMap = .empty;
+        try Self.putSubscriptionIdMeta(allocator, &ack_meta, request.id);
+
+        var ack_filter: std.json.ObjectMap = .empty;
+        if (agreed.toolsListChanged) try ack_filter.put(allocator, "toolsListChanged", .{ .bool = true });
+        if (agreed.promptsListChanged) try ack_filter.put(allocator, "promptsListChanged", .{ .bool = true });
+        if (agreed.resourcesListChanged) try ack_filter.put(allocator, "resourcesListChanged", .{ .bool = true });
+        if (agreed.resourceSubscriptions) |uris| {
+            if (uris.len > 0) {
+                var arr: std.json.Array = .init(allocator);
+                for (uris) |u| try arr.append(.{ .string = u });
+                try ack_filter.put(allocator, "resourceSubscriptions", .{ .array = arr });
+            }
+        }
+
+        // The subscription id travels in params._meta, not at the top of
+        // params, alongside the agreed filter.
+        var ack_params: std.json.ObjectMap = .empty;
+        try ack_params.put(allocator, "_meta", .{ .object = ack_meta });
+        try ack_params.put(allocator, "notifications", .{ .object = ack_filter });
+
+        try self.sendNotification(io, allocator, "notifications/subscriptions/acknowledged", .{ .object = ack_params });
+
         var result: std.json.ObjectMap = .empty;
         try Self.putResultComplete(allocator, &result);
+        var close_meta: std.json.ObjectMap = .empty;
+        try Self.putSubscriptionIdMeta(allocator, &close_meta, request.id);
+        try result.put(allocator, "_meta", .{ .object = close_meta });
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
+    /// Reads a `notifications` filter object, ignoring malformed entries.
+    fn parseSubscriptionFilter(allocator: std.mem.Allocator, obj: std.json.ObjectMap) types.SubscriptionFilter {
+        var filter: types.SubscriptionFilter = .{};
+        if (obj.get("toolsListChanged")) |v| {
+            if (v == .bool) filter.toolsListChanged = v.bool;
+        }
+        if (obj.get("promptsListChanged")) |v| {
+            if (v == .bool) filter.promptsListChanged = v.bool;
+        }
+        if (obj.get("resourcesListChanged")) |v| {
+            if (v == .bool) filter.resourcesListChanged = v.bool;
+        }
+        if (obj.get("resourceSubscriptions")) |v| {
+            if (v == .array) {
+                var list: std.ArrayList([]const u8) = .empty;
+                for (v.array.items) |item| {
+                    if (item == .string) list.append(allocator, item.string) catch return filter;
+                }
+                filter.resourceSubscriptions = list.items;
+            }
+        }
+        return filter;
     }
 
     /// Handle prompts/list request
@@ -1929,20 +2021,30 @@ const CaptureTransport = struct {
     buf: std.ArrayList(u8) = .empty,
     allocator: std.mem.Allocator,
     captured: ?[]const u8 = null,
+    /// Every message written, in order, for tests that assert on the
+    /// sequence (for example a notification preceding its response).
+    messages: std.ArrayList([]u8) = .empty,
 
-    fn send(self: *CaptureTransport, _: std.Io, _: std.mem.Allocator, message: []const u8) !void {
+    fn send(self: *CaptureTransport, _: std.Io, al: std.mem.Allocator, message: []const u8) !void {
         // `message` and the allocator we are handed both live in a per-request
         // arena that is freed when the handler returns, so copy into storage
         // owned by this struct using the test allocator.
         self.buf.clearRetainingCapacity();
         try self.buf.appendSlice(self.allocator, message);
         self.captured = self.buf.items;
+
+        // Same reasoning for the ordered log: allocate from the test allocator
+        // rather than the per-request one.
+        try self.messages.append(self.allocator, try self.allocator.dupe(u8, message));
+        _ = al;
     }
     fn receive(_: *CaptureTransport, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
         return null;
     }
     fn close(_: *CaptureTransport) void {}
     fn deinitCapture(self: *CaptureTransport) void {
+        for (self.messages.items) |m| self.allocator.free(m);
+        self.messages.deinit(self.allocator);
         self.buf.deinit(self.allocator);
     }
 };
@@ -2280,6 +2382,78 @@ test "spec: subscriptionId _meta key matches the spec namespace" {
     try std.testing.expectEqualStrings(
         "io.modelcontextprotocol/subscriptionId",
         protocol.META_SUBSCRIPTION_ID,
+    );
+}
+
+test "spec: subscriptions/listen acknowledges before closing, tagged with subscriptionId" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "sub-server", .version = "1.0.0" });
+    defer server.deinit();
+
+    // Advertise listChanged so the tools filter is honoured.
+    server.capabilities.tools = .{ .listChanged = true };
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev_transport = server.transport;
+    defer server.transport = prev_transport;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const req = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"subscriptions/listen\",\"params\":{\"notifications\":{\"toolsListChanged\":true,\"promptsListChanged\":true},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+    try server.handleMessage(std.Io.failing, a, req);
+
+    // The server must send exactly two messages: the acknowledgment
+    // notification first, then the graceful-closure response.
+    try std.testing.expectEqual(@as(usize, 2), collector.messages.items.len);
+
+    var ack = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer ack.deinit();
+    const ack_obj = ack.value.object;
+    try std.testing.expectEqualStrings("notifications/subscriptions/acknowledged", ack_obj.get("method").?.string);
+    try std.testing.expect(ack_obj.get("id") == null);
+
+    const ack_meta = ack_obj.get("params").?.object.get("_meta").?.object;
+    try std.testing.expectEqual(@as(i64, 7), ack_meta.get(protocol.META_SUBSCRIPTION_ID).?.integer);
+
+    // The acknowledged filter is the subset the server agreed to honour.
+    const agreed = ack_obj.get("params").?.object.get("notifications").?.object;
+    try std.testing.expectEqual(@as(bool, true), agreed.get("toolsListChanged").?.bool);
+    // Prompts capability was not advertised, so it must be omitted.
+    try std.testing.expect(agreed.get("promptsListChanged") == null);
+
+    var closed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[1], .{});
+    defer closed.deinit();
+    const result = closed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("complete", result.get("resultType").?.string);
+    try std.testing.expectEqual(
+        @as(i64, 7),
+        result.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer,
     );
 }
 
