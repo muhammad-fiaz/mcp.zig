@@ -26,6 +26,28 @@ The following breaking changes were introduced in the MCP specification revision
 - **Deprecated features**: Roots, Sampling, Logging (still functional but new implementations should not adopt). HTTP+SSE transport deprecated. `ping`, `logging/setLevel`, `notifications/roots/list_changed` removed.
 - **New HTTP headers**: `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` (from tool `x-mcp-header` annotations).
 - **Caching**: `ttlMs` and `cacheScope` required on `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` results.
+
+## Implementation notes
+
+- **Server identity**: `serverInfo` is emitted under the namespaced `_meta` key `io.modelcontextprotocol/serverInfo`, not as a top-level result field, matching the 2026-07-28 `DiscoverResult` shape.
+- **`resultType`**: every completed result carries `resultType: "complete"`.
+- **Caching hints**: emitted automatically on the six cacheable operations. Defaults are `ttlMs = 300000` / `cacheScope = "public"` for lists and `server/discover`, and `ttlMs = 60000` / `cacheScope = "private"` for `resources/read`. Override them through the server's `cache` configuration:
+
+  ```zig
+  var server = mcp.Server.init(allocator, .{
+      .name = "my-server",
+      .version = "1.0.0",
+      .cache = .{
+          .ttl_ms = 60_000,
+          .scope = .private,
+          .read_ttl_ms = 0,
+          .read_scope = .private,
+      },
+  });
+  ```
+
+  Negative `ttl_ms` values are clamped to `0` (immediately stale).
+- **Deterministic ordering**: `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list` return entries sorted by name so clients can cache and diff lists reliably.
 - **Error codes restructured**: `-32020` (HeaderMismatch), `-32021` (MissingRequiredClientCapability), `-32022` (UnsupportedProtocolVersion).
 - **Streamable HTTP**: GET endpoint removed, SSE resumability via `Last-Event-ID` removed.
 - **OAuth 2.1** authorization framework with Protected Resource Metadata (RFC 9728).

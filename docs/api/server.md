@@ -25,6 +25,20 @@ Important `ServerConfig` fields:
 | `icons` | `?[]const mcp.types.Icon` | Optional icon list |
 | `websiteUrl` | `?[]const u8` | Optional website URL |
 | `instructions` | `?[]const u8` | Optional usage instructions |
+| `cache` | `CacheConfig` | Caching hints for cacheable results |
+
+### `CacheConfig`
+
+Servers MUST emit `ttlMs` (>= 0) and `cacheScope` on `resultType: "complete"` results for `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, and `resources/read`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ttl_ms` | `i64` | `300000` | Freshness hint in ms for lists and `server/discover`; negatives clamp to `0` |
+| `read_ttl_ms` | `i64` | `60000` | Freshness hint for `resources/read` |
+| `scope` | `types.CacheScope` | `.public` | Cache scope for lists and `server/discover` |
+| `read_scope` | `types.CacheScope` | `.private` | Cache scope for `resources/read` |
+
+`types.CacheScope` is either `.public` (no user-specific data) or `.private` (must not be shared across authorization contexts).
 
 ## Lifecycle
 

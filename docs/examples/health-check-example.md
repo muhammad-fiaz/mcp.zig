@@ -114,13 +114,13 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arg
 **Health check response:**
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"status":"ready","serverInfo":{"name":"health-check-server","version":"1.0.0"},"uptime":0,"activeConnections":1}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ready","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"health-check-server","version":"1.0.0"}},"uptime":0,"activeConnections":1,"resultType":"complete"}}
 ```
 
 **Discover response:**
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"serverInfo":{"name":"health-check-server","version":"1.0.0","title":"Health Check Server","description":"Demonstrates the built-in health check endpoint"}}}
+{"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"health-check-server","version":"1.0.0","title":"Health Check Server","description":"Demonstrates the built-in health check endpoint"}},"resultType":"complete","ttlMs":300000,"cacheScope":"public"}}
 ```
 
 **Echo tool response:**
@@ -134,8 +134,9 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arg
 | Field | Description |
 |-------|-------------|
 | `status` | Server status: `"ready"`, `"shutting_down"`, or `"stopped"` |
-| `serverInfo.name` | Server name from init config |
-| `serverInfo.version` | Server version from init config |
+| `_meta["io.modelcontextprotocol/serverInfo"].name` | Server name from init config |
+| `_meta["io.modelcontextprotocol/serverInfo"].version` | Server version from init config |
+| `resultType` | Always `"complete"` for a completed request |
 | `uptime` | Seconds since server started |
 | `activeConnections` | Number of active client connections |
 
