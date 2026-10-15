@@ -50,5 +50,5 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I checked the page against mcp.zig 0.0.8 (Zig 0.17.0)
+        - label: I checked the page against mcp.zig 0.0.9 (Zig 0.17.0)
           required: false

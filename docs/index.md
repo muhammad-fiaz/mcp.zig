@@ -86,6 +86,9 @@ Run the following command to add mcp.zig to your project:
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
 # Zig 0.17.x (recommended)
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.9.tar.gz
+
+# Zig 0.17.x (earlier)
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
 
 # Zig 0.16.x

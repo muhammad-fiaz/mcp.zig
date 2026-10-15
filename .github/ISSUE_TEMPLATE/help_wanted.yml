@@ -13,7 +13,7 @@ body:
     attributes:
       label: Environment
       description: mcp.zig version, Zig version (`zig version`), and OS
-      placeholder: "mcp.zig 0.0.8, Zig 0.17.0, Ubuntu 24.04"
+      placeholder: "mcp.zig 0.0.9, Zig 0.17.0, Ubuntu 24.04"
     validations:
       required: true
   - type: textarea

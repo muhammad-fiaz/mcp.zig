@@ -277,7 +277,7 @@ gtag('config', '${GA_ID}');`,
           priceCurrency: "USD",
         },
         downloadUrl: "https://github.com/muhammad-fiaz/mcp.zig",
-        softwareVersion: "0.0.8",
+        softwareVersion: "0.0.9",
         license: "https://opensource.org/licenses/MIT",
       });
     } else {

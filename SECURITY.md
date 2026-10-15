@@ -23,9 +23,9 @@ Please allow reasonable time for a fix before any public disclosure.
 
 | Version | Status                |
 | ------- | --------------------- |
-| 0.0.8   | Supported             |
-| 0.0.6   | Best effort           |
-| ≤ 0.0.3 | Unsupported — please upgrade |
+| 0.0.9   | Supported             |
+| 0.0.8   | Best effort           |
+| ≤ 0.0.6 | Unsupported — please upgrade |
 
 Security fixes are released for the latest version. Older lines receive fixes at the maintainer's discretion.
 

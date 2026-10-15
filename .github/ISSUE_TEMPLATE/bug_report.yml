@@ -14,7 +14,7 @@ body:
     attributes:
       label: mcp.zig version
       description: Library version (see `src/version.zig`)
-      placeholder: "0.0.8"
+      placeholder: "0.0.9"
     validations:
       required: true
   - type: input
@@ -87,7 +87,7 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I am on Zig 0.17.0+ with mcp.zig 0.0.8 (or stated otherwise above)
+        - label: I am on Zig 0.17.0+ with mcp.zig 0.0.9 (or stated otherwise above)
           required: true
         - label: I searched existing issues and this is not a duplicate
           required: true
