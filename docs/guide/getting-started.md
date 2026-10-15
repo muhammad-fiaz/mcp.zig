@@ -26,7 +26,6 @@ In this guide, you'll learn how to:
 Before you begin, make sure you have:
 
 - [Zig 0.17.0](https://ziglang.org/download/) or later installed (use mcp.zig 0.0.9)
-- Earlier Zig 0.17.x releases: mcp.zig 0.0.8
 - Zig 0.16.x users should use mcp.zig 0.0.6
 - Zig 0.15.x users should use mcp.zig 0.0.3
 - Basic familiarity with Zig programming language
@@ -39,11 +38,8 @@ Run the following command in your project directory:
 # Latest development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.17.x (recommended)
+# Zig 0.17.0
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.9.tar.gz
-
-# Zig 0.17.x (earlier)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
 
 # Zig 0.16.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz

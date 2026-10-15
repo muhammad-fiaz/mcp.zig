@@ -11,7 +11,6 @@ This guide covers different ways to install and use mcp.zig in your project.
 ## Requirements
 
 - **Zig 0.17.0** or later (use mcp.zig 0.0.9)
-- **Zig 0.17.x, earlier** (use mcp.zig 0.0.8)
 - **Zig 0.16.x** (use mcp.zig 0.0.6)
 - **Zig 0.15.x** (use mcp.zig 0.0.3)
 - A Zig project with `build.zig` and `build.zig.zon`
@@ -28,11 +27,8 @@ Run the following command to add mcp.zig to your project:
 # Latest development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.17.x (recommended)
+# Zig 0.17.0
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.9.tar.gz
-
-# Zig 0.17.x (earlier)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
 
 # Zig 0.16.x
 zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
