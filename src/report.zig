@@ -3,7 +3,7 @@
 //! Provides functionality for error reporting and checking for library updates.
 
 const std = @import("std");
-const http = std.http;
+const httpx = @import("httpx");
 const SemanticVersion = std.SemanticVersion;
 const builtin = @import("builtin");
 
@@ -32,7 +32,7 @@ var update_check_mutex: std.Io.Mutex = .init;
 
 fn stripVersionPrefix(tag: []const u8) []const u8 {
     if (tag.len == 0) return tag;
-    return if (tag[0] == 'v' or tag[0] == 'V') tag[1..] else tag;
+    return if (std.ascii.toLower(tag[0]) == 'v') tag[1..] else tag;
 }
 
 fn parseSemver(text: []const u8) ?SemanticVersion {
@@ -45,12 +45,16 @@ fn compareVersions(latest_raw: []const u8) VersionRelation {
     const latest = stripVersionPrefix(latest_raw);
     const current = stripVersionPrefix(CURRENT_VERSION);
 
+    // std.SemanticVersion.order implements SemVer precedence including
+    // pre-release and build metadata, which a hand-rolled major/minor/patch
+    // comparison gets wrong (e.g. 0.0.9-dev must not outrank 0.0.9).
     if (parseSemver(current)) |cur| {
         if (parseSemver(latest)) |lat| {
-            if (lat.major != cur.major) return if (lat.major > cur.major) .remote_newer else .local_newer;
-            if (lat.minor != cur.minor) return if (lat.minor > cur.minor) .remote_newer else .local_newer;
-            if (lat.patch != cur.patch) return if (lat.patch > cur.patch) .remote_newer else .local_newer;
-            return .equal;
+            return switch (std.SemanticVersion.order(cur, lat)) {
+                .lt => .remote_newer,
+                .eq => .equal,
+                .gt => .local_newer,
+            };
         }
     }
 
@@ -60,9 +64,8 @@ fn compareVersions(latest_raw: []const u8) VersionRelation {
 
 fn fetchLatestTag(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
     const url = std.fmt.comptimePrint("https://api.github.com/repos/{s}/{s}/releases/latest", .{ REPO_OWNER, REPO_NAME });
-    const extra_headers = [_]http.Header{
+    const extra_headers = [_]httpx.Header{
         .{ .name = "Accept", .value = "application/vnd.github+json" },
-        .{ .name = "User-Agent", .value = "mcp.zig" },
     };
 
     const parsed = Network.fetchJson(io, allocator, url, &extra_headers) catch return error.TagMissing;

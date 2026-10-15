@@ -185,6 +185,55 @@ pub const StdioTransport = struct {
     }
 };
 
+/// Params field mirrored into the `Mcp-Name` header, per method.
+fn nameFieldForMethod(method: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, method, "tools/call")) return "name";
+    if (std.mem.eql(u8, method, "prompts/get")) return "name";
+    if (std.mem.eql(u8, method, "resources/read")) return "uri";
+    return null;
+}
+
+/// Extracts the value the server will compare `Mcp-Name` against.
+fn methodIdentity(method: []const u8, params: ?std.json.Value) ?[]const u8 {
+    const field = nameFieldForMethod(method) orelse return null;
+    const p = params orelse return null;
+    if (p != .object) return null;
+    const v = p.object.get(field) orelse return null;
+    return if (v == .string) v.string else null;
+}
+
+/// True when `value` can be placed in an HTTP header verbatim: printable
+/// US-ASCII only, so no control characters or multi-byte sequences.
+fn isHeaderSafe(value: []const u8) bool {
+    // An empty header value conveys nothing and is not a valid one.
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch < 0x20 or ch > 0x7e) return false;
+    }
+    return true;
+}
+
+/// Base64-encodes `value` into a freshly allocated buffer.
+///
+/// `std.base64.Encoder` exposes `encode`/`calcSize` rather than an allocating
+/// convenience, so the buffer is sized and filled here.
+pub fn base64Alloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const encoder = std.base64.standard.Encoder;
+    const buf = try allocator.alloc(u8, encoder.calcSize(value.len));
+    _ = encoder.encode(buf, value);
+    return buf;
+}
+
+/// Encodes a header value, falling back to the spec's base64 sentinel
+/// (`=?base64?<base64>?=`) when the raw value is not header-safe.
+fn encodeHeaderValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    if (isHeaderSafe(value)) return allocator.dupe(u8, value);
+
+    const b64 = try base64Alloc(allocator, value);
+    defer allocator.free(b64);
+    return std.fmt.allocPrint(allocator, "=?base64?{s}?=", .{b64});
+}
+
 /// HTTP transport for remote server communication using httpx.zig.
 /// Sends requests via HTTP POST and receives JSON or SSE responses.
 /// Stateless per-request model (MCP 2026-07-28).
@@ -239,6 +288,34 @@ pub const HttpTransport = struct {
         try headers.append(allocator, .{ .name = "Accept", .value = "application/json, text/event-stream" });
         try headers.append(allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version });
 
+        // Mirror the body fields the spec requires servers to validate.
+        // `Mcp-Method` is always required; `Mcp-Name` is required for the
+        // methods whose identity lives in `params.name` / `params.uri`.
+        {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+
+            if (jsonrpc.parseMessage(arena.allocator(), message)) |parsed| {
+                switch (parsed.message) {
+                    .request => |req| {
+                        const method_hdr = try encodeHeaderValue(allocator, req.method);
+                        defer allocator.free(method_hdr);
+                        try headers.append(allocator, .{ .name = "Mcp-Method", .value = method_hdr });
+
+                        if (methodIdentity(req.method, req.params)) |ident| {
+                            const name_hdr = try encodeHeaderValue(allocator, ident);
+                            defer allocator.free(name_hdr);
+                            try headers.append(allocator, .{ .name = "Mcp-Name", .value = name_hdr });
+                        }
+                    },
+                    .notification, .response, .error_response => {},
+                }
+            } else |_| {
+                // Unparseable messages are forwarded as-is; the server reports
+                // the -32700 rather than the transport silently dropping them.
+            }
+        }
+
         var bearer_buf: ?[]u8 = null;
         defer if (bearer_buf) |b| allocator.free(b);
 
@@ -252,7 +329,17 @@ pub const HttpTransport = struct {
         defer if (client_info_buf) |b| allocator.free(b);
 
         if (self.client_info) |ci| {
-            client_info_buf = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"version\":\"{s}\"}}", .{ ci.name, ci.version });
+            // Serialised with std.json so names containing quotes, backslashes
+            // or control characters cannot corrupt the header or the JSON.
+            const ClientInfo = struct { name: []const u8, version: []const u8 };
+            var aw: std.Io.Writer.Allocating = .init(allocator);
+            defer aw.deinit();
+            try std.json.Stringify.value(
+                ClientInfo{ .name = ci.name, .version = ci.version },
+                .{},
+                &aw.writer,
+            );
+            client_info_buf = try allocator.dupe(u8, aw.written());
             try headers.append(allocator, .{ .name = "io.modelcontextprotocol/clientInfo", .value = client_info_buf.? });
         }
 
@@ -473,4 +560,72 @@ test "HttpTransport SSE data framing enqueues payloads" {
     try transport_impl.enqueueSseEvents(allocator, "data: {\"a\":1}\n\n");
     try std.testing.expectEqual(@as(usize, 1), transport_impl.pending_responses.items.len);
     try std.testing.expectEqualStrings("{\"a\":1}", transport_impl.pending_responses.items[0]);
+}
+
+test "nameFieldForMethod mirrors the spec's Mcp-Name rules" {
+    try std.testing.expectEqualStrings("name", nameFieldForMethod("tools/call").?);
+    try std.testing.expectEqualStrings("name", nameFieldForMethod("prompts/get").?);
+    try std.testing.expectEqualStrings("uri", nameFieldForMethod("resources/read").?);
+    try std.testing.expect(nameFieldForMethod("tools/list") == null);
+    try std.testing.expect(nameFieldForMethod("server/discover") == null);
+}
+
+test "methodIdentity extracts the field the server compares Mcp-Name against" {
+    const allocator = std.testing.allocator;
+
+    const tool_args = try std.json.parseFromSlice(std.json.Value, allocator,
+        \\{"name":"greet"}
+    , .{});
+    defer tool_args.deinit();
+    try std.testing.expectEqualStrings("greet", methodIdentity("tools/call", tool_args.value).?);
+
+    const read_args = try std.json.parseFromSlice(std.json.Value, allocator,
+        \\{"uri":"file:///a.txt"}
+    , .{});
+    defer read_args.deinit();
+    try std.testing.expectEqualStrings("file:///a.txt", methodIdentity("resources/read", read_args.value).?);
+
+    // Methods without an identity field produce no header value.
+    try std.testing.expect(methodIdentity("tools/list", read_args.value) == null);
+    try std.testing.expect(methodIdentity("tools/call", null) == null);
+}
+
+test "isHeaderSafe accepts printable ASCII only" {
+    try std.testing.expect(isHeaderSafe("tools/call"));
+    try std.testing.expect(isHeaderSafe("file:///project/config.json"));
+    try std.testing.expect(!isHeaderSafe("bad\nvalue"));
+    try std.testing.expect(!isHeaderSafe("caf\u{00e9}"));
+    try std.testing.expect(!isHeaderSafe(""));
+}
+
+test "encodeHeaderValue passes safe values through and sentencils the rest" {
+    const allocator = std.testing.allocator;
+
+    const safe = try encodeHeaderValue(allocator, "resources/read");
+    defer allocator.free(safe);
+    try std.testing.expectEqualStrings("resources/read", safe);
+
+    const uri = "file:///caf\u{00e9}/\u{4e16}\u{754c}.txt";
+    const encoded = try encodeHeaderValue(allocator, uri);
+    defer allocator.free(encoded);
+
+    try std.testing.expect(std.mem.startsWith(u8, encoded, "=?base64?"));
+    try std.testing.expect(std.mem.endsWith(u8, encoded, "?="));
+
+    // The server decodes this form, so it must round-trip to the exact bytes.
+    const decoded = (try @import("../server/http_rules.zig").decodeSentinel(allocator, encoded)).?;
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings(uri, decoded);
+}
+
+test "base64Alloc matches std.base64 encoding" {
+    const allocator = std.testing.allocator;
+    const input = "mcp.zig";
+
+    const got = try base64Alloc(allocator, input);
+    defer allocator.free(got);
+
+    var expected_buf: [64]u8 = undefined;
+    const expected = std.base64.standard.Encoder.encode(&expected_buf, input);
+    try std.testing.expectEqualStrings(expected, got);
 }

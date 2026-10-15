@@ -127,6 +127,20 @@ pub fn isLoopbackHostName(host: []const u8) bool {
     return seen == 4;
 }
 
+/// True when a header value matches the corresponding body field.
+///
+/// Header values that cannot be represented safely in an HTTP header are sent
+/// using the spec's base64 sentinel (`=?base64?<base64>?=`), so a raw byte
+/// comparison alone would reject an otherwise valid request.
+fn headerMatchesBody(allocator: std.mem.Allocator, header_value: []const u8, body_value: []const u8) !bool {
+    if (std.mem.eql(u8, header_value, body_value)) return true;
+
+    const decoded = try decodeSentinel(allocator, header_value);
+    defer if (decoded) |buf| allocator.free(buf);
+    const buf = decoded orelse return false;
+    return std.mem.eql(u8, buf, body_value);
+}
+
 /// Parses the body once and validates it against the HTTP headers.
 pub fn validate(
     allocator: std.mem.Allocator,
@@ -163,7 +177,7 @@ pub fn validate(
         return .{ .missing_header = .{ .name = header_protocol_version } };
     };
     const body_version = metaString(req.params, protocol.META_PROTOCOL_VERSION) orelse "";
-    if (!std.mem.eql(u8, header_version, body_version)) {
+    if (!try headerMatchesBody(allocator, header_version, body_version)) {
         return .{ .mismatch = .{ .message = "MCP-Protocol-Version header does not match _meta" } };
     }
     const supported = protocol.supportsVersion(header_version);
@@ -178,7 +192,7 @@ pub fn validate(
     const header_method_value = headers.method() orelse {
         return .{ .missing_header = .{ .name = header_method } };
     };
-    if (!std.mem.eql(u8, header_method_value, req.method)) {
+    if (!try headerMatchesBody(allocator, header_method_value, req.method)) {
         return .{ .mismatch = .{ .message = "Mcp-Method header does not match request method" } };
     }
 
@@ -190,7 +204,7 @@ pub fn validate(
                 return .{ .missing_header = .{ .name = header_name } };
             };
             const body_name = paramsIdentity(req.method, req.params) orelse "";
-            if (!std.mem.eql(u8, header_name_value, body_name)) {
+            if (!try headerMatchesBody(allocator, header_name_value, body_name)) {
                 return .{ .mismatch = .{ .message = "Mcp-Name header does not match request params" } };
             }
         }
@@ -374,4 +388,45 @@ test "sentinel decoding round-trips and passes through plain values" {
     try testing.expectEqualStrings("Hello, \u{4e16}\u{754c}", decoded);
 
     try testing.expect((try decodeSentinel(testing.allocator, "plain-value")) == null);
+}
+
+test "http: Mcp-Name accepts the base64 sentinel encoding" {
+    const a = testing.allocator;
+
+    // A resource URI containing non-ASCII cannot travel as a plain header
+    // value, so the client sends it sentinel-encoded. The server must decode
+    // before comparing, otherwise every such request is rejected as a mismatch.
+    const uri = "file:///caf\u{00e9}/\u{4e16}\u{754c}.txt";
+    const b64 = try @import("../transport/transport.zig").base64Alloc(a, uri);
+    defer a.free(b64);
+    const header_value = try std.fmt.allocPrint(a, "=?base64?{s}?=", .{b64});
+    defer a.free(header_value);
+
+    const req_body = try std.fmt.allocPrint(
+        a,
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\",\"params\":{{\"uri\":\"{s}\",\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}}}}",
+        .{uri},
+    );
+    defer a.free(req_body);
+
+    const headers = HeaderSource.fromHeaders("2026-07-28", "resources/read", header_value);
+
+    const verdict = try validate(a, headers, req_body, false);
+    try testing.expect(verdict == .ok);
+}
+
+test "http: Mcp-Method sentinel encoding is honoured" {
+    const a = testing.allocator;
+
+    const method = "tools/call";
+    const b64 = try @import("../transport/transport.zig").base64Alloc(a, method);
+    defer a.free(b64);
+    const header_value = try std.fmt.allocPrint(a, "=?base64?{s}?=", .{b64});
+    defer a.free(header_value);
+
+    const req_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"t\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}";
+    const headers = HeaderSource.fromHeaders("2026-07-28", header_value, "t");
+
+    const verdict = try validate(a, headers, req_body, false);
+    try testing.expect(verdict == .ok);
 }

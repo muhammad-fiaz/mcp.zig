@@ -75,6 +75,9 @@ pub const Transport = transport.Transport;
 pub const server = @import("server/server.zig");
 pub const Server = server.Server;
 pub const ServerConfig = server.ServerConfig;
+// Re-exported so the Streamable HTTP conformance tests in this file are
+// collected by `zig build test`; a privately imported module's tests are not.
+pub const http_rules = @import("server/http_rules.zig");
 
 pub const tools = @import("server/tools.zig");
 pub const Tool = tools.Tool;
