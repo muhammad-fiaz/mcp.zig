@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const jsonrpc = @import("../protocol/jsonrpc.zig");
+const protocol = @import("../protocol/protocol.zig");
 const types = @import("../protocol/types.zig");
 const httpx = @import("httpx");
 
@@ -202,38 +203,6 @@ fn methodIdentity(method: []const u8, params: ?std.json.Value) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
-/// True when `value` can be placed in an HTTP header verbatim: printable
-/// US-ASCII only, so no control characters or multi-byte sequences.
-fn isHeaderSafe(value: []const u8) bool {
-    // An empty header value conveys nothing and is not a valid one.
-    if (value.len == 0) return false;
-    for (value) |ch| {
-        if (ch < 0x20 or ch > 0x7e) return false;
-    }
-    return true;
-}
-
-/// Base64-encodes `value` into a freshly allocated buffer.
-///
-/// `std.base64.Encoder` exposes `encode`/`calcSize` rather than an allocating
-/// convenience, so the buffer is sized and filled here.
-pub fn base64Alloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
-    const encoder = std.base64.standard.Encoder;
-    const buf = try allocator.alloc(u8, encoder.calcSize(value.len));
-    _ = encoder.encode(buf, value);
-    return buf;
-}
-
-/// Encodes a header value, falling back to the spec's base64 sentinel
-/// (`=?base64?<base64>?=`) when the raw value is not header-safe.
-fn encodeHeaderValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
-    if (isHeaderSafe(value)) return allocator.dupe(u8, value);
-
-    const b64 = try base64Alloc(allocator, value);
-    defer allocator.free(b64);
-    return std.fmt.allocPrint(allocator, "=?base64?{s}?=", .{b64});
-}
-
 /// HTTP transport for remote server communication using httpx.zig.
 /// Sends requests via HTTP POST and receives JSON or SSE responses.
 /// Stateless per-request model (MCP 2026-07-28).
@@ -286,7 +255,7 @@ pub const HttpTransport = struct {
 
         try headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" });
         try headers.append(allocator, .{ .name = "Accept", .value = "application/json, text/event-stream" });
-        try headers.append(allocator, .{ .name = "MCP-Protocol-Version", .value = self.protocol_version });
+        try headers.append(allocator, .{ .name = protocol.HEADER_PROTOCOL_VERSION, .value = self.protocol_version });
 
         // Mirror the body fields the spec requires servers to validate.
         // `Mcp-Method` is always required; `Mcp-Name` is required for the
@@ -298,14 +267,14 @@ pub const HttpTransport = struct {
             if (jsonrpc.parseMessage(arena.allocator(), message)) |parsed| {
                 switch (parsed.message) {
                     .request => |req| {
-                        const method_hdr = try encodeHeaderValue(allocator, req.method);
+                        const method_hdr = try protocol.encodeHeaderValue(allocator, req.method);
                         defer allocator.free(method_hdr);
-                        try headers.append(allocator, .{ .name = "Mcp-Method", .value = method_hdr });
+                        try headers.append(allocator, .{ .name = protocol.HEADER_METHOD, .value = method_hdr });
 
                         if (methodIdentity(req.method, req.params)) |ident| {
-                            const name_hdr = try encodeHeaderValue(allocator, ident);
+                            const name_hdr = try protocol.encodeHeaderValue(allocator, ident);
                             defer allocator.free(name_hdr);
-                            try headers.append(allocator, .{ .name = "Mcp-Name", .value = name_hdr });
+                            try headers.append(allocator, .{ .name = protocol.HEADER_NAME, .value = name_hdr });
                         }
                     },
                     .notification, .response, .error_response => {},
@@ -591,29 +560,29 @@ test "methodIdentity extracts the field the server compares Mcp-Name against" {
 }
 
 test "isHeaderSafe accepts printable ASCII only" {
-    try std.testing.expect(isHeaderSafe("tools/call"));
-    try std.testing.expect(isHeaderSafe("file:///project/config.json"));
-    try std.testing.expect(!isHeaderSafe("bad\nvalue"));
-    try std.testing.expect(!isHeaderSafe("caf\u{00e9}"));
-    try std.testing.expect(!isHeaderSafe(""));
+    try std.testing.expect(protocol.isHeaderSafe("tools/call"));
+    try std.testing.expect(protocol.isHeaderSafe("file:///project/config.json"));
+    try std.testing.expect(!protocol.isHeaderSafe("bad\nvalue"));
+    try std.testing.expect(!protocol.isHeaderSafe("caf\u{00e9}"));
+    try std.testing.expect(!protocol.isHeaderSafe(""));
 }
 
 test "encodeHeaderValue passes safe values through and sentencils the rest" {
     const allocator = std.testing.allocator;
 
-    const safe = try encodeHeaderValue(allocator, "resources/read");
+    const safe = try protocol.encodeHeaderValue(allocator, "resources/read");
     defer allocator.free(safe);
     try std.testing.expectEqualStrings("resources/read", safe);
 
     const uri = "file:///caf\u{00e9}/\u{4e16}\u{754c}.txt";
-    const encoded = try encodeHeaderValue(allocator, uri);
+    const encoded = try protocol.encodeHeaderValue(allocator, uri);
     defer allocator.free(encoded);
 
-    try std.testing.expect(std.mem.startsWith(u8, encoded, "=?base64?"));
+    try std.testing.expect(std.mem.startsWith(u8, encoded, protocol.SENTINEL_PREFIX));
     try std.testing.expect(std.mem.endsWith(u8, encoded, "?="));
 
     // The server decodes this form, so it must round-trip to the exact bytes.
-    const decoded = (try @import("../server/http_rules.zig").decodeSentinel(allocator, encoded)).?;
+    const decoded = (try protocol.decodeSentinel(allocator, encoded)).?;
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings(uri, decoded);
 }
@@ -622,7 +591,7 @@ test "base64Alloc matches std.base64 encoding" {
     const allocator = std.testing.allocator;
     const input = "mcp.zig";
 
-    const got = try base64Alloc(allocator, input);
+    const got = try protocol.base64Alloc(allocator, input);
     defer allocator.free(got);
 
     var expected_buf: [64]u8 = undefined;

@@ -39,7 +39,7 @@
 
 const std = @import("std");
 
-/// Report and version utilities
+/// Error reporting utilities
 pub const report = @import("report.zig");
 pub const version_info = @import("version.zig");
 
@@ -50,14 +50,10 @@ pub const ISSUES_URL = report.ISSUES_URL;
 pub const VERSION = version_info.version;
 
 /// Prints an error message with instructions for reporting bugs.
-pub fn reportError(err: anyerror) void {
-    report.reportError(err);
-}
+pub const reportError = report.reportError;
 
 /// Prints a custom error message with instructions for reporting bugs.
-pub fn reportErrorMessage(message: []const u8) void {
-    report.reportErrorMessage(message);
-}
+pub const reportErrorMessage = report.reportErrorMessage;
 
 // Protocol types and JSON-RPC implementation
 pub const protocol = @import("protocol/protocol.zig");
@@ -114,7 +110,6 @@ pub const DiscoverResult = @import("protocol/protocol.zig").DiscoverResult;
 
 // Utilities
 pub const utils = @import("utils/mod.zig");
-pub const errors = @import("utils/errors.zig");
 pub const logging = @import("utils/logging.zig");
 pub const progress = @import("utils/progress.zig");
 pub const middleware = @import("utils/middleware.zig");

@@ -19,10 +19,12 @@ const std = @import("std");
 const protocol = @import("../protocol/protocol.zig");
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 
-pub const header_protocol_version = "MCP-Protocol-Version";
-pub const header_method = "Mcp-Method";
-pub const header_name = "Mcp-Name";
-pub const header_param_prefix = "Mcp-Param-";
+// Canonical definitions live in the protocol layer so the client and server
+// cannot disagree about them; these remain as readable aliases.
+pub const header_protocol_version = protocol.HEADER_PROTOCOL_VERSION;
+pub const header_method = protocol.HEADER_METHOD;
+pub const header_name = protocol.HEADER_NAME;
+pub const header_param_prefix = protocol.HEADER_PARAM_PREFIX;
 
 /// Methods whose identity is carried by `Mcp-Name`.
 pub const name_required_methods = [_][]const u8{
@@ -56,21 +58,7 @@ pub const Verdict = union(enum) {
 ///
 /// Returns null when the value is not sentinel-encoded. The caller owns the
 /// returned slice when it is non-null.
-pub fn decodeSentinel(allocator: std.mem.Allocator, value: []const u8) !?[]const u8 {
-    const prefix = "=?base64?";
-    const suffix = "?=";
-    if (!std.mem.startsWith(u8, value, prefix)) return null;
-    if (!std.mem.endsWith(u8, value, suffix)) return null;
-    if (value.len <= prefix.len + suffix.len) return null;
-
-    const payload = value[prefix.len .. value.len - suffix.len];
-    const decoder = std.base64.standard.Decoder;
-    const size = decoder.calcSizeForSlice(payload) catch return error.InvalidSentinel;
-    const buf = try allocator.alloc(u8, size);
-    errdefer allocator.free(buf);
-    decoder.decode(buf, payload) catch return error.InvalidSentinel;
-    return buf;
-}
+pub const decodeSentinel = protocol.decodeSentinel;
 
 /// Returns true when `Origin` is acceptable.
 ///
@@ -397,7 +385,7 @@ test "http: Mcp-Name accepts the base64 sentinel encoding" {
     // value, so the client sends it sentinel-encoded. The server must decode
     // before comparing, otherwise every such request is rejected as a mismatch.
     const uri = "file:///caf\u{00e9}/\u{4e16}\u{754c}.txt";
-    const b64 = try @import("../transport/transport.zig").base64Alloc(a, uri);
+    const b64 = try protocol.base64Alloc(a, uri);
     defer a.free(b64);
     const header_value = try std.fmt.allocPrint(a, "=?base64?{s}?=", .{b64});
     defer a.free(header_value);
@@ -419,7 +407,7 @@ test "http: Mcp-Method sentinel encoding is honoured" {
     const a = testing.allocator;
 
     const method = "tools/call";
-    const b64 = try @import("../transport/transport.zig").base64Alloc(a, method);
+    const b64 = try protocol.base64Alloc(a, method);
     defer a.free(b64);
     const header_value = try std.fmt.allocPrint(a, "=?base64?{s}?=", .{b64});
     defer a.free(header_value);

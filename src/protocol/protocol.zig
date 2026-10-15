@@ -73,6 +73,76 @@ pub const MRTR_METHOD_ELICITATION = "elicitation/create";
 pub const MRTR_METHOD_SAMPLING = "sampling/createMessage";
 pub const MRTR_METHOD_ROOTS = "roots/list";
 
+// --- Streamable HTTP wire format ---
+//
+// These names are shared by both ends of the connection: the client emits
+// them in transport.zig and the server validates them in server/http_rules.zig.
+// They live here so the two can never drift apart.
+
+/// Carries the negotiated protocol version; must match
+/// `_meta["io.modelcontextprotocol/protocolVersion"]`.
+pub const HEADER_PROTOCOL_VERSION = "MCP-Protocol-Version";
+/// Mirrors the JSON-RPC `method`.
+pub const HEADER_METHOD = "Mcp-Method";
+/// Mirrors `params.name` or `params.uri` where the method has an identity.
+pub const HEADER_NAME = "Mcp-Name";
+/// Prefix for the per-parameter mirroring headers.
+pub const HEADER_PARAM_PREFIX = "Mcp-Param-";
+
+/// Wrapper used for header values that are not safe to send verbatim.
+pub const SENTINEL_PREFIX = "=?base64?";
+pub const SENTINEL_SUFFIX = "?=";
+
+/// True when `value` can be placed in an HTTP header verbatim: printable
+/// US-ASCII only, so no control characters and no multi-byte sequences.
+pub fn isHeaderSafe(value: []const u8) bool {
+    // An empty header value conveys nothing and is not a valid one.
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch < 0x20 or ch > 0x7e) return false;
+    }
+    return true;
+}
+
+/// Base64-encodes `value` into a freshly allocated buffer.
+///
+/// `std.base64.Encoder` exposes `encode`/`calcSize` rather than an allocating
+/// convenience, so the buffer is sized and filled here.
+pub fn base64Alloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const encoder = std.base64.standard.Encoder;
+    const buf = try allocator.alloc(u8, encoder.calcSize(value.len));
+    _ = encoder.encode(buf, value);
+    return buf;
+}
+
+/// Encodes a header value, falling back to the spec's base64 sentinel
+/// (`=?base64?<base64>?=`) when the raw value is not header-safe.
+pub fn encodeHeaderValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    if (isHeaderSafe(value)) return allocator.dupe(u8, value);
+
+    const b64 = try base64Alloc(allocator, value);
+    defer allocator.free(b64);
+    return std.fmt.allocPrint(allocator, SENTINEL_PREFIX ++ "{s}" ++ SENTINEL_SUFFIX, .{b64});
+}
+
+/// Decodes a value produced by `encodeHeaderValue`.
+///
+/// Returns null when `value` is not sentinel-encoded. The caller owns the
+/// returned slice when it is non-null.
+pub fn decodeSentinel(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
+    if (!std.mem.startsWith(u8, value, SENTINEL_PREFIX)) return null;
+    if (!std.mem.endsWith(u8, value, SENTINEL_SUFFIX)) return null;
+    if (value.len <= SENTINEL_PREFIX.len + SENTINEL_SUFFIX.len) return null;
+
+    const payload = value[SENTINEL_PREFIX.len .. value.len - SENTINEL_SUFFIX.len];
+    const decoder = std.base64.standard.Decoder;
+    const size = decoder.calcSizeForSlice(payload) catch return error.InvalidSentinel;
+    const buf = try allocator.alloc(u8, size);
+    errdefer allocator.free(buf);
+    decoder.decode(buf, payload) catch return error.InvalidSentinel;
+    return buf;
+}
+
 /// Returns true when `version` is one of the versions this library speaks.
 pub fn supportsVersion(version: []const u8) bool {
     for (SUPPORTED_VERSIONS) |v| {

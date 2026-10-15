@@ -12,14 +12,21 @@ const std = @import("std");
 
 pub const ISSUES_URL = "https://github.com/muhammad-fiaz/mcp.zig/issues";
 
+/// Prints the message plus the shared "this may be a bug" hint.
+///
+/// Both public helpers funnel through here so the hint text lives in exactly
+/// one place.
+fn reportDetail(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("\n[MCP ERROR] " ++ fmt ++ "\n", args);
+    std.debug.print("\nIf you believe this is a bug in mcp.zig, please report it at:\n  {s}\n\n", .{ISSUES_URL});
+}
+
 /// Prints an error message with instructions for reporting bugs.
 pub fn reportError(err: anyerror) void {
-    std.debug.print("\n[MCP ERROR] {}\n", .{err});
-    std.debug.print("\nIf you believe this is a bug in mcp.zig, please report it at:\n  {s}\n\n", .{ISSUES_URL});
+    reportDetail("{}", .{err});
 }
 
 /// Prints a custom error message with instructions for reporting bugs.
 pub fn reportErrorMessage(message: []const u8) void {
-    std.debug.print("\n[MCP ERROR] {s}\n", .{message});
-    std.debug.print("\nIf you believe this is a bug in mcp.zig, please report it at:\n  {s}\n\n", .{ISSUES_URL});
+    reportDetail("{s}", .{message});
 }
