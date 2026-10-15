@@ -77,13 +77,47 @@ HTTP serving is implemented with httpx.zig 0.2.2 (Zig 0.17.0); the HTTP client u
 
 ### HTTP Request Format
 
-Send JSON-RPC payloads as `application/json` with HTTP `POST` to `/mcp`:
+Send JSON-RPC payloads as `application/json` with HTTP `POST` to `/mcp`.
+Every request must mirror its body fields into headers:
+
+| Header | Requirement |
+| --- | --- |
+| `MCP-Protocol-Version` | Must equal `_meta["io.modelcontextprotocol/protocolVersion"]` |
+| `Mcp-Method` | Must equal the JSON-RPC `method` |
+| `Mcp-Name` | Required for `tools/call` and `prompts/get` (`params.name`) and for `resources/read` (`params.uri`) |
+
+A missing header yields HTTP `400` with `-32020` (header mismatch) or a
+missing-header error; a version the server does not implement yields `-32022`.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/mcp \
     -H "Content-Type: application/json" \
+    -H "MCP-Protocol-Version: 2026-07-28" \
+    -H "Mcp-Method: server/discover" \
     -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
+
+Calling a tool additionally mirrors its name:
+
+```bash
+curl -X POST http://127.0.0.1:8080/mcp \
+    -H "Content-Type: application/json" \
+    -H "MCP-Protocol-Version: 2026-07-28" \
+    -H "Mcp-Method: tools/call" \
+    -H "Mcp-Name: greet" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Zig"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
+```
+
+Header values that are not safe as plain ASCII (for example a resource URI
+containing non-ASCII characters) are sent using the spec's base64 sentinel,
+`=?base64?<base64>?=`. The server decodes this form before comparing, so both
+forms validate. The `HttpTransport` client does this automatically.
+
+::: tip Not yet implemented
+The spec also defines an `x-mcp-header` request header carrying a
+`Mcp-Param-<name>: <value>` header per parameter. mcp.zig does not yet emit or
+validate those; only the three headers above are supported.
+:::
 
 The response body contains the JSON-RPC response.
 
@@ -101,6 +135,8 @@ single Server-Sent Events payload containing the JSON-RPC response.
 curl -X POST http://127.0.0.1:8080/mcp \
     -H "Content-Type: application/json" \
     -H "Accept: text/event-stream" \
+    -H "MCP-Protocol-Version: 2026-07-28" \
+    -H "Mcp-Method: server/discover" \
     -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 

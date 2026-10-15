@@ -17,6 +17,7 @@ const jsonrpc = @import("../protocol/jsonrpc.zig");
 const protocol = @import("../protocol/protocol.zig");
 const types = @import("../protocol/types.zig");
 const transport_mod = @import("../transport/transport.zig");
+const client_mod = @import("../client/client.zig");
 const prompts_mod = @import("prompts.zig");
 const resources_mod = @import("resources.zig");
 const tools_mod = @import("tools.zig");
@@ -480,6 +481,11 @@ pub const Server = struct {
             if (message_data) |data| {
                 defer allocator.free(data);
                 try self.handleMessage(io, allocator, data);
+            } else {
+                // Transports that report "nothing queued" by returning null
+                // instead of blocking (HttpTransport does) would otherwise
+                // spin a core at 100% while waiting for a response.
+                std.Io.sleep(io, .{ .nanoseconds = std.time.ns_per_ms }, .real) catch {};
             }
         }
 
@@ -1912,7 +1918,7 @@ test "Server add prompt with description" {
     try std.testing.expect(server.capabilities.prompts != null);
 }
 
-// --- MCP 2026-07-28 spec conformance tests (issue #14) ---
+// MCP 2026-07-28 spec conformance tests (issue #14)
 
 /// Captures the JSON a handler emits so tests can assert on the wire format.
 const CaptureTransport = struct {
@@ -2271,4 +2277,208 @@ test "spec: subscriptionId _meta key matches the spec namespace" {
         "io.modelcontextprotocol/subscriptionId",
         protocol.META_SUBSCRIPTION_ID,
     );
+}
+
+/// In-memory transport pairing a Client with a Server so the full request
+/// path runs inside a single test. Runs under `std.testing.allocator`, so any
+/// leak or double free on either side fails the test.
+const RoundTrip = struct {
+    server: *Server,
+    allocator: std.mem.Allocator,
+    /// Most recent server response; one request yields exactly one reply.
+    pending: ?[]u8 = null,
+
+    fn dispatch(p: *anyopaque, io: std.Io, a: std.mem.Allocator, msg: []const u8) transport_mod.Transport.SendError!void {
+        const self: *RoundTrip = @ptrCast(@alignCast(p));
+        self.server.handleMessage(io, a, msg) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.WriteError,
+        };
+    }
+
+    fn capture(p: *anyopaque, _: std.Io, _: std.mem.Allocator, msg: []const u8) transport_mod.Transport.SendError!void {
+        const self: *RoundTrip = @ptrCast(@alignCast(p));
+        // The server frees the buffer as soon as `send` returns and may hand
+        // down a per-request arena, so the copy uses this transport's own
+        // long-lived allocator.
+        if (self.pending) |old| self.allocator.free(old);
+        self.pending = self.allocator.dupe(u8, msg) catch return error.OutOfMemory;
+    }
+
+    fn drain(p: *anyopaque, _: std.Io, a: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+        const self: *RoundTrip = @ptrCast(@alignCast(p));
+        const msg = self.pending orelse return null;
+        self.pending = null;
+        return a.dupe(u8, msg) catch return error.OutOfMemory;
+    }
+
+    fn noop(_: *anyopaque) void {}
+
+    fn noopDestroy(_: *anyopaque, _: std.mem.Allocator) void {}
+
+    fn deinit(self: *RoundTrip) void {
+        if (self.pending) |msg| self.allocator.free(msg);
+        self.pending = null;
+    }
+
+    fn clientSide(self: *RoundTrip) transport_mod.Transport {
+        return .{ .ptr = self, .vtable = &.{
+            .send = dispatch,
+            .receive = drain,
+            .close = noop,
+            .destroy = noopDestroy,
+        } };
+    }
+
+    fn serverSide(self: *RoundTrip) transport_mod.Transport {
+        return .{ .ptr = self, .vtable = &.{
+            .send = capture,
+            .receive = drain,
+            .close = noop,
+            .destroy = noopDestroy,
+        } };
+    }
+};
+
+fn roundTripGreet(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    arguments: ?std.json.Value,
+) tools_mod.ToolError!tools_mod.ToolResult {
+    var who: []const u8 = "world";
+    if (arguments) |args| {
+        if (args == .object) {
+            if (args.object.get("name")) |n| {
+                if (n == .string) who = n.string;
+            }
+        }
+    }
+    const text = try std.fmt.allocPrint(allocator, "Hello, {s}!", .{who});
+    const content = try allocator.alloc(types.ContentBlock, 1);
+    content[0] = .{ .text = .{ .text = text } };
+    return .{ .content = content };
+}
+
+fn roundTripAbout(
+    _: ?*anyopaque,
+    _: std.Io,
+    _: std.mem.Allocator,
+    uri: []const u8,
+) resources_mod.ResourceError!resources_mod.ResourceContent {
+    return .{ .uri = uri, .mimeType = "text/plain", .text = "round-trip resource" };
+}
+
+const round_trip_prompt_messages = [_]prompts_mod.PromptMessage{
+    .{ .role = .user, .content = .{ .text = .{ .text = "Say hello." } } },
+};
+
+fn roundTripPrompt(
+    _: ?*anyopaque,
+    _: std.Io,
+    _: std.mem.Allocator,
+    _: ?std.json.Value,
+) prompts_mod.PromptError![]const prompts_mod.PromptMessage {
+    return &round_trip_prompt_messages;
+}
+
+test "memory: full client/server round trip leaks nothing" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "round-trip", .version = "1.0.0" });
+    defer server.deinit();
+
+    try server.addTool(.{
+        .name = "greet",
+        .description = "Greet a user",
+        .inputSchema = .{ .type = "object" },
+        .handler = roundTripGreet,
+    });
+    try server.addResource(.{
+        .uri = "info://about",
+        .name = "About",
+        .mimeType = "text/plain",
+        .handler = roundTripAbout,
+    });
+    try server.addPrompt(.{
+        .name = "hello",
+        .description = "Say hello",
+        .handler = roundTripPrompt,
+    });
+
+    var link = RoundTrip{ .server = &server, .allocator = a };
+    defer link.deinit();
+    server.transport = link.serverSide();
+
+    var client = client_mod.Client.init(std.Io.failing, a, .{ .name = "round-trip-client", .version = "1.0.0" });
+    defer client.deinit();
+    client.transport = link.clientSide();
+
+    // Every call below must produce a well-formed result; std.testing.allocator
+    // reports any leak once `defer`s unwind at the end of the test.
+    const steps = [_]struct { name: []const u8, send: *const fn (*client_mod.Client) anyerror!void }{
+        .{ .name = "server/discover", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.discover();
+            }
+        }.f },
+        .{ .name = "tools/list", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.listTools();
+            }
+        }.f },
+        .{ .name = "tools/call", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                var args: std.json.ObjectMap = .empty;
+                defer args.deinit(c.allocator);
+                try args.put(c.allocator, "name", .{ .string = "Zig" });
+                try c.callTool("greet", .{ .object = args });
+            }
+        }.f },
+        .{ .name = "resources/list", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.listResources();
+            }
+        }.f },
+        .{ .name = "resources/read", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.readResource("info://about");
+            }
+        }.f },
+        .{ .name = "prompts/list", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.listPrompts();
+            }
+        }.f },
+        .{ .name = "prompts/get", .send = struct {
+            fn f(c: *client_mod.Client) anyerror!void {
+                try c.getPrompt("hello", null);
+            }
+        }.f },
+    };
+
+    for (steps) |step| {
+        try step.send(&client);
+
+        const raw = link.pending orelse return error.NoResponse;
+        link.pending = null;
+        defer a.free(raw);
+
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+        defer parsed.deinit();
+
+        const obj = switch (parsed.value) {
+            .object => |o| o,
+            else => return error.BadResponse,
+        };
+        try std.testing.expect(obj.get("error") == null);
+        const result = obj.get("result") orelse return error.MissingResult;
+        switch (result) {
+            .object => |r| try std.testing.expectEqualStrings(
+                protocol.RESULT_TYPE_COMPLETE,
+                r.get("resultType").?.string,
+            ),
+            else => return error.BadResult,
+        }
+    }
 }

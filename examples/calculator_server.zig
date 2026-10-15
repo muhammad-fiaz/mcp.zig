@@ -101,9 +101,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // try server.run(io, allocator, .{ .http = .{ .host = "localhost", .port = 8080 } });
 }
 
-// ---------------------------------------------------------------------------
 // Schema helpers
-// ---------------------------------------------------------------------------
 
 fn buildTwoNumberSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     var b = mcp.schema.InputSchemaBuilder.init(allocator);
@@ -134,9 +132,7 @@ fn buildArithmeticOutputSchema(allocator: std.mem.Allocator) !mcp.types.OutputSc
     };
 }
 
-// ---------------------------------------------------------------------------
-// Shared result helper (inlined — no common.zig dependency)
-// ---------------------------------------------------------------------------
+// Shared result helper (inlined - no common.zig dependency)
 
 fn mathResult(
     allocator: std.mem.Allocator,
@@ -150,9 +146,7 @@ fn mathResult(
         return mcp.tools.ToolError.OutOfMemory;
 }
 
-// ---------------------------------------------------------------------------
 // Tool handlers
-// ---------------------------------------------------------------------------
 
 fn addHandler(_: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
     const a = mcp.tools.getFloat(args, "a") orelse

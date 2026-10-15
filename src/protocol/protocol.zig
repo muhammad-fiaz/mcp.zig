@@ -73,7 +73,7 @@ pub const MRTR_METHOD_ELICITATION = "elicitation/create";
 pub const MRTR_METHOD_SAMPLING = "sampling/createMessage";
 pub const MRTR_METHOD_ROOTS = "roots/list";
 
-// --- Streamable HTTP wire format ---
+// Streamable HTTP wire format
 //
 // These names are shared by both ends of the connection: the client emits
 // them in transport.zig and the server validates them in server/http_rules.zig.

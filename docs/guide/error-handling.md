@@ -301,23 +301,34 @@ const url = mcp.ISSUES_URL;
 // https://github.com/muhammad-fiaz/mcp.zig/issues
 ```
 
-## Update Checking
+## Version Information
 
-To ensure your application is running the latest version of mcp.zig, you can enable background update checks. This will check GitHub Releases and log a message if a new version is available.
+mcp.zig exposes its version so you can report it when filing a bug:
 
 ```zig
-pub fn main(init: std.process.Init) void {
-    run(init.io, init.gpa) catch |err| {
-        mcp.reportError(err);
-    };
-}
+const version = mcp.VERSION;
+// e.g. "0.0.9"
+```
 
+There is no built-in update checker. Earlier releases spawned a background
+thread on every `Client.init` to query GitHub Releases, which `Client.deinit`
+then had to join; that added tens of seconds to normal shutdown and could
+hang indefinitely when the network was unavailable. If you want update
+notifications, check the releases yourself and compare against `mcp.VERSION`
+using `std.SemanticVersion`:
+
+```zig
 fn run(io: std.Io, allocator: std.mem.Allocator) !void {
-    // Check for updates in background
-    // This runs on a separate thread; detach to let it run in background
-    if (mcp.report.checkForUpdates(io, allocator)) |t| t.detach();
+    const latest = try fetchLatestRelease(allocator);
+    defer allocator.free(latest);
 
-    // Continue with server initialization...
+    const current = std.SemanticVersion.parse(mcp.VERSION) catch return;
+    const remote = std.SemanticVersion.parse(latest) catch return;
+
+    switch (std.SemanticVersion.order(current, remote)) {
+        .lt => std.log.info("mcp.zig {s} is available", .{latest}),
+        else => {},
+    }
 }
 ```
 

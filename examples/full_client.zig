@@ -205,7 +205,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer client.deinit();
     client.transport = loopback.clientSide();
 
-    // --- Discovery and list operations ---
+    // Discovery and list operations
     std.debug.print("Discovery and lists:\n", .{});
 
     try client.discover();
@@ -255,7 +255,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         std.debug.print("       -> {d} prompt(s): {s}\n", .{ list.items.len, list.items[0].object.get("name").?.string });
     }
 
-    // --- Data-plane operations: these were never covered by the other examples ---
+    // Data-plane operations: these were never covered by the other examples
     std.debug.print("\nData plane (tools/call, resources/read, prompts/get):\n", .{});
 
     var greet_args: std.json.ObjectMap = .empty;

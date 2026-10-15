@@ -188,22 +188,23 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
 The `examples/` directory contains several example implementations:
 
-| Example                   | Description                           | Run step              |
-| ------------------------- | ------------------------------------- | --------------------- |
-| **simple_server.zig**     | Basic server with greeting tool       | `run-server`          |
-| **simple_client.zig**     | Basic client setup                    | `run-client`          |
-| **weather_server.zig**    | Weather information server            | `run-weather`         |
-| **calculator_server.zig** | Calculator with arithmetic operations | `run-calc`            |
-| **advanced_server.zig**   | Advanced schemas and task support     | `run-advanced`        |
-| **filesystem_server.zig** | Filesystem resources server           | `run-filesystem`      |
-| **notes_server.zig**      | In-memory notes server                | `run-notes`           |
-| **http_server.zig**       | HTTP transport server                 | `run-http`            |
-| **middleware_server.zig** | Middleware usage server               | `run-middleware`      |
-| **batch_client.zig**      | Batch request client                  | `run-batch`           |
-| **rate_limiter_example.zig** | Rate limiter example               | `run-rate-limiter`    |
-| **health_check_example.zig** | Health check example             | `run-health-check`    |
-| **shutdown_example.zig**  | Graceful shutdown example             | `run-shutdown`        |
-| **validator_example.zig** | Request validator example             | `run-validator`       |
+| Example                                                 | Description                                        | Run step           |
+| ------------------------------------------------------- | -------------------------------------------------- | ------------------ |
+| [simple_server.zig](examples/simple_server.zig)         | Basic server with greeting tool                    | `run-server`       |
+| [simple_client.zig](examples/simple_client.zig)         | Basic client setup                                 | `run-client`       |
+| [full_client.zig](examples/full_client.zig)             | Full client/server round trip: calls every tool    | `run-full-client`  |
+| [weather_server.zig](examples/weather_server.zig)       | Weather information server                         | `run-weather`      |
+| [calculator_server.zig](examples/calculator_server.zig) | Calculator with arithmetic operations              | `run-calc`         |
+| [advanced_server.zig](examples/advanced_server.zig)     | Advanced schemas and task support                  | `run-advanced`     |
+| [filesystem_server.zig](examples/filesystem_server.zig) | Filesystem resources server                        | `run-filesystem`   |
+| [notes_server.zig](examples/notes_server.zig)           | In-memory notes server                             | `run-notes`        |
+| [http_server.zig](examples/http_server.zig)             | HTTP transport server                              | `run-http`         |
+| [middleware_server.zig](examples/middleware_server.zig) | Middleware usage server                            | `run-middleware`   |
+| [batch_client.zig](examples/batch_client.zig)           | Batch request client                               | `run-batch`        |
+| [rate_limiter_example.zig](examples/rate_limiter_example.zig) | Rate limiter example                        | `run-rate-limiter` |
+| [health_check_example.zig](examples/health_check_example.zig) | Health check example                        | `run-health-check` |
+| [shutdown_example.zig](examples/shutdown_example.zig)   | Graceful shutdown example                          | `run-shutdown`     |
+| [validator_example.zig](examples/validator_example.zig) | Request validator example                          | `run-validator`    |
 
 Run examples:
 
@@ -374,7 +375,7 @@ This library implements MCP protocol version **2026-07-28**.
 Contributions are welcome! Please feel free to submit issues and pull requests.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributing Guide](https://muhammad-fiaz.github.io/mcp.zig/contributing) for guidelines.
-For security vulnerabilities, see [SECURITY.md](SECURITY.md) — report privately to contact@muhammadfiaz.com.
+For security vulnerabilities, see [SECURITY.md](SECURITY.md) — report privately using the contact details listed there.
 
 ## Support
 

@@ -146,19 +146,30 @@ The server listens on `http://127.0.0.1:8080`.
 
 ## Client Usage
 
+### Required Headers
+
+The server validates that the request headers mirror the body. Every `POST`
+needs `MCP-Protocol-Version` and `Mcp-Method`; `tools/call` also needs
+`Mcp-Name`. The examples below include them, and every body carries the
+`_meta` fields required by MCP 2026-07-28.
+
 ### Discover Server
 
 ```bash
 curl -X POST http://127.0.0.1:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover"}'
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: server/discover" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 PowerShell:
 
 ```powershell
-$body = '{"jsonrpc":"2.0","id":1,"method":"server/discover"}'
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/mcp -ContentType 'application/json' -Body $body
+$meta = '"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}'
+$body = "{`"jsonrpc`":`"2.0`",`"id`":1,`"method`":`"server/discover`",`"params`":{$meta}}"
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/mcp -ContentType 'application/json' `
+  -Headers @{ 'MCP-Protocol-Version' = '2026-07-28'; 'Mcp-Method' = 'server/discover' } -Body $body
 ```
 
 ### List Tools
@@ -166,7 +177,9 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/mcp -ContentType 'appl
 ```bash
 curl -X POST http://127.0.0.1:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/list" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 ### Call ping
@@ -174,7 +187,10 @@ curl -X POST http://127.0.0.1:8080/mcp \
 ```bash
 curl -X POST http://127.0.0.1:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{"message":"hello"}}}'
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: ping" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{"message":"hello"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 ### Call hash_text
@@ -182,7 +198,10 @@ curl -X POST http://127.0.0.1:8080/mcp \
 ```bash
 curl -X POST http://127.0.0.1:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hash_text","arguments":{"text":"mcp.zig"}}}'
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: hash_text" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hash_text","arguments":{"text":"mcp.zig"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0.0"}}}}'
 ```
 
 ## Expected Output

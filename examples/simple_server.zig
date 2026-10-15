@@ -36,7 +36,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     });
     defer server.deinit();
 
-    // --- Tools ---
+    // Tools
     try server.addTool(.{
         .name = "greet",
         .description = "Greet a user by name",
@@ -55,7 +55,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .handler = echoHandler,
     });
 
-    // --- Resources ---
+    // Resources
     try server.addResource(.{
         .uri = "info://server/about",
         .name = "About",
@@ -65,7 +65,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
         .handler = aboutHandler,
     });
 
-    // --- Prompts ---
+    // Prompts
     try server.addPrompt(.{
         .name = "introduce",
         .description = "Ask the model to introduce this server's capabilities",
@@ -80,9 +80,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     try server.run(io, allocator, .stdio);
 }
 
-// ---------------------------------------------------------------------------
 // Schema builders
-// ---------------------------------------------------------------------------
 
 fn buildGreetSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     var b = mcp.schema.InputSchemaBuilder.init(allocator);
@@ -100,9 +98,7 @@ fn buildEchoSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     return b.toInputSchema(allocator);
 }
 
-// ---------------------------------------------------------------------------
 // Handlers
-// ---------------------------------------------------------------------------
 
 fn greetHandler(
     _: ?*anyopaque,
