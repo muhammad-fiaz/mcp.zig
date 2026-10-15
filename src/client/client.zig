@@ -193,20 +193,34 @@ pub const Client = struct {
 
         try self.pending_requests.put(id, .{ .method = method });
 
-        // Build _meta with per-request metadata (2026-07-28 stateless model).
-        // `info` is stored by value inside `meta`; both are deinited below
-        // after the request has been serialized and sent.
+        // Any caller-supplied `_meta` is preserved so reserved keys the caller set
+        // (notably `progressToken`) survive; the protocol fields below are
+        // then written on top.
+        var meta: std.json.ObjectMap = .empty;
+        defer meta.deinit(self.allocator);
+        if (params) |p| {
+            if (p == .object) {
+                if (p.object.get("_meta")) |existing| {
+                    if (existing == .object) meta = existing.object;
+                }
+            }
+        }
+
         var info: std.json.ObjectMap = .empty;
         defer info.deinit(self.allocator);
         try info.put(self.allocator, "name", .{ .string = self.config.name });
         try info.put(self.allocator, "version", .{ .string = self.config.version });
 
-        var meta: std.json.ObjectMap = .empty;
-        defer meta.deinit(self.allocator);
+        // `protocolVersion` and `clientCapabilities` are required on every
+        // client request; a server rejects a request missing either with
+        // -32602.
         try meta.put(self.allocator, "io.modelcontextprotocol/protocolVersion", .{ .string = protocol.VERSION });
         try meta.put(self.allocator, "io.modelcontextprotocol/clientInfo", .{
             .object = info,
         });
+        var caps = try self.capabilities.toJson(self.allocator);
+        defer caps.deinit(self.allocator);
+        try meta.put(self.allocator, "io.modelcontextprotocol/clientCapabilities", .{ .object = caps });
 
         var merged_params: std.json.ObjectMap = .empty;
         defer merged_params.deinit(self.allocator);
@@ -305,6 +319,65 @@ pub const Client = struct {
         if (round) |r| {
             try self.putRoundParams(r, &params);
         }
+        try self.sendRequest("tools/call", .{ .object = params });
+    }
+
+    /// A token that opts a request into progress notifications.
+    ///
+    /// The token travels in `params._meta.progressToken`; the server echoes it
+    /// on each `notifications/progress` it sends.
+    pub const ProgressToken = union(enum) {
+        string: []const u8,
+        integer: i64,
+
+        pub fn toJson(self: ProgressToken) std.json.Value {
+            return switch (self) {
+                .string => |s| .{ .string = s },
+                .integer => |i| .{ .integer = i },
+            };
+        }
+    };
+
+    /// Adds a `progressToken` to a request's `_meta`, opting into progress
+    /// notifications for that request.
+    fn putProgressToken(self: *Self, token: ?ProgressToken, params: *std.json.ObjectMap) !void {
+        const t = token orelse return;
+        var meta: std.json.ObjectMap = .empty;
+        if (params.get("_meta")) |existing| {
+            if (existing == .object) meta = existing.object;
+        }
+        try meta.put(self.allocator, "progressToken", t.toJson());
+        try params.put(self.allocator, "_meta", .{ .object = meta });
+    }
+
+    /// Cancels an in-flight request the client previously issued.
+    ///
+    /// The server answers the original request with -32800; a cancelled
+    /// request still produces a response, as JSON-RPC requires.
+    pub fn cancel(self: *Self, request_id: i64, reason: ?[]const u8) !void {
+        var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
+        try params.put(self.allocator, "requestId", .{ .integer = request_id });
+        if (reason) |r| {
+            try params.put(self.allocator, "reason", .{ .string = r });
+        }
+        try self.sendNotification("notifications/cancelled", .{ .object = params });
+    }
+
+    /// Calls a tool, optionally opting into progress notifications.
+    pub fn callToolWithProgress(
+        self: *Self,
+        name: []const u8,
+        arguments: ?std.json.Value,
+        progress: ?ProgressToken,
+    ) !void {
+        var params: std.json.ObjectMap = .empty;
+        defer params.deinit(self.allocator);
+        try params.put(self.allocator, "name", .{ .string = name });
+        if (arguments) |args| {
+            try params.put(self.allocator, "arguments", args);
+        }
+        try self.putProgressToken(progress, &params);
         try self.sendRequest("tools/call", .{ .object = params });
     }
 
@@ -688,4 +761,100 @@ test "callToolRound echoes inputResponses and requestState on the retry" {
     try std.testing.expectEqualStrings("greet", params.get("name").?.string);
     try std.testing.expectEqualStrings("octocat", params.get("inputResponses").?.object.get("github_login").?.string);
     try std.testing.expectEqualStrings("opaque", params.get("requestState").?.string);
+}
+
+test "progressToken is sent in params._meta, not at the top level" {
+    const a = std.testing.allocator;
+
+    var sent = std.ArrayList([]u8).empty;
+    defer {
+        for (sent.items) |m| a.free(m);
+        sent.deinit(a);
+    }
+
+    var client = Client.init(std.Io.failing, a, .{ .name = "progress-client", .version = "1.0.0" });
+    defer client.deinit();
+    client.transport = .{
+        .ptr = &sent,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, _: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const list: *std.ArrayList([]u8) = @ptrCast(@alignCast(p));
+                    list.append(al, try al.dupe(u8, m)) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(_: *anyopaque, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    return null;
+                }
+            }.f,
+            .close = struct {
+                fn f(_: *anyopaque) void {}
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    try client.callToolWithProgress("long", null, .{ .string = "tok-1" });
+
+    try std.testing.expectEqual(@as(usize, 1), sent.items.len);
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, sent.items[0], .{});
+    defer parsed.deinit();
+
+    const params = parsed.value.object.get("params").?.object;
+    // The reserved key lives under _meta.
+    try std.testing.expect(params.get("progressToken") == null);
+    try std.testing.expectEqualStrings(
+        "tok-1",
+        params.get("_meta").?.object.get("progressToken").?.string,
+    );
+}
+
+test "cancel sends notifications/cancelled carrying the request id" {
+    const a = std.testing.allocator;
+
+    var sent = std.ArrayList([]u8).empty;
+    defer {
+        for (sent.items) |m| a.free(m);
+        sent.deinit(a);
+    }
+
+    var client = Client.init(std.Io.failing, a, .{ .name = "cancel-client", .version = "1.0.0" });
+    defer client.deinit();
+    client.transport = .{
+        .ptr = &sent,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, _: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const list: *std.ArrayList([]u8) = @ptrCast(@alignCast(p));
+                    list.append(al, try al.dupe(u8, m)) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(_: *anyopaque, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    return null;
+                }
+            }.f,
+            .close = struct {
+                fn f(_: *anyopaque) void {}
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    try client.cancel(42, null);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, sent.items[0], .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("notifications/cancelled", parsed.value.object.get("method").?.string);
+    // A notification carries no id.
+    try std.testing.expect(parsed.value.object.get("id") == null);
+    try std.testing.expectEqual(
+        @as(i64, 42),
+        parsed.value.object.get("params").?.object.get("requestId").?.integer,
+    );
 }

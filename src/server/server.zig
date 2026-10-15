@@ -191,6 +191,9 @@ pub const Server = struct {
     stdio_transport: ?*transport_mod.StdioTransport = null,
     next_request_id: i64 = 1,
     pending_requests: std.AutoHashMap(i64, PendingRequest),
+    /// Request ids the client has cancelled via `notifications/cancelled`.
+    /// Handlers poll `isCancelled` and the server answers with -32800.
+    cancelled_requests: std.AutoHashMap(i64, void),
     log_level: protocol.LogLevel = .info,
     /// Host the HTTP listener is bound to, used for Origin validation.
     http_host: ?[]const u8 = null,
@@ -220,6 +223,7 @@ pub const Server = struct {
             .prompts = .init(allocator),
             .tasks = .init(allocator),
             .pending_requests = .init(allocator),
+            .cancelled_requests = .init(allocator),
         };
     }
 
@@ -231,6 +235,7 @@ pub const Server = struct {
         self.prompts.deinit();
         self.deinitTasks();
         self.pending_requests.deinit();
+        self.cancelled_requests.deinit();
         if (self.stdio_transport) |stdio| {
             stdio.deinit(self.allocator);
             self.allocator.destroy(stdio);
@@ -886,6 +891,14 @@ pub const Server = struct {
                 return;
             };
 
+            // Cancellation is only meaningful while the request is in flight,
+            // so the record is cleared once the result is known.
+            defer self.clearCancelled(request.id);
+            if (self.isCancelled(request.id)) {
+                try self.sendResponse(io, allocator, .{ .error_response = Self.cancelledErrorResponse(request.id) });
+                return;
+            }
+
             const result_value = try buildToolCallResultValue(allocator, tool_result);
             const response = jsonrpc.createResponse(request.id, result_value);
             try self.sendResponse(io, allocator, .{ .response = response });
@@ -1460,13 +1473,49 @@ pub const Server = struct {
         }
     }
 
+    /// True when the client cancelled the request with the given id.
+    ///
+    /// Long-running handlers should poll this and return early; the spec
+    /// requires every request to still produce a response, so the server
+    /// answers a cancelled request with -32800.
+    pub fn isCancelled(self: *Self, id: types.RequestId) bool {
+        const numeric = switch (id) {
+            .integer => |i| i,
+            .string => return false,
+        };
+        return self.cancelled_requests.contains(numeric);
+    }
+
+    /// Clears a recorded cancellation, so a reused id starts fresh.
+    pub fn clearCancelled(self: *Self, id: types.RequestId) void {
+        const numeric = switch (id) {
+            .integer => |i| i,
+            .string => return,
+        };
+        _ = self.cancelled_requests.remove(numeric);
+    }
+
+    /// The JSON-RPC error a cancelled request should be answered with.
+    fn cancelledErrorResponse(id: types.RequestId) jsonrpc.ErrorResponse {
+        return jsonrpc.createErrorResponse(
+            id,
+            jsonrpc.ErrorCode.REQUEST_CANCELLED,
+            "Request cancelled",
+            null,
+        );
+    }
+
     /// Handle incoming notifications
     fn handleNotification(self: *Self, io: anytype, notification: jsonrpc.Notification) !void {
         if (std.mem.eql(u8, notification.method, "notifications/cancelled")) {
             if (notification.params) |params| {
                 if (params == .object) {
                     if (params.object.get("requestId")) |req_id| {
-                        _ = req_id;
+                        // Record the cancellation so a long-running handler can
+                        // observe it and the server can answer with -32800.
+                        if (req_id == .integer) {
+                            self.cancelled_requests.put(req_id.integer, {}) catch {};
+                        }
                     }
                 }
             }

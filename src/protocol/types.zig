@@ -165,6 +165,37 @@ pub const ClientCapabilities = struct {
     sampling: ?SamplingCapability = null,
     elicitation: ?ElicitationCapability = null,
     tasks: ?ClientTasksCapability = null,
+
+    /// Serialises the declared capabilities for
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`, which the spec
+    /// requires on every client request. Only capabilities actually declared
+    /// are emitted, so a server never assumes support the client lacks.
+    pub fn toJson(self: ClientCapabilities, allocator: std.mem.Allocator) !std.json.ObjectMap {
+        var caps: std.json.ObjectMap = .empty;
+        errdefer caps.deinit(allocator);
+
+        // Marks a sub-capability present as an empty JSON object.
+        const empty_obj: std.json.ObjectMap = .empty;
+
+        if (self.roots) |roots| {
+            var obj: std.json.ObjectMap = .empty;
+            if (roots.listChanged) try obj.put(allocator, "listChanged", .{ .bool = true });
+            try caps.put(allocator, "roots", .{ .object = obj });
+        }
+        if (self.sampling) |sampling| {
+            var obj: std.json.ObjectMap = .empty;
+            if (sampling.context != null) try obj.put(allocator, "context", .{ .object = empty_obj });
+            if (sampling.tools != null) try obj.put(allocator, "tools", .{ .object = empty_obj });
+            try caps.put(allocator, "sampling", .{ .object = obj });
+        }
+        if (self.elicitation != null) {
+            try caps.put(allocator, "elicitation", .{ .object = empty_obj });
+        }
+        if (self.experimental) |exp| {
+            try caps.put(allocator, "experimental", exp);
+        }
+        return caps;
+    }
 };
 
 pub const RootsCapability = struct {
