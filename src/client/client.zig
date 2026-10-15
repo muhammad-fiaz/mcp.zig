@@ -256,7 +256,27 @@ pub const Client = struct {
 
     /// Requests the list of available tools from the server.
     pub fn listTools(self: *Self) !void {
-        try self.sendRequest("tools/list", null);
+        try self.listToolsPage(null);
+    }
+
+    /// Requests one page of tools, resuming from `cursor`.
+    ///
+    /// A null cursor asks for the first page. The server answers with a
+    /// `nextCursor` when more pages remain.
+    pub fn listToolsPage(self: *Self, cursor: ?[]const u8) !void {
+        try self.sendPaginated("tools/list", cursor);
+    }
+
+    /// Sends a `*/list` request carrying an optional `cursor`.
+    fn sendPaginated(self: *Self, method: []const u8, cursor: ?[]const u8) !void {
+        if (cursor) |c| {
+            var params: std.json.ObjectMap = .empty;
+            defer params.deinit(self.allocator);
+            try params.put(self.allocator, "cursor", .{ .string = c });
+            try self.sendRequest(method, .{ .object = params });
+        } else {
+            try self.sendRequest(method, null);
+        }
     }
 
     /// A round of Multi Round-Trip Requests that the server asked the client to
@@ -383,7 +403,12 @@ pub const Client = struct {
 
     /// Requests the list of available resources from the server.
     pub fn listResources(self: *Self) !void {
-        try self.sendRequest("resources/list", null);
+        try self.listResourcesPage(null);
+    }
+
+    /// Requests one page of resources, resuming from `cursor`.
+    pub fn listResourcesPage(self: *Self, cursor: ?[]const u8) !void {
+        try self.sendPaginated("resources/list", cursor);
     }
 
     /// Reads a resource from the server by URI.
@@ -401,22 +426,56 @@ pub const Client = struct {
         try self.sendRequest("resources/read", .{ .object = params });
     }
 
-    /// Subscribes to resource updates via subscriptions/listen.
-    pub fn subscriptionsListen(self: *Self, uri: []const u8) !void {
+    /// Opens a long-lived notification stream via `subscriptions/listen`.
+    ///
+    /// The filter is sent as `params.notifications`, and the stream stays open
+    /// until cancelled. Every notification the server sends back carries the
+    /// subscription id of this request in `_meta`.
+    pub fn subscriptionsListen(self: *Self, filter: types.SubscriptionFilter) !void {
+        var notifications: std.json.ObjectMap = .empty;
+        defer notifications.deinit(self.allocator);
+
+        // The array must outlive the block that fills it: `notifications`
+        // stores a copy of the slice and sendRequest reads it below.
+        var uris: ?std.json.Array = null;
+        defer if (uris) |*a| a.deinit();
+
+        if (filter.toolsListChanged) try notifications.put(self.allocator, "toolsListChanged", .{ .bool = true });
+        if (filter.promptsListChanged) try notifications.put(self.allocator, "promptsListChanged", .{ .bool = true });
+        if (filter.resourcesListChanged) try notifications.put(self.allocator, "resourcesListChanged", .{ .bool = true });
+        if (filter.resourceSubscriptions) |list| {
+            if (list.len > 0) {
+                var arr: std.json.Array = .init(self.allocator);
+                for (list) |u| try arr.append(.{ .string = u });
+                try notifications.put(self.allocator, "resourceSubscriptions", .{ .array = arr });
+                uris = arr;
+            }
+        }
+
         var params: std.json.ObjectMap = .empty;
         defer params.deinit(self.allocator);
-        try params.put(self.allocator, "uri", .{ .string = uri });
+        try params.put(self.allocator, "notifications", .{ .object = notifications });
         try self.sendRequest("subscriptions/listen", .{ .object = params });
     }
 
     /// Requests the list of resource templates from the server.
     pub fn listResourceTemplates(self: *Self) !void {
-        try self.sendRequest("resources/templates/list", null);
+        try self.listResourceTemplatesPage(null);
+    }
+
+    /// Requests one page of resource templates, resuming from `cursor`.
+    pub fn listResourceTemplatesPage(self: *Self, cursor: ?[]const u8) !void {
+        try self.sendPaginated("resources/templates/list", cursor);
     }
 
     /// Requests the list of available prompts from the server.
     pub fn listPrompts(self: *Self) !void {
-        try self.sendRequest("prompts/list", null);
+        try self.listPromptsPage(null);
+    }
+
+    /// Requests one page of prompts, resuming from `cursor`.
+    pub fn listPromptsPage(self: *Self, cursor: ?[]const u8) !void {
+        try self.sendPaginated("prompts/list", cursor);
     }
 
     /// Fetches a prompt from the server with optional arguments.
@@ -661,7 +720,22 @@ test "Client request maps do not leak" {
     try client.callTool("greet", .{ .object = args });
     try client.getPrompt("intro", .{ .object = args });
     try client.readResource("file:///data.json");
-    try client.subscriptionsListen("file:///data.json");
+    try client.subscriptionsListen(.{ .toolsListChanged = true });
+
+    // Pagination cursors and the full subscription filter shape.
+    try client.listToolsPage("c1");
+    try client.listResourcesPage("c2");
+    try client.listPromptsPage("c3");
+    try client.listResourceTemplatesPage("c4");
+    const watched = [_][]const u8{ "file:///a.json", "file:///b.json" };
+    try client.subscriptionsListen(.{
+        .toolsListChanged = true,
+        .promptsListChanged = true,
+        .resourcesListChanged = true,
+        .resourceSubscriptions = &watched,
+    });
+    // An empty filter still has to produce a well-formed request.
+    try client.subscriptionsListen(.{});
     try client.getTask("task-1");
     try client.getTaskResult("task-1");
     try client.cancelTask("task-1");

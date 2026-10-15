@@ -20,7 +20,7 @@ The following breaking changes were introduced in the MCP specification revision
 - **Stateless Protocol**: No more `initialize`/`notifications/initialized` handshake. Every request carries `io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities`, and optionally `io.modelcontextprotocol/clientInfo` in `_meta`.
 - **`server/discover`**: Now a mandatory RPC that servers MUST implement (replaces initialization). Returns `supportedVersions`, `capabilities`, `serverInfo`.
 - **MRTR (Multi Round-Trip Requests)**: Servers use `InputRequiredResult` with `resultType: "input_required"` and `inputRequests` field instead of server-initiated JSON-RPC requests (sampling, elicitation, roots). Client retries original request with `inputResponses`.
-- **`subscriptions/listen`**: Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint. Uses long-lived POST-response streams with notification filters.
+- **`subscriptions/listen`**: Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint. The server acknowledges with the subscription id, then keeps the stream open. Change notifications are delivered only to subscribers whose filter admits them, each tagged with the subscription id in `_meta`. The client opens one with `subscriptionsListen(.{ .toolsListChanged = true })` and ends it with `cancel`.
 - **No protocol-level sessions** on Streamable HTTP. `Mcp-Session-Id` removed. Servers are stateless per-request.
 - **All results carry `resultType`**: `"complete"` or `"input_required"`.
 - **Deprecated features**: Roots, Sampling, Logging (still functional but new implementations should not adopt). HTTP+SSE transport deprecated. `ping`, `logging/setLevel`, `notifications/roots/list_changed` removed.

@@ -198,6 +198,10 @@ pub const Server = struct {
     /// Request ids the client has cancelled via `notifications/cancelled`.
     /// Handlers poll `isCancelled` and the server answers with -32800.
     cancelled_requests: std.AutoHashMap(i64, void),
+    /// Open `subscriptions/listen` streams, keyed by the JSON-RPC id of the
+    /// listen request. Every notification matching a subscription is tagged
+    /// with that id so clients can demultiplex concurrent subscriptions.
+    subscriptions: std.AutoHashMap(i64, types.SubscriptionFilter),
     log_level: protocol.LogLevel = .info,
     /// Host the HTTP listener is bound to, used for Origin validation.
     http_host: ?[]const u8 = null,
@@ -228,6 +232,7 @@ pub const Server = struct {
             .tasks = .init(allocator),
             .pending_requests = .init(allocator),
             .cancelled_requests = .init(allocator),
+            .subscriptions = .init(allocator),
         };
     }
 
@@ -240,6 +245,7 @@ pub const Server = struct {
         self.deinitTasks();
         self.pending_requests.deinit();
         self.cancelled_requests.deinit();
+        self.subscriptions.deinit();
         if (self.stdio_transport) |stdio| {
             stdio.deinit(self.allocator);
             self.allocator.destroy(stdio);
@@ -1079,6 +1085,14 @@ pub const Server = struct {
         }
     }
 
+    /// The numeric part of a request id, or null for string ids.
+    fn requestIdValue(id: types.RequestId) ?i64 {
+        return switch (id) {
+            .integer => |i| i,
+            .string => null,
+        };
+    }
+
     /// The client capability an MRTR input request depends on, or null when the
     /// method needs none.
     fn requiredCapabilityForMethod(method: []const u8) ?[]const u8 {
@@ -1172,8 +1186,11 @@ pub const Server = struct {
     /// `_meta`, and must not send any other notification for that subscription
     /// before the acknowledgment. The `notifications` field reflects the subset
     /// of the requested filter the server agreed to honour; unsupported types
-    /// are omitted. The closing response then signals a graceful end.
+    /// are omitted. The response is deliberately not sent here: the stream stays
+    /// open and the subscription is recorded until the client cancels it or the
+    /// server tears it down, which is what makes it long-lived.
     fn handleSubscriptionsListen(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        const listen_id = Self.requestIdValue(request.id) orelse return error.InvalidRequestId;
         var requested: types.SubscriptionFilter = .{};
         if (request.params) |params| {
             if (params == .object) {
@@ -1220,14 +1237,78 @@ pub const Server = struct {
 
         try self.sendNotification(io, allocator, "notifications/subscriptions/acknowledged", .{ .object = ack_params });
 
+        // Keep the stream open: record the agreed filter so later change
+        // notifications are routed here with this subscription's id attached.
+        try self.subscriptions.put(listen_id, agreed);
+    }
+
+    /// Tears a subscription down at the server's initiative.
+    ///
+    /// The spec has the server signal a graceful end by responding to the
+    /// originating `subscriptions/listen` request, with the subscription id in
+    /// `_meta` of the result, before the stream closes.
+    pub fn endSubscription(self: *Self, io: anytype, allocator: std.mem.Allocator, subscription_id: i64) !void {
+        if (self.subscriptions.fetchRemove(subscription_id) == null) return;
+
         var result: std.json.ObjectMap = .empty;
+        defer result.deinit(allocator);
         try Self.putResultComplete(allocator, &result);
         var close_meta: std.json.ObjectMap = .empty;
-        try Self.putSubscriptionIdMeta(allocator, &close_meta, request.id);
+        defer close_meta.deinit(allocator);
+        try Self.putSubscriptionIdMeta(allocator, &close_meta, .{ .integer = subscription_id });
         try result.put(allocator, "_meta", .{ .object = close_meta });
 
-        const response = jsonrpc.createResponse(request.id, .{ .object = result });
+        const response = jsonrpc.createResponse(.{ .integer = subscription_id }, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
+    }
+
+    /// Number of `subscriptions/listen` streams currently open.
+    pub fn activeSubscriptions(self: *Self) usize {
+        return self.subscriptions.count();
+    }
+
+    /// Sends `method` to every subscription whose filter admits it.
+    ///
+    /// Each copy carries `io.modelcontextprotocol/subscriptionId` set to the id
+    /// of the listen request that opened the stream, so a client holding
+    /// several concurrent subscriptions can tell them apart.
+    ///
+    /// `subject` carries the URI for resource updates, which must match a
+    /// subscription entry exactly rather than just testing a flag.
+    fn broadcastSubscription(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        method: []const u8,
+        params: ?std.json.ObjectMap,
+        subject: ?[]const u8,
+        admits: fn (types.SubscriptionFilter, ?[]const u8) bool,
+    ) !void {
+        if (self.subscriptions.count() == 0) return;
+
+        var ids: std.ArrayList(i64) = .empty;
+        defer ids.deinit(allocator);
+        var it = self.subscriptions.iterator();
+        while (it.next()) |entry| {
+            if (admits(entry.value_ptr.*, subject)) try ids.append(allocator, entry.key_ptr.*);
+        }
+
+        for (ids.items) |sub_id| {
+            var out: std.json.ObjectMap = .empty;
+            defer out.deinit(allocator);
+            if (params) |p| {
+                var it2 = p.iterator();
+                while (it2.next()) |kv| try out.put(allocator, kv.key_ptr.*, kv.value_ptr.*);
+            }
+
+            var meta: std.json.ObjectMap = .empty;
+            defer meta.deinit(allocator);
+            try Self.putSubscriptionIdMeta(allocator, &meta, .{ .integer = sub_id });
+            try meta.put(allocator, protocol.META_PROTOCOL_VERSION, .{ .string = protocol.PROTOCOL_VERSION });
+            try out.put(allocator, "_meta", .{ .object = meta });
+
+            try self.sendNotification(io, allocator, method, .{ .object = out });
+        }
     }
 
     /// Reads a `notifications` filter object, ignoring malformed entries.
@@ -1660,6 +1741,15 @@ pub const Server = struct {
             if (notification.params) |params| {
                 if (params == .object) {
                     if (params.object.get("requestId")) |req_id| {
+                        // A client cancelling a subscriptions/listen request
+                        // ends that stream, so drop the subscription rather
+                        // than just recording a cancellation a handler would
+                        // never poll.
+                        if (req_id == .integer) {
+                            if (self.subscriptions.fetchRemove(req_id.integer) != null) {
+                                return;
+                            }
+                        }
                         // Record the cancellation so a long-running handler can
                         // observe it and the server can answer with -32800.
                         if (req_id == .integer) {
@@ -1726,25 +1816,55 @@ pub const Server = struct {
     }
 
     /// Notify clients that tools have changed
+    ///
+    /// Delivered only to subscriptions whose filter asked for it, and tagged
+    /// with each subscriber's subscription id.
     pub fn notifyToolsChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
-        try self.sendNotification(io, allocator, "notifications/tools/list_changed", null);
+        try self.broadcastSubscription(io, allocator, "notifications/tools/list_changed", null, null, struct {
+            fn admits(f: types.SubscriptionFilter, _: ?[]const u8) bool {
+                return f.toolsListChanged;
+            }
+        }.admits);
     }
 
     /// Notify clients that resources have changed
     pub fn notifyResourcesChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
-        try self.sendNotification(io, allocator, "notifications/resources/list_changed", null);
+        try self.broadcastSubscription(io, allocator, "notifications/resources/list_changed", null, null, struct {
+            fn admits(f: types.SubscriptionFilter, _: ?[]const u8) bool {
+                return f.resourcesListChanged;
+            }
+        }.admits);
     }
 
     /// Notify clients that a resource has been updated
+    ///
+    /// Only subscribers that named this exact URI receive the notification.
     pub fn notifyResourceUpdated(self: *Self, io: anytype, allocator: std.mem.Allocator, uri: []const u8) !void {
+        const target = try allocator.dupe(u8, uri);
+        defer allocator.free(target);
+
         var params: std.json.ObjectMap = .empty;
-        try params.put(allocator, "uri", .{ .string = uri });
-        try self.sendNotification(io, allocator, "notifications/resources/updated", .{ .object = params });
+        defer params.deinit(allocator);
+        try params.put(allocator, "uri", .{ .string = target });
+        try self.broadcastSubscription(io, allocator, "notifications/resources/updated", params, target, struct {
+            fn admits(f: types.SubscriptionFilter, subject: ?[]const u8) bool {
+                const uris = f.resourceSubscriptions orelse return false;
+                const want = subject orelse return false;
+                for (uris) |u| {
+                    if (std.mem.eql(u8, u, want)) return true;
+                }
+                return false;
+            }
+        }.admits);
     }
 
     /// Notify clients that prompts have changed
     pub fn notifyPromptsChanged(self: *Self, io: anytype, allocator: std.mem.Allocator) !void {
-        try self.sendNotification(io, allocator, "notifications/prompts/list_changed", null);
+        try self.broadcastSubscription(io, allocator, "notifications/prompts/list_changed", null, null, struct {
+            fn admits(f: types.SubscriptionFilter, _: ?[]const u8) bool {
+                return f.promptsListChanged;
+            }
+        }.admits);
     }
 
     /// Send a response message
@@ -2912,7 +3032,7 @@ test "spec: MRTR refuses to ask for an undeclared client capability" {
     try std.testing.expect(parsed.value.object.get("result") == null);
 }
 
-test "spec: subscriptions/listen acknowledges before closing, tagged with subscriptionId" {
+test "spec: subscriptions/listen acknowledges and stays open" {
     const a = std.testing.allocator;
 
     var server = Server.init(a, .{ .name = "sub-server", .version = "1.0.0" });
@@ -2955,9 +3075,10 @@ test "spec: subscriptions/listen acknowledges before closing, tagged with subscr
     const req = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"subscriptions/listen\",\"params\":{\"notifications\":{\"toolsListChanged\":true,\"promptsListChanged\":true},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
     try server.handleMessage(std.Io.failing, a, req);
 
-    // The server must send exactly two messages: the acknowledgment
-    // notification first, then the graceful-closure response.
-    try std.testing.expectEqual(@as(usize, 2), collector.messages.items.len);
+    // Only the acknowledgment is sent. The stream is long-lived, so no
+    // completion response closes it right away.
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+    try std.testing.expectEqual(@as(usize, 1), server.activeSubscriptions());
 
     var ack = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
     defer ack.deinit();
@@ -2974,7 +3095,24 @@ test "spec: subscriptions/listen acknowledges before closing, tagged with subscr
     // Prompts capability was not advertised, so it must be omitted.
     try std.testing.expect(agreed.get("promptsListChanged") == null);
 
-    var closed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[1], .{});
+    // A later change notification reaches this subscriber, tagged with its id.
+    try server.notifyToolsChanged(std.Io.failing, a);
+    try std.testing.expectEqual(@as(usize, 2), collector.messages.items.len);
+
+    var note = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[1], .{});
+    defer note.deinit();
+    try std.testing.expectEqualStrings("notifications/tools/list_changed", note.value.object.get("method").?.string);
+    try std.testing.expectEqual(
+        @as(i64, 7),
+        note.value.object.get("params").?.object.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer,
+    );
+
+    // Tearing the subscription down closes the stream gracefully.
+    try server.endSubscription(std.Io.failing, a, 7);
+    try std.testing.expectEqual(@as(usize, 0), server.activeSubscriptions());
+    try std.testing.expectEqual(@as(usize, 3), collector.messages.items.len);
+
+    var closed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[2], .{});
     defer closed.deinit();
     const result = closed.value.object.get("result").?.object;
     try std.testing.expectEqualStrings("complete", result.get("resultType").?.string);
@@ -2982,6 +3120,108 @@ test "spec: subscriptions/listen acknowledges before closing, tagged with subscr
         @as(i64, 7),
         result.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer,
     );
+}
+
+test "spec: notifications reach only the subscribers whose filter admits them" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "sub-route", .version = "1.0.0" });
+    defer server.deinit();
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev_transport = server.transport;
+    defer server.transport = prev_transport;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Two concurrent subscriptions with disjoint filters.
+    try server.subscriptions.put(1, .{ .toolsListChanged = true });
+    try server.subscriptions.put(2, .{ .promptsListChanged = true });
+
+    try server.notifyToolsChanged(std.Io.failing, a);
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, collector.messages.items[0], "\"io.modelcontextprotocol/subscriptionId\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, collector.messages.items[0], "\"io.modelcontextprotocol/subscriptionId\":2") == null);
+
+    // With no matching subscriber nothing is emitted at all.
+    try server.notifyResourcesChanged(std.Io.failing, a);
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+}
+
+test "spec: resources/updated only reaches subscribers naming that URI" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "sub-uri", .version = "1.0.0" });
+    defer server.deinit();
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev_transport = server.transport;
+    defer server.transport = prev_transport;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const watched = [_][]const u8{"file:///a.json"};
+    try server.subscriptions.put(3, .{ .resourceSubscriptions = &watched });
+    try server.subscriptions.put(4, .{ .resourceSubscriptions = &.{} });
+
+    try server.notifyResourceUpdated(std.Io.failing, a, "file:///a.json");
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, collector.messages.items[0], "\"io.modelcontextprotocol/subscriptionId\":3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, collector.messages.items[0], "file:///a.json") != null);
+
+    // A URI nobody subscribed to produces no notification.
+    try server.notifyResourceUpdated(std.Io.failing, a, "file:///other.json");
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
 }
 
 /// In-memory transport pairing a Client with a Server so the full request
