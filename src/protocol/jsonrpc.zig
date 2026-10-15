@@ -362,57 +362,13 @@ fn serializeRequestId(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), 
 }
 
 pub fn serializeValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: std.json.Value) !void {
-    switch (value) {
-        .null => try buffer.appendSlice(allocator, "null"),
-        .bool => |b| try buffer.appendSlice(allocator, if (b) "true" else "false"),
-        .integer => |i| {
-            var int_buf: [32]u8 = undefined;
-            const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{i}) catch "0";
-            try buffer.appendSlice(allocator, int_str);
-        },
-        .float => |f| {
-            var float_buf: [64]u8 = undefined;
-            const float_str = std.fmt.bufPrint(&float_buf, "{d}", .{f}) catch "0";
-            try buffer.appendSlice(allocator, float_str);
-        },
-        .string => |s| {
-            try buffer.appendSlice(allocator, "\"");
-            for (s) |c| {
-                switch (c) {
-                    '"' => try buffer.appendSlice(allocator, "\\\""),
-                    '\\' => try buffer.appendSlice(allocator, "\\\\"),
-                    '\n' => try buffer.appendSlice(allocator, "\\n"),
-                    '\r' => try buffer.appendSlice(allocator, "\\r"),
-                    '\t' => try buffer.appendSlice(allocator, "\\t"),
-                    else => try buffer.append(allocator, c),
-                }
-            }
-            try buffer.appendSlice(allocator, "\"");
-        },
-        .array => |arr| {
-            try buffer.appendSlice(allocator, "[");
-            for (arr.items, 0..) |item, i| {
-                if (i > 0) try buffer.appendSlice(allocator, ",");
-                try serializeValue(allocator, buffer, item);
-            }
-            try buffer.appendSlice(allocator, "]");
-        },
-        .object => |obj| {
-            try buffer.appendSlice(allocator, "{");
-            var first = true;
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                if (!first) try buffer.appendSlice(allocator, ",");
-                first = false;
-                try buffer.appendSlice(allocator, "\"");
-                try buffer.appendSlice(allocator, entry.key_ptr.*);
-                try buffer.appendSlice(allocator, "\":");
-                try serializeValue(allocator, buffer, entry.value_ptr.*);
-            }
-            try buffer.appendSlice(allocator, "}");
-        },
-        .number_string => |s| try buffer.appendSlice(allocator, s),
-    }
+    // Delegate to std.json so escaping and numeric formatting stay correct.
+    // The previous hand-rolled writer emitted raw control characters inside
+    // strings, which is invalid JSON.
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    std.json.Stringify.value(&value, .{}, &aw.writer) catch return error.InvalidValue;
+    try buffer.appendSlice(allocator, aw.written());
 }
 
 /// Creates a request message.
@@ -508,6 +464,26 @@ test "serialize request" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"jsonrpc\":\"2.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"id\":42") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"method\":\"test/method\"") != null);
+}
+
+test "serializeValue escapes control characters instead of emitting them raw" {
+    // A raw 0x01 byte inside a JSON string is invalid JSON and previously
+    // leaked straight into the output.
+    var value = std.json.Value{ .string = "a\x01b" };
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+
+    try serializeValue(std.testing.allocator, &out, value);
+    const json = out.items;
+
+    try std.testing.expect(std.mem.indexOfScalar(u8, json, 0x01) == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\\u0001") != null);
+
+    value = .{ .string = "line\nbreak\ttab" };
+    out.clearRetainingCapacity();
+    try serializeValue(std.testing.allocator, &out, value);
+    try std.testing.expect(std.mem.indexOfScalar(u8, out.items, '\n') == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\\n") != null);
 }
 
 test "error codes" {

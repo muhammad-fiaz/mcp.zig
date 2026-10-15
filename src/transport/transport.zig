@@ -8,6 +8,7 @@ const std = @import("std");
 
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 const protocol = @import("../protocol/protocol.zig");
+const param_headers = @import("../protocol/param_headers.zig");
 const types = @import("../protocol/types.zig");
 const httpx = @import("httpx");
 
@@ -203,35 +204,104 @@ fn methodIdentity(method: []const u8, params: ?std.json.Value) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
-/// Mirrors top-level request params into `Mcp-Param-<name>` headers so an
-/// intermediary can route without parsing the body.
+/// Tool parameter annotations learned from `tools/list`, keyed by tool name.
 ///
-/// Returns owned header values appended to `out`; the caller frees the array.
-/// Values that are not header-safe use the spec's base64 sentinel, which the
-/// server decodes before comparing.
+/// The spec requires clients to mirror the parameters a server marks with
+/// `x-mcp-header`, and only those. Annotations are cached per tool so a later
+/// `tools/call` can reproduce the same headers without the caller re-supplying
+/// the schema.
+pub const AnnotationCache = struct {
+    entries: std.StringHashMapUnmanaged([]param_headers.Annotation) = .empty,
+    owned_by: std.mem.Allocator,
+
+    pub fn deinit(self: *AnnotationCache) void {
+        var it = self.entries.iterator();
+        while (it.next()) |entry| {
+            param_headers.Annotation.freeList(self.owned_by, entry.value_ptr.*);
+            self.owned_by.free(entry.key_ptr.*);
+        }
+        self.entries.deinit(self.owned_by);
+    }
+};
+
+/// Records the annotations declared by a tool's `inputSchema`.
+///
+/// Returns the annotation list when the definition is conforming. A
+/// non-conforming definition is reported as an error; the caller should then
+/// exclude that tool from `tools/list` results.
+pub fn registerToolAnnotations(
+    cache: *AnnotationCache,
+    allocator: std.mem.Allocator,
+    tool_name: []const u8,
+    input_schema: std.json.Value,
+) ![]param_headers.Annotation {
+    const list = try param_headers.collect(allocator, input_schema);
+
+    if (cache.entries.getPtr(tool_name)) |existing| {
+        param_headers.Annotation.freeList(allocator, existing.*);
+        existing.* = list;
+    } else {
+        const key = try allocator.dupe(u8, tool_name);
+        errdefer allocator.free(key);
+        try cache.entries.put(allocator, key, list);
+    }
+    return list;
+}
+
+/// Registers every tool in a parsed `tools/list` result.
+///
+/// Returns the names of tools whose `inputSchema` violates the annotation
+/// constraints. Conforming clients must exclude those tools from the list they
+/// present, but may keep using the remaining ones. The caller owns the
+/// returned slice and each name in it.
+pub fn registerToolAnnotationsFromList(
+    cache: *AnnotationCache,
+    allocator: std.mem.Allocator,
+    tools: std.json.Value,
+) ![]const []const u8 {
+    var rejected: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (rejected.items) |name| allocator.free(name);
+        rejected.deinit(allocator);
+    }
+
+    if (tools != .array) return rejected.toOwnedSlice(allocator);
+
+    for (tools.array.items) |tool| {
+        if (tool != .object) continue;
+        const name_value = tool.object.get("name") orelse continue;
+        if (name_value != .string) continue;
+        const schema = tool.object.get("inputSchema") orelse continue;
+
+        _ = registerToolAnnotations(cache, allocator, name_value.string, schema) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                try rejected.append(allocator, try allocator.dupe(u8, name_value.string));
+                continue;
+            },
+        };
+    }
+
+    return rejected.toOwnedSlice(allocator);
+}
+
+/// Emits the `Mcp-Param-{Name}` headers a `tools/call` body declares.
 pub fn appendParamHeaders(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(httpx.Header),
+    cache: *const AnnotationCache,
     params: std.json.ObjectMap,
 ) !void {
-    var it = params.iterator();
-    while (it.next()) |entry| {
-        const name = entry.key_ptr.*;
-        // Only scalar values mirror cleanly; nested objects and arrays are
-        // omitted rather than flattened into an ambiguous header.
-        const value: ?[]const u8 = switch (entry.value_ptr.*) {
-            .string => |s| s,
-            .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-            .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
-            .bool => |b| if (b) "true" else "false",
-            else => null,
-        };
-        const raw = value orelse continue;
+    // Annotations are only defined for tool parameters, so the header names
+    // come from the tool's schema rather than from the params object.
+    const name_value = params.get("name") orelse return;
+    if (name_value != .string) return;
+    const annotations = cache.entries.get(name_value.string) orelse return;
 
-        const header_name = try std.fmt.allocPrint(allocator, protocol.HEADER_PARAM_PREFIX ++ "{s}", .{name});
-        const header_value = try protocol.encodeHeaderValue(allocator, raw);
-        try out.append(allocator, .{ .name = header_name, .value = header_value });
-    }
+    const arguments = params.get("arguments") orelse return;
+    if (arguments != .object) return;
+
+    try param_headers.appendHeaders(allocator, out, annotations, arguments);
 }
 
 /// HTTP transport for remote server communication using httpx.zig.
@@ -245,6 +315,8 @@ pub const HttpTransport = struct {
     client_capabilities: ?types.ClientCapabilities = null,
     is_closed: bool = false,
     pending_responses: std.ArrayList([]const u8) = .empty,
+    /// `x-mcp-header` annotations discovered from `tools/list`.
+    annotations: AnnotationCache = .{ .owned_by = undefined },
 
     const Self = @This();
 
@@ -254,6 +326,7 @@ pub const HttpTransport = struct {
         return .{
             .endpoint = owned_endpoint,
             .pending_responses = .empty,
+            .annotations = .{ .owned_by = allocator },
         };
     }
 
@@ -309,7 +382,7 @@ pub const HttpTransport = struct {
                         }
 
                         if (req.params) |p| {
-                            if (p == .object) try appendParamHeaders(allocator, &headers, p.object);
+                            if (p == .object) try appendParamHeaders(allocator, &headers, &self.annotations, p.object);
                         }
                     },
                     .notification, .response, .error_response => {},

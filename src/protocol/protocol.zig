@@ -12,6 +12,9 @@ const types = @import("types.zig");
 pub const JsonRpc = jsonrpc;
 pub const Types = types;
 
+/// `x-mcp-header` annotation handling and `Mcp-Param-*` emission.
+pub const ParamHeaders = @import("param_headers.zig");
+
 /// Current MCP protocol version supported by this library.
 pub const PROTOCOL_VERSION = "2026-07-28";
 
@@ -93,13 +96,25 @@ pub const HEADER_PARAM_PREFIX = "Mcp-Param-";
 pub const SENTINEL_PREFIX = "=?base64?";
 pub const SENTINEL_SUFFIX = "?=";
 
-/// True when `value` can be placed in an HTTP header verbatim: printable
-/// US-ASCII only, so no control characters and no multi-byte sequences.
+/// True when `value` can be placed in an HTTP header verbatim.
+///
+/// RFC 9110 limits a field value to visible ASCII, space and horizontal tab.
+/// Leading or trailing whitespace is also rejected, because such a value must
+/// be sentinel-encoded instead of sent in a form intermediaries may trim.
 pub fn isHeaderSafe(value: []const u8) bool {
     // An empty header value conveys nothing and is not a valid one.
     if (value.len == 0) return false;
+
+    const first = value[0];
+    const last = value[value.len - 1];
+    if (first == ' ' or first == '\t' or last == ' ' or last == '\t') return false;
+
     for (value) |ch| {
-        if (ch < 0x20 or ch > 0x7e) return false;
+        const ok = switch (ch) {
+            0x21...0x7E, 0x20, 0x09 => true,
+            else => false,
+        };
+        if (!ok) return false;
     }
     return true;
 }
@@ -652,6 +667,37 @@ test "Method enum - elicitation complete" {
 test "LogLevel enum" {
     try std.testing.expectEqualStrings("debug", LogLevel.debug.toString());
     try std.testing.expectEqualStrings("error", LogLevel.@"error".toString());
+}
+
+test "header safety follows RFC 9110 and the spec's encoding examples" {
+    // Plain ASCII is safe.
+    try std.testing.expect(isHeaderSafe("us-west1"));
+    try std.testing.expect(isHeaderSafe("a b"));
+    try std.testing.expect(isHeaderSafe("a\tb"));
+
+    // Empty values convey nothing.
+    try std.testing.expect(!isHeaderSafe(""));
+
+    // Surrounding whitespace would be trimmed by intermediaries, so the spec
+    // requires it to be sentinel-encoded instead.
+    try std.testing.expect(!isHeaderSafe(" padded "));
+    try std.testing.expect(!isHeaderSafe(" lead"));
+    try std.testing.expect(!isHeaderSafe("trail "));
+
+    // Non-ASCII and control characters are never sent verbatim.
+    try std.testing.expect(!isHeaderSafe("caf\xC3\xA9"));
+    try std.testing.expect(!isHeaderSafe("line1\nline2"));
+    try std.testing.expect(!isHeaderSafe("del\x7f"));
+
+    // " padded " round-trips through the sentinel back to the original.
+    const encoded = try encodeHeaderValue(std.testing.allocator, " padded ");
+    defer std.testing.allocator.free(encoded);
+    try std.testing.expect(std.mem.startsWith(u8, encoded, SENTINEL_PREFIX));
+    try std.testing.expect(std.mem.endsWith(u8, encoded, SENTINEL_SUFFIX));
+
+    const decoded = (try decodeSentinel(std.testing.allocator, encoded)).?;
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(" padded ", decoded);
 }
 
 test "Method fromString round-trip (Zig 0.17 @typeInfo migration)" {

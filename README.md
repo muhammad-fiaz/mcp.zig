@@ -351,25 +351,6 @@ This library implements MCP protocol version **2026-07-28**.
 | 2025-03-26 | Compatible |
 | 2024-11-05 | Compatible |
 
-### What's New in 2026-07-28
-
-- **Stateless Protocol** - No more `initialize`/`notifications/initialized` handshake. Every request carries protocol version and client info in `_meta`.
-- **`server/discover`** - Mandatory RPC that servers MUST implement. Returns `supportedVersions`, `capabilities`, `serverInfo`.
-- **MRTR (Multi Round-Trip Requests)** - Servers use `InputRequiredResult` with `resultType: "input_required"` and `inputRequests` instead of server-initiated JSON-RPC requests.
-- **`subscriptions/listen`** - Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint.
-- **Caching** - `ttlMs` and `cacheScope` required on list/read results.
-- **OAuth 2.1** authorization framework with Protected Resource Metadata.
-
-### Deprecated Features
-
-- `initialize`/`notifications/initialized` handshake (use `server/discover`)
-- `ping` method
-- `logging/setLevel` method
-- `resources/subscribe`/`resources/unsubscribe` (use `subscriptions/listen`)
-- HTTP+SSE transport (deprecated, use Streamable HTTP)
-- Roots, Sampling, Logging (still functional but new implementations should not adopt)
-
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues and pull requests.
