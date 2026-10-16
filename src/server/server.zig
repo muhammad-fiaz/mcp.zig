@@ -807,7 +807,8 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.tools), &self.tools);
         defer allocator.free(keys);
 
-        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        const maybe_page = try self.paginateOrError(io, allocator, request, keys);
+        const page = maybe_page orelse return;
         defer if (page.next_cursor) |c| allocator.free(c);
 
         for (page.items) |key| {
@@ -1089,7 +1090,8 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.resources), &self.resources);
         defer allocator.free(keys);
 
-        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        const maybe_page = try self.paginateOrError(io, allocator, request, keys);
+        const page = maybe_page orelse return;
         defer if (page.next_cursor) |c| allocator.free(c);
 
         for (page.items) |key| {
@@ -1192,7 +1194,8 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.resource_templates), &self.resource_templates);
         defer allocator.free(keys);
 
-        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        const maybe_page = try self.paginateOrError(io, allocator, request, keys);
+        const page = maybe_page orelse return;
         defer if (page.next_cursor) |c| allocator.free(c);
 
         for (page.items) |key| {
@@ -1638,7 +1641,8 @@ pub const Server = struct {
         const keys = try Self.sortedKeys(allocator, @TypeOf(self.prompts), &self.prompts);
         defer allocator.free(keys);
 
-        const page = try Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size);
+        const maybe_page = try self.paginateOrError(io, allocator, request, keys);
+        const page = maybe_page orelse return;
         defer if (page.next_cursor) |c| allocator.free(c);
 
         for (page.items) |key| {
@@ -2575,6 +2579,30 @@ pub const Server = struct {
         try obj.put(allocator, "annotations", .{ .object = ann_obj });
     }
 
+    /// Paginates a list request, mapping an unusable cursor onto the spec's
+    /// `Invalid params` error instead of letting it surface as an internal error.
+    ///
+    /// Cursors are opaque to clients, so an expired or malformed one is the
+    /// client's mistake, not a server failure. Returns null once the error
+    /// response has been sent, so the caller simply returns.
+    fn paginateOrError(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        request: jsonrpc.Request,
+        keys: []const []const u8,
+    ) !?Page {
+        return Self.paginate(allocator, keys, Self.requestCursor(request.params), self.config.page_size) catch |err| switch (err) {
+            error.InvalidCursor => {
+                try self.sendResponse(io, allocator, .{
+                    .error_response = jsonrpc.createInvalidParams(request.id, "Invalid or expired cursor"),
+                });
+                return null;
+            },
+            else => return err,
+        };
+    }
+
     /// Marks a result as fully satisfied: `resultType: "complete"`.
     /// Every result emitted by the server carries this in MCP 2026-07-28.
     fn putResultComplete(allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
@@ -3481,6 +3509,62 @@ test "spec: tools/list preserves full JSON Schema 2020-12 documents" {
     const output = entry.get("outputSchema").?.object;
     try std.testing.expect(output.get("$defs") != null);
     try std.testing.expectEqual(@as(usize, 1), output.get("allOf").?.array.items.len);
+}
+
+test "spec: an unusable cursor is rejected with invalid params" {
+    const a = std.testing.allocator;
+
+    const Handler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, al: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.textResult(al, "ok") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    var server = Server.init(a, .{ .name = "cursor-server", .version = "1.0.0" });
+    defer server.deinit();
+    try server.addTool(.{ .name = "t", .description = "x", .handler = Handler.handler });
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Cursors are opaque, so a malformed one is the client's error: -32602.
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"not-a-real-cursor","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+    );
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqual(@as(i64, jsonrpc.ErrorCode.INVALID_PARAMS), err.get("code").?.integer);
+    try std.testing.expect(err.get("message").?.string.len > 0);
 }
 
 test "spec: tools/list paginates and reports nextCursor" {
