@@ -49,6 +49,14 @@ pub const Client = struct {
     server_capabilities: ?types.ServerCapabilities = null,
     next_request_id: i64 = 1,
     pending_requests: std.AutoHashMap(i64, PendingRequest),
+    /// Raw JSON text of each completed result, keyed by request id. Entries
+    /// are taken with `takeResult`, which frees them.
+    results: std.AutoHashMap(i64, []u8),
+    /// Resolver driving automatic MRTR rounds, when one is set.
+    input_resolver: ?InputResolver = null,
+    /// Upper bound on automatic MRTR rounds, guarding against a server that
+    /// keeps asking for input forever.
+    max_mrtr_rounds: u32 = 8,
     capabilities: types.ClientCapabilities = .{},
     authorization_token: ?[]const u8 = null,
     roots_list: std.ArrayList(types.Root),
@@ -56,9 +64,42 @@ pub const Client = struct {
     const Self = @This();
 
     /// Represents a request awaiting a response from the server.
+    /// Resolves one entry of a server's `inputRequests` map.
+    ///
+    /// The driver calls this for every entry the server asked about, then retries
+    /// the original request with the answers. Returning an error aborts the
+    /// round rather than retrying with a partial map.
+    ///
+    /// Ownership of the returned value stays with the resolver: the client only
+    /// reads it while building the retry. Allocate it from the supplied
+    /// allocator and keep it alive for the call, or return a value borrowing
+    /// from memory you already own.
+    pub const InputResolver = struct {
+        ctx: *anyopaque,
+        /// `request` is the `{ method, params }` object the server sent.
+        resolve: *const fn (
+            ctx: *anyopaque,
+            allocator: std.mem.Allocator,
+            key: []const u8,
+            request: std.json.Value,
+        ) anyerror!std.json.Value,
+    };
+
+    /// Bookkeeping for a request that may need several MRTR rounds.
+    const MrtrState = struct {
+        /// The request being retried, without the round-specific fields.
+        method: []const u8,
+        /// Original params, so the retry carries everything but `inputResponses`.
+        base_params: std.json.ObjectMap,
+        resolver: InputResolver,
+        rounds_left: u32,
+    };
+
     pub const PendingRequest = struct {
         method: []const u8,
         callback: ?*const fn (result: ?std.json.Value, err: ?jsonrpc.ErrorResponse.Error) void = null,
+        /// Set when this request is being driven through MRTR rounds.
+        mrtr: ?MrtrState = null,
     };
 
     /// Initializes a new client with the given configuration.
@@ -68,13 +109,225 @@ pub const Client = struct {
             .allocator = allocator,
             .config = config,
             .pending_requests = .init(allocator),
+            .results = .init(allocator),
             .roots_list = .empty,
         };
+    }
+
+    /// Feeds one received JSON-RPC payload into the client.
+    ///
+    /// Applications pump this for every line or chunk the transport produces.
+    /// Responses resolve their pending request, and a response carrying an
+    /// `InputRequiredResult` is turned into an automatic retry when the request
+    /// was started with a resolver.
+    pub fn handleMessage(self: *Self, payload: []const u8) !void {
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch return;
+        defer parsed.deinit();
+
+        switch (parsed.value) {
+            .object => |obj| {
+                // A response is identified by carrying an id plus result/error.
+                const id_value = obj.get("id") orelse return;
+                const id: i64 = switch (id_value) {
+                    .integer => |i| i,
+                    else => return,
+                };
+
+                const entry = self.pending_requests.fetchRemove(id) orelse {
+                    // Not a request we are tracking: record it anyway so a late
+                    // response is still observable.
+                    if (obj.get("result")) |r| try self.storeResult(id, r);
+                    return;
+                };
+                const pending = entry.value;
+
+                if (obj.get("error")) |_| {
+                    if (pending.callback) |cb| cb(null, null);
+                    return;
+                }
+
+                const result = obj.get("result") orelse return;
+
+                // An input-required result drives another round when we know
+                // how to resolve it.
+                if (pending.mrtr) |state| {
+                    // On a retry the params move into the new pending entry, so
+                    // only the terminal path releases them here.
+                    const retried = self.driveMrtrRound(state, result) catch |err| {
+                        var b: std.json.ObjectMap = state.base_params;
+                        b.deinit(self.allocator);
+                        return err;
+                    };
+                    if (retried) return;
+
+                    var base: std.json.ObjectMap = state.base_params;
+                    base.deinit(self.allocator);
+                }
+
+                try self.storeResult(id, result);
+                if (pending.callback) |cb| cb(result, null);
+            },
+            else => {},
+        }
+    }
+
+    fn storeResult(self: *Self, id: i64, result: std.json.Value) !void {
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        std.json.Stringify.value(result, .{}, &aw.writer) catch return;
+        const owned = try self.allocator.dupe(u8, aw.written());
+        errdefer self.allocator.free(owned);
+
+        if (self.results.fetchRemove(id)) |old| self.allocator.free(old.value);
+        try self.results.put(id, owned);
+    }
+
+    /// Returns and frees the completed result for `request_id`, or null when
+    /// the request has not finished.
+    pub fn takeResult(self: *Self, request_id: i64) ?[]u8 {
+        const entry = self.results.fetchRemove(request_id) orelse return null;
+        return entry.value;
+    }
+
+    /// Issues the retry for one `InputRequiredResult`. Returns true when a
+    /// retry was sent, meaning the caller must not treat this as final.
+    fn driveMrtrRound(self: *Self, state: MrtrState, result: std.json.Value) !bool {
+        if (result != .object) return false;
+        const obj = result.object;
+
+        const kind = obj.get("resultType") orelse return false;
+        if (kind != .string or !std.mem.eql(u8, kind.string, "input_required")) return false;
+
+        const round = parseInputRequired(obj) orelse return false;
+        if (state.rounds_left == 0) return error.MrtrRoundLimitExceeded;
+
+        var responses: std.json.ObjectMap = .empty;
+        defer responses.deinit(self.allocator);
+
+        // The resolver owns the containers it returns. They only need to stay valid
+        // until the retry has been serialized, so they are held here to keep
+        // them alive and are not freed: the resolver decides how long they
+        // live, which avoids the client and the resolver both releasing them.
+        var answers: std.ArrayList(std.json.Value) = .empty;
+        defer answers.deinit(self.allocator);
+
+        var it = round.inputRequests.iterator();
+        while (it.next()) |entry| {
+            const answer = try state.resolver.resolve(
+                state.resolver.ctx,
+                self.allocator,
+                entry.key_ptr.*,
+                entry.value_ptr.*,
+            );
+            try answers.append(self.allocator, answer);
+            try responses.put(self.allocator, entry.key_ptr.*, answer);
+        }
+
+        // The retry is an independent request, so it needs its own id and the
+        // original params plus this round's answers and opaque state. Ownership
+        // of `params` moves into the new pending entry.
+        var params = state.base_params;
+        try params.put(self.allocator, "inputResponses", .{ .object = responses });
+        if (round.requestState) |rs| {
+            try params.put(self.allocator, protocol.META_REQUEST_STATE, .{ .string = rs });
+        }
+
+        const id = self.next_request_id;
+        self.next_request_id += 1;
+
+        try self.pending_requests.put(id, .{
+            .method = state.method,
+            .mrtr = .{
+                .method = state.method,
+                .base_params = params,
+                .resolver = state.resolver,
+                .rounds_left = state.rounds_left - 1,
+            },
+        });
+
+        const request = jsonrpc.createRequest(.{ .integer = id }, state.method, .{ .object = params });
+        const json = try jsonrpc.serializeMessage(self.allocator, .{ .request = request });
+        defer self.allocator.free(json);
+
+        if (self.transport) |t| {
+            try t.send(self.io, self.allocator, json);
+        }
+        return true;
+    }
+
+    /// Starts a `tools/call` that automatically walks MRTR rounds.
+    ///
+    /// Returns the id of the first request. Feed responses back through
+    /// `handleMessage`; while the server answers with `input_required` the
+    /// client resolves and retries on its own, and the final result is
+    /// collected by `takeResult`.
+    pub fn callToolResolved(
+        self: *Self,
+        name: []const u8,
+        arguments: ?std.json.Value,
+        resolver: InputResolver,
+    ) !i64 {
+        var params: std.json.ObjectMap = .empty;
+        errdefer params.deinit(self.allocator);
+        try params.put(self.allocator, "name", .{ .string = name });
+        if (arguments) |a| try params.put(self.allocator, "arguments", a);
+
+        return self.sendMrtrDriven("tools/call", params, resolver);
+    }
+
+    /// Starts a `resources/read` that automatically walks MRTR rounds.
+    pub fn readResourceResolved(self: *Self, uri: []const u8, resolver: InputResolver) !i64 {
+        var params: std.json.ObjectMap = .empty;
+        errdefer params.deinit(self.allocator);
+        try params.put(self.allocator, "uri", .{ .string = uri });
+        return self.sendMrtrDriven("resources/read", params, resolver);
+    }
+
+    /// Starts a `prompts/get` that automatically walks MRTR rounds.
+    pub fn getPromptResolved(
+        self: *Self,
+        name: []const u8,
+        arguments: ?std.json.Value,
+        resolver: InputResolver,
+    ) !i64 {
+        var params: std.json.ObjectMap = .empty;
+        errdefer params.deinit(self.allocator);
+        try params.put(self.allocator, "name", .{ .string = name });
+        if (arguments) |a| try params.put(self.allocator, "arguments", a);
+        return self.sendMrtrDriven("prompts/get", params, resolver);
+    }
+
+    fn sendMrtrDriven(self: *Self, method: []const u8, params: std.json.ObjectMap, resolver: InputResolver) !i64 {
+        const id = self.next_request_id;
+        self.next_request_id += 1;
+
+        try self.pending_requests.put(id, .{
+            .method = method,
+            .mrtr = .{
+                .method = method,
+                .base_params = params,
+                .resolver = resolver,
+                .rounds_left = self.max_mrtr_rounds,
+            },
+        });
+        errdefer _ = self.pending_requests.remove(id);
+
+        const request = jsonrpc.createRequest(.{ .integer = id }, method, .{ .object = params });
+        const json = try jsonrpc.serializeMessage(self.allocator, .{ .request = request });
+        defer self.allocator.free(json);
+
+        if (self.transport) |t| {
+            try t.send(self.io, self.allocator, json);
+        }
+        return id;
     }
 
     /// Releases all resources held by the client.
     pub fn deinit(self: *Self) void {
         self.pending_requests.deinit();
+        var it = self.results.valueIterator();
+        while (it.next()) |raw| self.allocator.free(raw.*);
+        self.results.deinit();
         self.roots_list.deinit(self.allocator);
         if (self.authorization_token) |token| {
             self.allocator.free(token);
@@ -695,6 +948,145 @@ test "Client enable all capabilities" {
     try std.testing.expect(client.capabilities.roots != null);
     try std.testing.expect(client.capabilities.elicitation != null);
     try std.testing.expect(client.capabilities.tasks != null);
+}
+
+test "MRTR driver walks input-required rounds automatically" {
+    const a = std.testing.allocator;
+
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    var seen_keys: std.ArrayList([]u8) = .empty;
+    defer {
+        for (seen_keys.items) |k| a.free(k);
+        seen_keys.deinit(a);
+    }
+
+    const Ctx = struct {
+        keys: *std.ArrayList([]u8),
+        owned: *std.ArrayList(std.json.ObjectMap),
+        allocator: std.mem.Allocator,
+
+        fn resolve(ctx: *anyopaque, allocator: std.mem.Allocator, key: []const u8, request: std.json.Value) anyerror!std.json.Value {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            const owned = try allocator.dupe(u8, key);
+            try self.keys.append(self.allocator, owned);
+
+            // Answer elicitation with an accept, and sampling with a message.
+            const method = if (request == .object)
+                (request.object.get("method") orelse std.json.Value{ .null = {} }).string
+            else
+                "";
+            if (std.mem.eql(u8, method, "elicitation/create")) {
+                var content: std.json.ObjectMap = .empty;
+                try content.put(allocator, "answer", .{ .string = "42" });
+                var out: std.json.ObjectMap = .empty;
+                try out.put(allocator, "action", .{ .string = "accept" });
+                try out.put(allocator, "content", .{ .object = content });
+                try self.owned.append(self.allocator, content);
+                try self.owned.append(self.allocator, out);
+                return .{ .object = out };
+            }
+            var out: std.json.ObjectMap = .empty;
+            try out.put(allocator, "text", .{ .string = "hello" });
+            try self.owned.append(self.allocator, out);
+            return .{ .object = out };
+        }
+    };
+
+    var owned: std.ArrayList(std.json.ObjectMap) = .empty;
+    defer {
+        for (owned.items) |m| {
+            var map = m;
+            map.deinit(a);
+        }
+        owned.deinit(a);
+    }
+
+    var ctx = Ctx{ .keys = &seen_keys, .owned = &owned, .allocator = a };
+    const resolver = Client.InputResolver{ .ctx = &ctx, .resolve = Ctx.resolve };
+
+    const first_id = try client.callToolResolved("needs_input", null, resolver);
+    try std.testing.expectEqual(@as(i64, 1), first_id);
+
+    // Round 1: the server asks for two inputs and returns opaque state.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","id":1,"result":{"resultType":"input_required","inputRequests":{
+        \\  "who":{"method":"elicitation/create","params":{"message":"Who?"}},
+        \\  "what":{"method":"sampling/createMessage","params":{"maxTokens":10}}},
+        \\  "requestState":"opaque-blob"}}
+    );
+
+    // The resolver was consulted for both requests.
+    try std.testing.expectEqual(@as(usize, 2), seen_keys.items.len);
+    try std.testing.expectEqualStrings("who", seen_keys.items[0]);
+    try std.testing.expectEqualStrings("what", seen_keys.items[1]);
+
+    // Still no final result: the driver sent a retry instead.
+    try std.testing.expect(client.takeResult(1) == null);
+
+    // Round 2: the server answers, and the retry carried a different id.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"done"}]}}
+    );
+
+    const final = client.takeResult(2) orelse return error.NoResultStored;
+    defer a.free(final);
+    try std.testing.expect(std.mem.indexOf(u8, final, "done") != null);
+}
+
+test "MRTR driver stops at the configured round limit" {
+    const a = std.testing.allocator;
+
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    const Ctx = struct {
+        fn resolve(ctx: *anyopaque, allocator: std.mem.Allocator, key: []const u8, request: std.json.Value) anyerror!std.json.Value {
+            _ = ctx;
+            _ = allocator;
+            _ = key;
+            _ = request;
+            return .{ .null = {} };
+        }
+    };
+
+    client.max_mrtr_rounds = 2;
+    const resolver = Client.InputResolver{ .ctx = undefined, .resolve = Ctx.resolve };
+    const id = try client.callToolResolved("loop", null, resolver);
+
+    // Every round asks again; the driver must eventually refuse rather than
+    // spin forever.
+    var round: i64 = 1;
+    var last_err: ?anyerror = null;
+    while (round <= 6) : (round += 1) {
+        const payload = try std.fmt.allocPrint(
+            a,
+            "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{{\"resultType\":\"input_required\",\"inputRequests\":{{\"a\":{{\"method\":\"roots/list\",\"params\":{{}}}}}}}}}}",
+            .{id + round - 1},
+        );
+        defer a.free(payload);
+        client.handleMessage(payload) catch |err| {
+            last_err = err;
+            break;
+        };
+    }
+    try std.testing.expectEqual(@as(?anyerror, error.MrtrRoundLimitExceeded), last_err);
+}
+
+test "handleMessage stores results for untracked requests" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","id":99,"result":{"resultType":"complete","ok":true}}
+    );
+    const stored = client.takeResult(99) orelse return error.NoResultStored;
+    defer a.free(stored);
+    try std.testing.expect(std.mem.indexOf(u8, stored, "\"ok\":true") != null);
+    // Taking twice yields nothing.
+    try std.testing.expect(client.takeResult(99) == null);
 }
 
 test "Client request maps do not leak" {
