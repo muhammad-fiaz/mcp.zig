@@ -1716,6 +1716,31 @@ pub const Server = struct {
         return self.cancelled_requests.contains(numeric);
     }
 
+    /// A cancellation signal a handler can poll.
+    ///
+    /// Cancellation is cooperative: a handler that never checks keeps running,
+    /// so long-running work should poll `cancelled` between units of work and
+    /// return early. The token stays valid for the duration of the call.
+    pub const CancellationToken = struct {
+        server: *Self,
+        request_id: types.RequestId,
+
+        /// True once the client has cancelled this request.
+        pub fn cancelled(self: CancellationToken) bool {
+            return self.server.isCancelled(self.request_id);
+        }
+
+        /// Returns true when the work should keep going.
+        pub fn keepGoing(self: CancellationToken) bool {
+            return !self.cancelled();
+        }
+    };
+
+    /// The cancellation token for an in-flight request.
+    pub fn cancellationToken(self: *Self, id: types.RequestId) CancellationToken {
+        return .{ .server = self, .request_id = id };
+    }
+
     /// Clears a recorded cancellation, so a reused id starts fresh.
     pub fn clearCancelled(self: *Self, id: types.RequestId) void {
         const numeric = switch (id) {
@@ -3120,6 +3145,62 @@ test "spec: subscriptions/listen acknowledges and stays open" {
         @as(i64, 7),
         result.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer,
     );
+}
+
+test "spec: the cancellation token reflects notifications/cancelled" {
+    const a = std.testing.allocator;
+    var server = Server.init(a, .{ .name = "cancel", .version = "1.0.0" });
+    defer server.deinit();
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const token = server.cancellationToken(.{ .integer = 42 });
+    try std.testing.expect(token.keepGoing());
+
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":42,"reason":"user"}}
+    );
+
+    // The handler can now see the cancellation cooperatively.
+    try std.testing.expect(token.cancelled());
+    try std.testing.expect(!token.keepGoing());
+
+    // An unrelated request is unaffected.
+    const other = server.cancellationToken(.{ .integer = 7 });
+    try std.testing.expect(other.keepGoing());
+
+    // Clearing resets the signal for a reused id.
+    server.clearCancelled(.{ .integer = 42 });
+    try std.testing.expect(server.cancellationToken(.{ .integer = 42 }).keepGoing());
 }
 
 test "spec: notifications reach only the subscribers whose filter admits them" {

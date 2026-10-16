@@ -52,6 +52,11 @@ pub const Client = struct {
     /// Raw JSON text of each completed result, keyed by request id. Entries
     /// are taken with `takeResult`, which frees them.
     results: std.AutoHashMap(i64, []u8),
+    /// Handlers for server-initiated notifications, keyed by method.
+    notification_handlers: std.StringHashMapUnmanaged(NotificationHandler) = .empty,
+    /// Subscription id of the most recent notification, for demultiplexing
+    /// concurrent `subscriptions/listen` streams.
+    last_subscription_id: ?i64 = null,
     /// Resolver driving automatic MRTR rounds, when one is set.
     input_resolver: ?InputResolver = null,
     /// Upper bound on automatic MRTR rounds, guarding against a server that
@@ -114,6 +119,72 @@ pub const Client = struct {
         };
     }
 
+    /// Invoked for one notification method.
+    ///
+    /// `params` is the notification's params object and `subscription_id` is the
+    /// listen request the notification belongs to, or null when it is not carried
+    /// on a subscription stream.
+    ///
+    /// `params` borrows the receive buffer and is only valid for the duration of the
+    /// call; copy anything that has to outlive it.
+    pub const NotificationHandler = struct {
+        ctx: *anyopaque,
+        handle: *const fn (ctx: *anyopaque, params: std.json.ObjectMap, subscription_id: ?i64) void,
+    };
+
+    /// Registers a handler for `method`, replacing any previous registration.
+    ///
+    /// The handler context is borrowed for the client's lifetime; pass null to
+    /// remove the handler. Unknown notification methods are ignored rather than
+    /// treated as an error.
+    pub fn onNotification(self: *Self, method: []const u8, handler: ?NotificationHandler) !void {
+        if (handler) |h| {
+            // The map stores the slice pointer, so the key has to be owned here
+            // or deinit would try to free a caller's string literal.
+            const key = try self.allocator.dupe(u8, method);
+            if (self.notification_handlers.getPtr(method)) |slot| {
+                slot.* = h;
+                self.allocator.free(key);
+                return;
+            }
+            errdefer self.allocator.free(key);
+            try self.notification_handlers.put(self.allocator, key, h);
+            return;
+        }
+        if (self.notification_handlers.fetchRemove(method)) |entry| {
+            self.allocator.free(entry.key);
+        }
+    }
+
+    /// Routes a notification to its handler, recording which subscription it came
+    /// from so callers holding several concurrent subscriptions can tell them
+    /// apart.
+    fn dispatchNotification(self: *Self, method: []const u8, obj: std.json.ObjectMap) !void {
+        const params: std.json.ObjectMap = if (obj.get("params")) |p|
+            (if (p == .object) p.object else .empty)
+        else
+            .empty;
+
+        var subscription_id: ?i64 = null;
+        if (params.get("_meta")) |meta| {
+            if (meta == .object) {
+                if (meta.object.get(protocol.META_SUBSCRIPTION_ID)) |v| {
+                    if (v == .integer) subscription_id = v.integer;
+                }
+            }
+        }
+        if (subscription_id) |id| self.last_subscription_id = id;
+
+        const entry = self.notification_handlers.getPtr(method) orelse return;
+        entry.handle(entry.ctx, params, subscription_id);
+    }
+
+    /// Subscription the most recent notification arrived on, or null when the last
+    /// notification was not carried on a subscription stream.
+    pub fn currentSubscriptionId(self: *Self) ?i64 {
+        return self.last_subscription_id;
+    }
+
     /// Feeds one received JSON-RPC payload into the client.
     ///
     /// Applications pump this for every line or chunk the transport produces.
@@ -126,6 +197,14 @@ pub const Client = struct {
 
         switch (parsed.value) {
             .object => |obj| {
+                // A notification carries a method and no id.
+                if (obj.get("id") == null) {
+                    if (obj.get("method")) |m| {
+                        if (m == .string) try self.dispatchNotification(m.string, obj);
+                    }
+                    return;
+                }
+
                 // A response is identified by carrying an id plus result/error.
                 const id_value = obj.get("id") orelse return;
                 const id: i64 = switch (id_value) {
@@ -328,6 +407,9 @@ pub const Client = struct {
         var it = self.results.valueIterator();
         while (it.next()) |raw| self.allocator.free(raw.*);
         self.results.deinit();
+        var handlers = self.notification_handlers.iterator();
+        while (handlers.next()) |entry| self.allocator.free(entry.key_ptr.*);
+        self.notification_handlers.deinit(self.allocator);
         self.roots_list.deinit(self.allocator);
         if (self.authorization_token) |token| {
             self.allocator.free(token);
@@ -1087,6 +1169,96 @@ test "handleMessage stores results for untracked requests" {
     try std.testing.expect(std.mem.indexOf(u8, stored, "\"ok\":true") != null);
     // Taking twice yields nothing.
     try std.testing.expect(client.takeResult(99) == null);
+}
+
+test "notifications dispatch to handlers and carry the subscription id" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    const Seen = struct {
+        method: []const u8 = "",
+        subscription_id: ?i64 = null,
+        uri: [64]u8 = undefined,
+        uri_len: usize = 0,
+
+        fn uriSlice(self: *const @This()) []const u8 {
+            return self.uri[0..self.uri_len];
+        }
+
+        fn onUpdate(ctx: *anyopaque, params: std.json.ObjectMap, subscription_id: ?i64) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.method = "notifications/resources/updated";
+            self.subscription_id = subscription_id;
+            if (params.get("uri")) |u| {
+                if (u == .string) {
+                    // `params` is only valid for this call, so copy anything
+                    // that has to outlive it.
+                    const n = @min(u.string.len, self.uri.len);
+                    @memcpy(self.uri[0..n], u.string[0..n]);
+                    self.uri_len = n;
+                }
+            }
+        }
+
+        fn onAck(ctx: *anyopaque, params: std.json.ObjectMap, subscription_id: ?i64) void {
+            _ = params;
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.method = "ack";
+            self.subscription_id = subscription_id;
+        }
+    };
+
+    var seen = Seen{};
+    try client.onNotification("notifications/resources/updated", .{
+        .ctx = &seen,
+        .handle = Seen.onUpdate,
+    });
+    try client.onNotification("notifications/subscriptions/acknowledged", .{
+        .ctx = &seen,
+        .handle = Seen.onAck,
+    });
+
+    // A notification tagged with the subscription id it belongs to.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///a.json","_meta":{"io.modelcontextprotocol/subscriptionId":3}}}
+    );
+    try std.testing.expectEqualStrings("notifications/resources/updated", seen.method);
+    try std.testing.expectEqual(@as(?i64, 3), seen.subscription_id);
+    try std.testing.expectEqualStrings("file:///a.json", seen.uriSlice());
+    try std.testing.expectEqual(@as(?i64, 3), client.currentSubscriptionId());
+
+    // Two concurrent subscriptions stay distinguishable.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///b.json","_meta":{"io.modelcontextprotocol/subscriptionId":8}}}
+    );
+    try std.testing.expectEqual(@as(?i64, 8), seen.subscription_id);
+    try std.testing.expectEqual(@as(?i64, 8), client.currentSubscriptionId());
+
+    // A notification with no subscription id still dispatches.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}
+    );
+    try std.testing.expectEqual(@as(?i64, 8), client.currentSubscriptionId());
+
+    // The acknowledgment routes to its own handler.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":3}}}
+    );
+    try std.testing.expectEqualStrings("ack", seen.method);
+    try std.testing.expectEqual(@as(?i64, 3), seen.subscription_id);
+
+    // An unknown method is ignored rather than an error.
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/something/unknown","params":{}}
+    );
+
+    // Handlers can be removed.
+    try client.onNotification("notifications/subscriptions/acknowledged", null);
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{}}
+    );
+    try std.testing.expectEqualStrings("ack", seen.method);
 }
 
 test "Client request maps do not leak" {
