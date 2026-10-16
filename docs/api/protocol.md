@@ -23,15 +23,23 @@ The current MCP protocol version.
 
 ```zig
 pub const SUPPORTED_VERSIONS = [_][]const u8{
-    "2026-07-28",
-    "2025-11-25",
-    "2025-06-18",
-    "2025-03-26",
-    "2024-11-05",
+    "2026-07-28", // Supported (default, latest active specification)
+    "2025-11-25", // Deprecated (session/handshake removed)
+    "2025-06-18", // Deprecated (session/handshake removed)
+    "2025-03-26", // Deprecated (session/handshake removed)
+    "2024-11-05", // Deprecated (initial specification)
 };
 ```
 
-List of supported protocol versions.
+List of recognized MCP protocol versions. Only `2026-07-28` is actively spoken by this library; earlier revisions are deprecated and accepted only during discovery/header validation for diagnostic compatibility.
+
+| Version    | Status                                                                          |
+| ---------- | ------------------------------------------------------------------------------- |
+| 2026-07-28 | Supported (latest, default; the active revision this library speaks)            |
+| 2025-11-25 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2025-06-18 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2025-03-26 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2024-11-05 | Deprecated (initial specification; removed methods answered with -32601)        |
 
 ---
 

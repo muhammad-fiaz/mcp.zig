@@ -53,6 +53,7 @@ pub const Client = struct {
     transport: ?transport_mod.Transport = null,
     server_info: ?types.Implementation = null,
     server_capabilities: ?types.ServerCapabilities = null,
+    server_caps_arena: ?std.heap.ArenaAllocator = null,
     next_request_id: i64 = 1,
     pending_requests: std.AutoHashMap(i64, PendingRequest),
     /// Raw JSON text of each completed result, keyed by request id. Entries
@@ -289,11 +290,80 @@ pub const Client = struct {
                     base.deinit(self.allocator);
                 }
 
+                if (std.mem.eql(u8, pending.method, "server/discover")) {
+                    self.parseAndStoreServerCapabilities(result);
+                }
+
                 try self.storeResult(id, result);
                 if (pending.callback) |cb| cb(result, null);
             },
             else => {},
         }
+    }
+
+    fn parseAndStoreServerCapabilities(self: *Self, result: std.json.Value) void {
+        if (result != .object) return;
+        const caps_val = result.object.get("capabilities") orelse return;
+        if (caps_val != .object) return;
+
+        if (self.server_caps_arena) |*arena| {
+            arena.deinit();
+            self.server_caps_arena = null;
+        }
+
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+
+        var aw: std.Io.Writer.Allocating = .init(a);
+        defer aw.deinit();
+        std.json.Stringify.value(caps_val, .{}, &aw.writer) catch return;
+        const parsed = std.json.parseFromSlice(std.json.Value, a, aw.written(), .{}) catch return;
+
+        var caps: types.ServerCapabilities = .{};
+        if (parsed.value == .object) {
+            const obj = parsed.value.object;
+            if (obj.get("logging") != null) caps.logging = .{};
+            if (obj.get("completions") != null) caps.completions = .{};
+            if (obj.get("tools")) |t| {
+                var tc: types.ToolsCapability = .{};
+                if (t == .object) {
+                    if (t.object.get("listChanged")) |lc| {
+                        if (lc == .bool) tc.listChanged = lc.bool;
+                    }
+                }
+                caps.tools = tc;
+            }
+            if (obj.get("resources")) |r| {
+                var rc: types.ResourcesCapability = .{};
+                if (r == .object) {
+                    if (r.object.get("listChanged")) |lc| {
+                        if (lc == .bool) rc.listChanged = lc.bool;
+                    }
+                    if (r.object.get("subscribe")) |sub| {
+                        if (sub == .bool) rc.subscribe = sub.bool;
+                    }
+                }
+                caps.resources = rc;
+            }
+            if (obj.get("prompts")) |p| {
+                var pc: types.PromptsCapability = .{};
+                if (p == .object) {
+                    if (p.object.get("listChanged")) |lc| {
+                        if (lc == .bool) pc.listChanged = lc.bool;
+                    }
+                }
+                caps.prompts = pc;
+            }
+            if (obj.get("extensions")) |ext| {
+                caps.extensions = ext;
+            }
+            if (obj.get("experimental")) |exp| {
+                caps.experimental = exp;
+            }
+        }
+        self.server_caps_arena = arena;
+        self.server_capabilities = caps;
     }
 
     /// Validates `x-mcp-header` annotations on a `tools/list` result.
@@ -534,6 +604,10 @@ pub const Client = struct {
                 var owned = ext.object;
                 owned.deinit(self.allocator);
             }
+        }
+        if (self.server_caps_arena) |*arena| {
+            arena.deinit();
+            self.server_caps_arena = null;
         }
         self.roots_list.deinit(self.allocator);
         if (self.authorization_token) |token| {
@@ -1014,6 +1088,16 @@ pub const Client = struct {
         try self.sendRequest("completion/complete", .{ .object = params });
     }
 
+    /// Declares support for an extension with settings on this client.
+    pub fn enableExtensionWithSettings(self: *Self, label: []const u8, settings: std.json.Value) !void {
+        var extensions: std.json.ObjectMap = .empty;
+        if (self.capabilities.extensions) |existing| {
+            if (existing == .object) extensions = existing.object;
+        }
+        try extensions.put(self.allocator, label, settings);
+        self.capabilities.extensions = .{ .object = extensions };
+    }
+
     /// Declares support for an extension on this client.
     ///
     /// The label is sent in `_meta.clientCapabilities.extensions` on every
@@ -1021,12 +1105,17 @@ pub const Client = struct {
     /// `protocol.EXTENSION_TASKS`, which a server requires before it will
     /// answer `tasks/get`, `tasks/update` or `tasks/cancel`.
     pub fn enableExtension(self: *Self, label: []const u8) !void {
-        var extensions: std.json.ObjectMap = .empty;
-        if (self.capabilities.extensions) |existing| {
-            if (existing == .object) extensions = existing.object;
-        }
-        try extensions.put(self.allocator, label, .{ .object = .empty });
-        self.capabilities.extensions = .{ .object = extensions };
+        return self.enableExtensionWithSettings(label, .{ .object = .empty });
+    }
+
+    /// Enables the MCP Apps UI extension (`io.modelcontextprotocol/ui`).
+    pub fn enableUi(self: *Self) !void {
+        try self.enableExtension(protocol.EXTENSION_UI);
+    }
+
+    /// Enables the MCP Apps UI extension (`io.modelcontextprotocol/ui`) with settings.
+    pub fn enableUiWithSettings(self: *Self, settings: std.json.Value) !void {
+        try self.enableExtensionWithSettings(protocol.EXTENSION_UI, settings);
     }
 
     /// True when this client declares `label` as an extension.
@@ -1034,6 +1123,29 @@ pub const Client = struct {
         const ext = self.capabilities.extensions orelse return false;
         if (ext != .object) return false;
         return ext.object.contains(label);
+    }
+
+    /// Returns the settings declared for an extension on this client, or null if not enabled.
+    pub fn getExtension(self: *Self, label: []const u8) ?std.json.Value {
+        const ext = self.capabilities.extensions orelse return null;
+        if (ext != .object) return null;
+        return ext.object.get(label);
+    }
+
+    /// True when the connected server declared `label` in its capabilities.
+    pub fn hasServerExtension(self: *Self, label: []const u8) bool {
+        const caps = self.server_capabilities orelse return false;
+        const ext = caps.extensions orelse return false;
+        if (ext != .object) return false;
+        return ext.object.contains(label);
+    }
+
+    /// Returns the settings advertised by the server for `label`, or null if undeclared.
+    pub fn getServerExtension(self: *Self, label: []const u8) ?std.json.Value {
+        const caps = self.server_capabilities orelse return null;
+        const ext = caps.extensions orelse return null;
+        if (ext != .object) return null;
+        return ext.object.get(label);
     }
 
     /// Gets the status and metadata of a task.
@@ -1127,11 +1239,35 @@ test "Client capabilities" {
     client.enableRoots();
     client.enableElicitation();
     try client.enableTasks();
+    try client.enableUi();
 
     try std.testing.expect(client.capabilities.sampling != null);
     try std.testing.expect(client.capabilities.roots != null);
     try std.testing.expect(client.capabilities.elicitation != null);
     try std.testing.expect(client.hasExtension(protocol.EXTENSION_TASKS));
+    try std.testing.expect(client.hasExtension(protocol.EXTENSION_UI));
+}
+
+test "Client extension negotiation with server discovery" {
+    var client = Client.init(std.Io.failing, std.testing.allocator, .{
+        .name = "test-client",
+        .version = "1.0.0",
+    });
+    defer client.deinit();
+
+    try client.enableUi();
+    try std.testing.expect(client.hasExtension(protocol.EXTENSION_UI));
+
+    try client.pending_requests.put(1, .{ .method = "server/discover" });
+
+    const discover_resp =
+        \\{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","capabilities":{"tools":{"listChanged":true},"extensions":{"io.modelcontextprotocol/ui":{}}}}}
+    ;
+    try client.handleMessage(discover_resp);
+
+    try std.testing.expect(client.server_capabilities != null);
+    try std.testing.expect(client.hasServerExtension(protocol.EXTENSION_UI));
+    try std.testing.expect(!client.hasServerExtension("nonexistent/ext"));
 }
 
 test "Client advanced sampling" {

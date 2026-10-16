@@ -2,7 +2,6 @@ name: Help Wanted / Question
 description: Ask for help using mcp.zig (not a bug or feature)
 title: "question: "
 labels: ["question"]
-assignees: ''
 body:
   - type: markdown
     attributes:

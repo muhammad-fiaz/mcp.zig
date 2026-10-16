@@ -46,5 +46,5 @@ const protocol_version = mcp.protocol.PROTOCOL_VERSION;
 ## Notes
 
 - Server tools/resources/prompts capabilities are enabled by registration (`addTool`, `addResource`, `addPrompt`).
-- HTTP server mode accepts JSON-RPC POST requests on `/`.
+- HTTP server mode accepts JSON-RPC POST requests on `/mcp`.
 - Client APIs are currently request-oriented (`!void`) and do not block-wait for typed responses.

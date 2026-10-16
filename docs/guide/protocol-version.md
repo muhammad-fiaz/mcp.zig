@@ -77,14 +77,18 @@ each of them:
 
 ## Version Support
 
-| Version    | Status                                             |
-| ---------- | -------------------------------------------------- |
-| 2026-07-28 | Supported; the only revision this library speaks    |
+| Version    | Status                                                                          |
+| ---------- | ------------------------------------------------------------------------------- |
+| 2026-07-28 | Supported (latest, default; the active revision this library speaks)            |
+| 2025-11-25 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2025-06-18 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2025-03-26 | Deprecated (older session-based revision; removed methods answered with -32601) |
+| 2024-11-05 | Deprecated (initial specification; removed methods answered with -32601)        |
 
 Earlier revisions (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`)
-established a session with an `initialize` handshake and are **not** supported:
-the methods they rely on are answered with `-32601`. `protocol.SUPPORTED_VERSIONS`
-still lists those identifiers, so `server/discover` advertises them and
-`MCP-Protocol-Version` validation accepts them; that only means a version string
+are **deprecated**. They established a session with an `initialize` handshake and are **not** supported:
+the methods they rely on are answered with `-32601` (`Method not found`). `protocol.SUPPORTED_VERSIONS`
+lists those identifiers so `server/discover` advertises them and
+`MCP-Protocol-Version` validation accepts them as recognized versions; that only means a version string
 is not a useful diagnostic. An older client still fails, because the methods it
 calls no longer exist.

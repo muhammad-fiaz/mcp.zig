@@ -2,7 +2,6 @@ name: Bug Report
 description: Report a reproducible bug in mcp.zig
 title: "fix: "
 labels: ["bug"]
-assignees: ''
 body:
   - type: markdown
     attributes:

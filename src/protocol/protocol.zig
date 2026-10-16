@@ -15,13 +15,19 @@ pub const Types = types;
 /// `x-mcp-header` annotation handling and `Mcp-Param-*` emission.
 pub const ParamHeaders = @import("param_headers.zig");
 
-/// Current MCP protocol version supported by this library.
+/// Current MCP protocol version supported by this library (latest active revision).
 pub const PROTOCOL_VERSION = "2026-07-28";
 
 /// Legacy alias for compatibility.
 pub const VERSION = PROTOCOL_VERSION;
 
-/// List of all MCP protocol versions this library can communicate with.
+/// List of all MCP protocol versions recognized by this library.
+///
+/// - `2026-07-28`: Supported (default, latest active revision).
+/// - `2025-11-25`: Deprecated (session/handshake removed).
+/// - `2025-06-18`: Deprecated (session/handshake removed).
+/// - `2025-03-26`: Deprecated (session/handshake removed).
+/// - `2024-11-05`: Deprecated (session/handshake removed).
 pub const SUPPORTED_VERSIONS = [_][]const u8{
     "2026-07-28",
     "2025-11-25",
@@ -70,6 +76,15 @@ pub const META_SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId";
 
 /// Extension label for the tasks extension (`io.modelcontextprotocol/tasks`).
 pub const EXTENSION_TASKS = "io.modelcontextprotocol/tasks";
+
+/// Extension label for the UI (MCP Apps) extension (`io.modelcontextprotocol/ui`).
+pub const EXTENSION_UI = "io.modelcontextprotocol/ui";
+
+/// MIME type for MCP Apps HTML application bundles.
+pub const MIME_TYPE_MCP_APP = "text/html;profile=mcp-app";
+
+/// URI scheme prefix for MCP Apps UI resources (`ui://`).
+pub const URI_SCHEME_UI = "ui://";
 
 /// `_meta` key carrying an opaque server-side MRTR state blob.
 pub const META_REQUEST_STATE = "io.modelcontextprotocol/requestState";
@@ -174,12 +189,18 @@ pub fn decodeSentinel(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
     return buf;
 }
 
-/// Returns true when `version` is one of the versions this library speaks.
+/// Returns true when `version` is one of the recognized versions.
 pub fn supportsVersion(version: []const u8) bool {
     for (SUPPORTED_VERSIONS) |v| {
         if (std.mem.eql(u8, v, version)) return true;
     }
     return false;
+}
+
+/// Returns true when `version` is a deprecated MCP revision (earlier than 2026-07-28).
+pub fn isDeprecatedVersion(version: []const u8) bool {
+    if (std.mem.eql(u8, version, PROTOCOL_VERSION)) return false;
+    return supportsVersion(version);
 }
 
 /// All MCP method names as defined in the 2026-07-28 protocol specification.
@@ -719,4 +740,20 @@ test "Method fromString round-trip (Zig 0.17 @typeInfo migration)" {
     }
     try std.testing.expect(Method.fromString("") == null);
     try std.testing.expect(Method.fromString("tools/unknown") == null);
+}
+
+test "protocol versions and deprecation status" {
+    try std.testing.expect(supportsVersion("2026-07-28"));
+    try std.testing.expect(supportsVersion("2025-11-25"));
+    try std.testing.expect(supportsVersion("2025-06-18"));
+    try std.testing.expect(supportsVersion("2025-03-26"));
+    try std.testing.expect(supportsVersion("2024-11-05"));
+    try std.testing.expect(!supportsVersion("2023-01-01"));
+
+    try std.testing.expect(!isDeprecatedVersion("2026-07-28"));
+    try std.testing.expect(isDeprecatedVersion("2025-11-25"));
+    try std.testing.expect(isDeprecatedVersion("2025-06-18"));
+    try std.testing.expect(isDeprecatedVersion("2025-03-26"));
+    try std.testing.expect(isDeprecatedVersion("2024-11-05"));
+    try std.testing.expect(!isDeprecatedVersion("2023-01-01"));
 }

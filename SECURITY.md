@@ -26,11 +26,8 @@ performs no network access of its own.
 
 | Version | Status                                          |
 | ------- | ----------------------------------------------- |
-| 0.0.9   | Current development version on the `dev` branch  |
-| 0.0.8   | Latest published release; upgrade advised        |
-
-`0.0.9` is the version string in `src/version.zig` on `dev`; `0.0.8` is the
-newest published tag. Older releases receive no fixes.
+| 0.0.9   | Current version                                 |
+| 0.0.8   | Previous release; upgrade advised               |
 
 ## Scope and Boundaries
 

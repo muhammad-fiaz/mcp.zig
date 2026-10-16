@@ -20,6 +20,7 @@ pub const Tool = struct {
     execution: ?types.ToolExecution = null,
     icons: ?[]const types.Icon = null,
     annotations: ?ToolAnnotations = null,
+    _meta: ?std.json.Value = null,
     handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
     user_data: ?*anyopaque = null,
 };
@@ -43,6 +44,7 @@ pub const ToolAnnotations = struct {
 pub const ToolResult = struct {
     content: []const types.ContentBlock,
     structuredContent: ?std.json.Value = null,
+    _meta: ?std.json.Value = null,
     is_error: bool = false,
 };
 
@@ -178,6 +180,42 @@ pub const ToolBuilder = struct {
     /// Sets task support for the tool execution.
     pub fn taskSupport(self: *Self, support: []const u8) *Self {
         self.tool.execution = .{ .taskSupport = support };
+        return self;
+    }
+
+    /// Sets metadata for the tool, such as MCP Apps (`_meta.ui`).
+    pub fn meta(self: *Self, m: std.json.Value) *Self {
+        self.tool._meta = m;
+        return self;
+    }
+
+    /// Sets MCP Apps UI extension metadata (`_meta.ui`) pointing to a UI resource URI (e.g. `ui://charts/interactive`).
+    pub fn ui(self: *Self, allocator: std.mem.Allocator, resource_uri: []const u8) !*Self {
+        var ui_obj: std.json.ObjectMap = .empty;
+        try ui_obj.put(allocator, "resourceUri", .{ .string = resource_uri });
+        var meta_obj: std.json.ObjectMap = .empty;
+        try meta_obj.put(allocator, "ui", .{ .object = ui_obj });
+        self.tool._meta = .{ .object = meta_obj };
+        return self;
+    }
+
+    /// Sets MCP Apps UI extension metadata (`_meta.ui`) pointing to a UI resource URI with visibility settings.
+    pub fn uiWithVisibility(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        resource_uri: []const u8,
+        visibility: []const []const u8,
+    ) !*Self {
+        var ui_obj: std.json.ObjectMap = .empty;
+        try ui_obj.put(allocator, "resourceUri", .{ .string = resource_uri });
+        var vis_arr: std.json.Array = .init(allocator);
+        for (visibility) |v| {
+            try vis_arr.append(.{ .string = v });
+        }
+        try ui_obj.put(allocator, "visibility", .{ .array = vis_arr });
+        var meta_obj: std.json.ObjectMap = .empty;
+        try meta_obj.put(allocator, "ui", .{ .object = ui_obj });
+        self.tool._meta = .{ .object = meta_obj };
         return self;
     }
 
@@ -397,6 +435,26 @@ test "ToolBuilder with task support" {
         .build();
 
     try std.testing.expectEqualStrings("optional", tool.execution.?.taskSupport.?);
+}
+
+test "ToolBuilder with meta and ui" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var builder: ToolBuilder = .init("ui_tool");
+    _ = try builder
+        .description("A tool with UI")
+        .uiWithVisibility(allocator, "ui://charts/interactive", &[_][]const u8{ "model", "app" });
+    const tool = builder.build();
+
+    try std.testing.expect(tool._meta != null);
+    const ui_obj = tool._meta.?.object.get("ui").?.object;
+    try std.testing.expectEqualStrings("ui://charts/interactive", ui_obj.get("resourceUri").?.string);
+    const vis = ui_obj.get("visibility").?.array;
+    try std.testing.expectEqual(@as(usize, 2), vis.items.len);
+    try std.testing.expectEqualStrings("model", vis.items[0].string);
+    try std.testing.expectEqualStrings("app", vis.items[1].string);
 }
 
 test "isValidToolName" {

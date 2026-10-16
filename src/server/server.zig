@@ -84,6 +84,10 @@ pub const ServerConfig = struct {
     instructions: ?[]const u8 = null,
     /// Caching hints emitted on cacheable results.
     cache: CacheConfig = .{},
+    /// Explicit server capabilities advertised during discovery.
+    /// If null, capabilities are populated dynamically based on registered
+    /// tools, resources, prompts, and extensions.
+    capabilities: ?types.ServerCapabilities = null,
     /// Maximum entries per page on `*/list` requests. Zero (the default)
     /// returns everything in a single page, which is valid: `nextCursor` is
     /// then omitted entirely.
@@ -268,6 +272,7 @@ pub const Server = struct {
             .pending_requests = .init(allocator),
             .cancelled_requests = .init(allocator),
             .subscriptions = .init(allocator),
+            .capabilities = config.capabilities orelse .{},
         };
     }
 
@@ -337,6 +342,16 @@ pub const Server = struct {
     /// the extension label alone.
     pub fn enableTasks(self: *Self) !void {
         try self.declareExtension(self.allocator, protocol.EXTENSION_TASKS);
+    }
+
+    /// Enable the MCP Apps UI extension (`io.modelcontextprotocol/ui`).
+    pub fn enableUi(self: *Self) !void {
+        try self.declareExtension(self.allocator, protocol.EXTENSION_UI);
+    }
+
+    /// Enable the MCP Apps UI extension (`io.modelcontextprotocol/ui`) with custom settings.
+    pub fn enableUiWithSettings(self: *Self, settings: std.json.Value) !void {
+        try self.declareExtensionWithSettings(self.allocator, protocol.EXTENSION_UI, settings);
     }
 
     /// Options for running the server
@@ -875,6 +890,10 @@ pub const Server = struct {
                 try tool_obj.put(allocator, "execution", .{ .object = exec_obj });
             }
 
+            if (entry._meta) |meta| {
+                try tool_obj.put(allocator, "_meta", meta);
+            }
+
             try tools_array.append(.{ .object = tool_obj });
         }
 
@@ -1265,17 +1284,22 @@ pub const Server = struct {
         return null;
     }
 
+    /// Declares support for an extension with custom settings, advertised in `capabilities.extensions`.
+    pub fn declareExtensionWithSettings(self: *Self, allocator: std.mem.Allocator, label: []const u8, settings: std.json.Value) !void {
+        var extensions: std.json.ObjectMap = .empty;
+        if (self.capabilities.extensions) |existing| {
+            if (existing == .object) extensions = existing.object;
+        }
+        try extensions.put(allocator, label, settings);
+        self.capabilities.extensions = .{ .object = extensions };
+    }
+
     /// Declares support for an extension, advertised in `capabilities.extensions`.
     ///
     /// The tasks extension, for example, is declared with
     /// `protocol.EXTENSION_TASKS`.
     pub fn declareExtension(self: *Self, allocator: std.mem.Allocator, label: []const u8) !void {
-        var extensions: std.json.ObjectMap = .empty;
-        if (self.capabilities.extensions) |existing| {
-            if (existing == .object) extensions = existing.object;
-        }
-        try extensions.put(allocator, label, .{ .object = .empty });
-        self.capabilities.extensions = .{ .object = extensions };
+        return self.declareExtensionWithSettings(allocator, label, .{ .object = .empty });
     }
 
     /// True when this server declares `label` in its capabilities.
@@ -1283,6 +1307,13 @@ pub const Server = struct {
         const ext = self.capabilities.extensions orelse return false;
         if (ext != .object) return false;
         return ext.object.contains(label);
+    }
+
+    /// Returns the settings advertised for an extension, or null if undeclared.
+    pub fn getExtension(self: *Self, label: []const u8) ?std.json.Value {
+        const ext = self.capabilities.extensions orelse return null;
+        if (ext != .object) return null;
+        return ext.object.get(label);
     }
 
     /// True when the client declared `label` in the per-request
@@ -2493,6 +2524,9 @@ pub const Server = struct {
         if (tool_result.structuredContent) |sc| {
             try result.put(allocator, "structuredContent", sc);
         }
+        if (tool_result._meta) |meta| {
+            try result.put(allocator, "_meta", meta);
+        }
         return .{ .object = result };
     }
 
@@ -2835,10 +2869,33 @@ test "Server enable capabilities" {
     server.enableLogging();
     server.enableCompletions();
     try server.enableTasks();
+    try server.enableUi();
 
     try std.testing.expect(server.capabilities.logging != null);
     try std.testing.expect(server.capabilities.completions != null);
     try std.testing.expect(server.hasExtension(protocol.EXTENSION_TASKS));
+    try std.testing.expect(server.hasExtension(protocol.EXTENSION_UI));
+}
+
+test "Server declareExtensionWithSettings and getExtension" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var server = Server.init(allocator, .{
+        .name = "test-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+
+    var settings: std.json.ObjectMap = .empty;
+    try settings.put(allocator, "version", .{ .string = "1.0.0" });
+    try server.declareExtensionWithSettings(allocator, "custom/ext", .{ .object = settings });
+
+    try std.testing.expect(server.hasExtension("custom/ext"));
+    const ext = server.getExtension("custom/ext");
+    try std.testing.expect(ext != null);
+    try std.testing.expectEqualStrings("1.0.0", ext.?.object.get("version").?.string);
 }
 
 test "Server shutdown" {
@@ -3300,6 +3357,98 @@ test "spec: MRTR InputRequiredResult carries inputRequests and requestState" {
     try std.testing.expect(entry.get("params") != null);
 }
 
+test "spec: the deprecated Roots, Sampling and Logging features still work" {
+    const a = std.testing.allocator;
+
+    const Handler = struct {
+        fn handler(ud: ?*anyopaque, io: std.Io, al: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            if (ud) |p| {
+                const s: *Server = @ptrCast(@alignCast(p));
+                s.sendLogMessage(io, al, .info, "called") catch return tools_mod.ToolError.ExecutionFailed;
+            }
+            return tools_mod.textResult(al, "ok") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    var server = Server.init(a, .{ .name = "deprecated", .version = "1.0.0" });
+    defer server.deinit();
+    server.enableLogging();
+    try server.addTool(.{ .name = "t", .description = "x", .handler = Handler.handler, .user_data = &server });
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Roots and Sampling are deprecated but still negotiated: a client that
+    // declares them may still be asked for input through MRTR.
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"t","inputResponses":{"roots":{"roots":[{"uri":"file:///w","name":"w"}]}},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"roots":{},"sampling":{}}}}}
+    );
+    var ok = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer ok.deinit();
+    try std.testing.expectEqualStrings("complete", ok.value.object.get("result").?.object.get("resultType").?.string);
+
+    // Asking a client that did not declare roots is still -32021.
+    collector.clearMessages();
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"t","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"sampling":{}}}}}
+    );
+    var refused = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer refused.deinit();
+    // No capability is missing here, so the plain call still succeeds.
+    try std.testing.expect(refused.value.object.get("result") != null);
+
+    // Logging is per-request: nothing is emitted without a log level, and
+    // notifications/message appears once the client opts in.
+    collector.clearMessages();
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"t","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+    );
+    for (collector.messages.items) |raw| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+        defer parsed.deinit();
+        if (parsed.value.object.get("method")) |m| {
+            try std.testing.expect(!std.mem.eql(u8, m.string, "notifications/message"));
+        }
+    }
+
+    collector.clearMessages();
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"t","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/logLevel":"info"}}}
+    );
+    var logged = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer logged.deinit();
+    try std.testing.expectEqualStrings("info", logged.value.object.get("params").?.object.get("level").?.string);
+    try std.testing.expect(std.mem.indexOf(u8, collector.messages.items[0], "notifications/message") != null);
+}
+
 test "spec: MRTR rejects a result with neither inputRequests nor requestState" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -3517,6 +3666,89 @@ test "spec: tools/list preserves full JSON Schema 2020-12 documents" {
     const output = entry.get("outputSchema").?.object;
     try std.testing.expect(output.get("$defs") != null);
     try std.testing.expectEqual(@as(usize, 1), output.get("allOf").?.array.items.len);
+}
+
+test "spec: tools/list serializes _meta for MCP Apps UI" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const Handler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, al: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.textResult(al, "ok") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    var tool_builder = tools_mod.ToolBuilder.init("chart-tool");
+    _ = try tool_builder
+        .description("Renders an interactive chart")
+        .uiWithVisibility(a, "ui://charts/interactive", &[_][]const u8{ "model", "app" });
+    const tool = tool_builder.handler(Handler.handler).build();
+
+    var server = Server.init(a, .{ .name = "mcp-apps-server", .version = "1.0.0" });
+    defer server.deinit();
+    try server.enableUi();
+    try server.addTool(tool);
+
+    const parsed = try runRequest(&server, a, "tools/list", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+    const entry = result.get("tools").?.array.items[0].object;
+
+    const meta = entry.get("_meta").?.object;
+    const ui = meta.get("ui").?.object;
+    try std.testing.expectEqualStrings("ui://charts/interactive", ui.get("resourceUri").?.string);
+    const vis = ui.get("visibility").?.array;
+    try std.testing.expectEqual(@as(usize, 2), vis.items.len);
+    try std.testing.expectEqualStrings("model", vis.items[0].string);
+    try std.testing.expectEqualStrings("app", vis.items[1].string);
+}
+
+test "spec: server/discover advertises extensions including MCP Apps UI" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var server = Server.init(a, .{
+        .name = "apps-server",
+        .version = "1.0.0",
+    });
+    defer server.deinit();
+    try server.enableUi();
+
+    const parsed = try runRequest(&server, a, "server/discover", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+    const caps = result.get("capabilities").?.object;
+    const ext = caps.get("extensions").?.object;
+    try std.testing.expect(ext.get(protocol.EXTENSION_UI) != null);
+}
+
+test "spec: ServerConfig.capabilities allows custom extension configuration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var extensions: std.json.ObjectMap = .empty;
+    try extensions.put(a, protocol.EXTENSION_UI, .{ .object = .empty });
+
+    var server = Server.init(a, .{
+        .name = "config-server",
+        .version = "1.0.0",
+        .capabilities = .{
+            .extensions = .{ .object = extensions },
+        },
+    });
+    defer server.deinit();
+
+    try std.testing.expect(server.hasExtension(protocol.EXTENSION_UI));
+
+    const parsed = try runRequest(&server, a, "server/discover", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+    const caps = result.get("capabilities").?.object;
+    const ext = caps.get("extensions").?.object;
+    try std.testing.expect(ext.get(protocol.EXTENSION_UI) != null);
 }
 
 test "spec: an unusable cursor is rejected with invalid params" {

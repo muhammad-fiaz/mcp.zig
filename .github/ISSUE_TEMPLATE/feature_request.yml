@@ -2,7 +2,6 @@ name: Feature Request
 description: Suggest a new feature or enhancement for mcp.zig
 title: "feat: "
 labels: ["enhancement"]
-assignees: ''
 body:
   - type: markdown
     attributes:
