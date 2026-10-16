@@ -74,6 +74,11 @@ pub const EXTENSION_TASKS = "io.modelcontextprotocol/tasks";
 /// `_meta` key carrying an opaque server-side MRTR state blob.
 pub const META_REQUEST_STATE = "io.modelcontextprotocol/requestState";
 
+/// Per-request log level. A client sets this in `_meta` to ask the server for
+/// `notifications/message` on that request's response stream; the server must
+/// emit nothing when it is absent.
+pub const META_LOG_LEVEL = "io.modelcontextprotocol/logLevel";
+
 /// Server-to-client requests a server MAY embed in MRTR `inputRequests`.
 pub const MRTR_METHOD_ELICITATION = "elicitation/create";
 pub const MRTR_METHOD_SAMPLING = "sampling/createMessage";

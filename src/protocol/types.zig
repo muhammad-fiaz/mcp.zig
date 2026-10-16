@@ -77,6 +77,11 @@ pub const LoggingLevel = enum {
     pub fn toString(self: LoggingLevel) []const u8 {
         return @tagName(self);
     }
+
+    /// Parses an RFC 5424 severity name, returning null when unrecognized.
+    pub fn fromString(value: []const u8) ?LoggingLevel {
+        return std.meta.stringToEnum(LoggingLevel, value);
+    }
 };
 
 /// Optional annotations for the client. The client can use annotations to
@@ -128,7 +133,6 @@ pub const ServerCapabilities = struct {
     prompts: ?PromptsCapability = null,
     resources: ?ResourcesCapability = null,
     tools: ?ToolsCapability = null,
-    tasks: ?ServerTasksCapability = null,
     /// Extension labels this server supports. The tasks extension, for
     /// example, is declared as `io.modelcontextprotocol/tasks`; a client
     /// negotiates it by seeing the label listed here.
@@ -151,24 +155,12 @@ pub const ToolsCapability = struct {
     listChanged: bool = false,
 };
 
-/// Server-side task capabilities.
-pub const ServerTasksCapability = struct {
-    list: ?struct {} = null,
-    cancel: ?struct {} = null,
-    requests: ?struct {
-        tools: ?struct {
-            call: ?struct {} = null,
-        } = null,
-    } = null,
-};
-
-/// Client capabilities advertised during initialization.
+/// Client capabilities advertised on every request in `_meta`.
 pub const ClientCapabilities = struct {
     experimental: ?std.json.Value = null,
     roots: ?RootsCapability = null,
     sampling: ?SamplingCapability = null,
     elicitation: ?ElicitationCapability = null,
-    tasks: ?ClientTasksCapability = null,
     /// Extension labels this client supports, serialised into
     /// `_meta.clientCapabilities.extensions` on every request.
     extensions: ?std.json.Value = null,
@@ -222,20 +214,6 @@ pub const SamplingCapability = struct {
 pub const ElicitationCapability = struct {
     form: ?struct {} = null,
     url: ?struct {} = null,
-};
-
-/// Client-side task capabilities.
-pub const ClientTasksCapability = struct {
-    list: ?struct {} = null,
-    cancel: ?struct {} = null,
-    requests: ?struct {
-        sampling: ?struct {
-            createMessage: ?struct {} = null,
-        } = null,
-        elicitation: ?struct {
-            create: ?struct {} = null,
-        } = null,
-    } = null,
 };
 
 /// Action for an elicitation response.

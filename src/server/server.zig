@@ -214,6 +214,10 @@ pub const Server = struct {
     /// with that id so clients can demultiplex concurrent subscriptions.
     subscriptions: std.AutoHashMap(i64, types.SubscriptionFilter),
     log_level: protocol.LogLevel = .info,
+    /// Log level requested by the request currently being handled, from
+    /// `_meta.io.modelcontextprotocol/logLevel`. Null means the client did not
+    /// ask for logs, and the server must then emit no `notifications/message`.
+    request_log_level: ?protocol.LogLevel = null,
     /// Host the HTTP listener is bound to, used for Origin validation.
     http_host: ?[]const u8 = null,
     io: ?std.Io = null,
@@ -304,17 +308,13 @@ pub const Server = struct {
         self.capabilities.completions = .{};
     }
 
-    /// Enable task-augmented tools/call support
-    pub fn enableTasks(self: *Self) void {
-        self.capabilities.tasks = .{
-            .list = .{},
-            .cancel = .{},
-            .requests = .{
-                .tools = .{
-                    .call = .{},
-                },
-            },
-        };
+    /// Enable the tasks extension.
+    ///
+    /// The extension replaced the 2025-11-25 per-method task capabilities,
+    /// which servers must no longer advertise. Support is now signalled by
+    /// the extension label alone.
+    pub fn enableTasks(self: *Self) !void {
+        try self.declareExtension(self.allocator, protocol.EXTENSION_TASKS);
     }
 
     /// Options for running the server
@@ -582,6 +582,16 @@ pub const Server = struct {
             self.log(io, msg);
         } else |_| {}
 
+        // Resolve the log level this request asked for before running the
+        // handler, so anything it logs is emitted at the requested threshold.
+        self.request_log_level = Self.requestLogLevel(request.params) catch {
+            self.request_log_level = null;
+            const error_response = jsonrpc.createInvalidParams(request.id, "Invalid log level");
+            try self.sendResponse(io, allocator, .{ .error_response = error_response });
+            return;
+        };
+        defer self.request_log_level = null;
+
         if (std.mem.eql(u8, request.method, "server/discover")) {
             try self.handleDiscover(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tools/list")) {
@@ -700,21 +710,10 @@ pub const Server = struct {
         if (self.capabilities.completions != null) {
             try caps.put(allocator, "completions", .{ .object = .empty });
         }
-        // Extension labels are the modern handshake; the legacy per-method
-        // `tasks` capability below is only for 2025-11-25 clients.
+        // Extension labels are the modern handshake. The legacy per-method
+        // `tasks` capability is gone, as the extension requires.
         if (self.capabilities.extensions) |ext| {
             try caps.put(allocator, "extensions", ext);
-        }
-        if (self.capabilities.tasks != null) {
-            var tasks_cap: std.json.ObjectMap = .empty;
-            try tasks_cap.put(allocator, "list", .{ .object = .empty });
-            try tasks_cap.put(allocator, "cancel", .{ .object = .empty });
-            var requests_cap: std.json.ObjectMap = .empty;
-            var tools_req: std.json.ObjectMap = .empty;
-            try tools_req.put(allocator, "call", .{ .object = .empty });
-            try requests_cap.put(allocator, "tools", .{ .object = tools_req });
-            try tasks_cap.put(allocator, "requests", .{ .object = requests_cap });
-            try caps.put(allocator, "tasks", .{ .object = tasks_cap });
         }
         try result.put(allocator, "capabilities", .{ .object = caps });
 
@@ -875,7 +874,10 @@ pub const Server = struct {
         }
 
         if (self.tools.get(tool_name)) |tool| {
-            const tasks_enabled = self.capabilities.tasks != null and self.capabilities.tasks.?.requests != null and self.capabilities.tasks.?.requests.?.tools != null and self.capabilities.tasks.?.requests.?.tools.?.call != null;
+            // Task augmentation is decided by the extension label, not the removed
+            // per-method capability. A tool requiring a task is refused when the
+            // client has not declared the extension.
+            const tasks_enabled = self.hasExtension(protocol.EXTENSION_TASKS);
             const task_support = if (tool.execution) |exec| exec.taskSupport else null;
 
             if (tasks_enabled and task_support != null and std.mem.eql(u8, task_support.?, "required") and task_meta == null) {
@@ -1851,7 +1853,7 @@ pub const Server = struct {
     }
 
     /// Handle incoming notifications
-    fn handleNotification(self: *Self, io: anytype, notification: jsonrpc.Notification) !void {
+    fn handleNotification(self: *Self, _: anytype, notification: jsonrpc.Notification) !void {
         if (std.mem.eql(u8, notification.method, "notifications/cancelled")) {
             if (notification.params) |params| {
                 if (params == .object) {
@@ -1873,9 +1875,9 @@ pub const Server = struct {
                     }
                 }
             }
-        } else if (std.mem.eql(u8, notification.method, "notifications/roots/list_changed")) {
-            self.log(io, "Roots list changed");
         }
+        // `notifications/roots/list_changed` was removed in 2026-07-28, so it
+        // is deliberately ignored rather than handled.
     }
 
     /// Handle incoming response to a request we sent
@@ -1905,15 +1907,38 @@ pub const Server = struct {
         try self.sendResponse(io, allocator, .{ .notification = notification });
     }
 
-    /// Send a log message notification
+    /// Send a log message notification.
+    ///
+    /// Logging is opt-in per request: the client sets
+    /// `io.modelcontextprotocol/logLevel` in that request's `_meta`, and the
+    /// spec requires the server to emit nothing when the field is absent. A
+    /// `notifications/message` is also request-scoped, so it is never delivered
+    /// on a `subscriptions/listen` stream.
     pub fn sendLogMessage(self: *Self, io: anytype, allocator: std.mem.Allocator, level: protocol.LogLevel, message: []const u8) !void {
-        if (@backingInt(level) < @backingInt(self.log_level)) return;
+        // No level for the current request means the client did not ask.
+        const threshold = self.request_log_level orelse return;
+        if (@backingInt(level) < @backingInt(threshold)) return;
 
         var params: std.json.ObjectMap = .empty;
+        defer params.deinit(allocator);
         try params.put(allocator, "level", .{ .string = level.toString() });
         try params.put(allocator, "data", .{ .string = message });
 
         try self.sendNotification(io, allocator, "notifications/message", .{ .object = params });
+    }
+
+    /// Reads `io.modelcontextprotocol/logLevel` out of a request's `_meta`.
+    ///
+    /// Returns an error when the value is present but not a recognized level,
+    /// which the spec says to reject with `-32602`.
+    fn requestLogLevel(params: ?std.json.Value) !?protocol.LogLevel {
+        const p = params orelse return null;
+        if (p != .object) return null;
+        const meta = p.object.get("_meta") orelse return null;
+        if (meta != .object) return null;
+        const raw = meta.object.get(protocol.META_LOG_LEVEL) orelse return null;
+        if (raw != .string) return error.InvalidLogLevel;
+        return protocol.LogLevel.fromString(raw.string) orelse error.InvalidLogLevel;
     }
 
     /// Send a progress notification
@@ -2415,11 +2440,11 @@ test "Server enable capabilities" {
 
     server.enableLogging();
     server.enableCompletions();
-    server.enableTasks();
+    try server.enableTasks();
 
     try std.testing.expect(server.capabilities.logging != null);
     try std.testing.expect(server.capabilities.completions != null);
-    try std.testing.expect(server.capabilities.tasks != null);
+    try std.testing.expect(server.hasExtension(protocol.EXTENSION_TASKS));
 }
 
 test "Server shutdown" {
@@ -3402,6 +3427,91 @@ test "spec: tasks/update acknowledges without embedding the task" {
     const result = ack.value.object.get("result").?.object;
     try std.testing.expectEqualStrings("complete", result.get("resultType").?.string);
     try std.testing.expect(result.get("task") == null);
+}
+
+test "spec: log level is per-request and absent means no logs" {
+    const a = std.testing.allocator;
+    var server = Server.init(a, .{ .name = "log", .version = "1.0.0" });
+    defer server.deinit();
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Without the log level in _meta the server must emit nothing.
+    try std.testing.expect(server.request_log_level == null);
+    try server.sendLogMessage(std.Io.failing, a, .debug, "should not appear");
+    try std.testing.expectEqual(@as(usize, 0), collector.messages.items.len);
+
+    const asked = try std.json.parseFromSlice(std.json.Value, a,
+        \\{"_meta":{"io.modelcontextprotocol/logLevel":"warning"}}
+    , .{});
+    defer asked.deinit();
+    try std.testing.expectEqual(@as(?protocol.LogLevel, .warning), try Server.requestLogLevel(asked.value));
+
+    // Messages below the threshold are dropped, ones at or above it go out.
+    server.request_log_level = .warning;
+    try server.sendLogMessage(std.Io.failing, a, .info, "below threshold");
+    try server.sendLogMessage(std.Io.failing, a, .@"error", "at threshold");
+
+    var found_below = false;
+    var found_at = false;
+    for (collector.messages.items) |m| {
+        if (std.mem.indexOf(u8, m, "below threshold") != null) found_below = true;
+        if (std.mem.indexOf(u8, m, "at threshold") != null) found_at = true;
+    }
+    try std.testing.expect(!found_below);
+    try std.testing.expect(found_at);
+
+    // The threshold is per-request, so it does not leak into later requests.
+    collector.clearMessages();
+    server.request_log_level = null;
+    try server.sendLogMessage(std.Io.failing, a, .@"error", "after request");
+    try std.testing.expectEqual(@as(usize, 0), collector.messages.items.len);
+
+    // An unrecognized level is rejected, so the request fails with -32602.
+    const bad = try std.json.parseFromSlice(std.json.Value, a,
+        \\{"_meta":{"io.modelcontextprotocol/logLevel":"shouty"}}
+    , .{});
+    defer bad.deinit();
+    try std.testing.expectError(error.InvalidLogLevel, Server.requestLogLevel(bad.value));
+
+    collector.clearMessages();
+    const bad_req = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/logLevel\":\"shouty\"}}}";
+    try server.handleMessage(std.Io.failing, a, bad_req);
+    var rejected = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer rejected.deinit();
+    try std.testing.expectEqual(
+        @as(i64, -32602),
+        rejected.value.object.get("error").?.object.get("code").?.integer,
+    );
 }
 
 test "spec: the cancellation token reflects notifications/cancelled" {

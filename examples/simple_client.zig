@@ -43,7 +43,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
     // Declare supported capabilities
     client.enableSamplingAdvanced(true, true);
     client.enableElicitation();
-    client.enableTasksAdvanced(true, true);
+    try client.enableTasks();
     client.enableRoots(true);
 
     // Add filesystem roots

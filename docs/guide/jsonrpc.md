@@ -45,7 +45,7 @@ JSON-RPC is a stateless, light-weight remote procedure call (RPC) protocol that 
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "notifications/roots/list_changed"
+  "method": "notifications/tools/list_changed"
 }
 ```
 
@@ -104,7 +104,7 @@ const resp = mcp.jsonrpc.createResponse(
 
 // Notification
 const notif = mcp.jsonrpc.createNotification(
-    "notifications/roots/list_changed",
+    "notifications/tools/list_changed",
     null,
 );
 ```

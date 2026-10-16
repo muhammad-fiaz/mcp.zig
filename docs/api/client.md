@@ -62,8 +62,8 @@ pub fn enableSamplingAdvanced(self: *Client, context: bool, tools_support: bool)
 pub fn enableElicitation(self: *Client) void
 pub fn enableElicitationForm(self: *Client) void
 pub fn enableElicitationUrl(self: *Client) void
-pub fn enableTasks(self: *Client) void
-pub fn enableTasksAdvanced(self: *Client, sampling: bool, elicitation: bool) void
+pub fn enableTasks(self: *Client) !void      // declares the io.modelcontextprotocol/tasks extension
+pub fn enableExtension(self: *Client, label: []const u8) !void
 ```
 
 ---

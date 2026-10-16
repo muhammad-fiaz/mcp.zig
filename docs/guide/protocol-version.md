@@ -23,7 +23,7 @@ The following breaking changes were introduced in the MCP specification revision
 - **`subscriptions/listen`**: Replaces `resources/subscribe`/`resources/unsubscribe` and HTTP GET endpoint. The server acknowledges with the subscription id, then keeps the stream open. Change notifications are delivered only to subscribers whose filter admits them, each tagged with the subscription id in `_meta`. The client opens one with `subscriptionsListen(.{ .toolsListChanged = true })` and ends it with `cancel`.
 - **No protocol-level sessions** on Streamable HTTP. `Mcp-Session-Id` removed. Servers are stateless per-request.
 - **All results carry `resultType`**: `"complete"` or `"input_required"`.
-- **Deprecated features**: Roots, Sampling, Logging (still functional but new implementations should not adopt). HTTP+SSE transport deprecated. `ping`, `logging/setLevel`, `notifications/roots/list_changed` removed.
+- **Removed in this revision**: `ping`, `logging/setLevel` (log level is now per-request via `io.modelcontextprotocol/logLevel` in `_meta`), `notifications/roots/list_changed`, `resources/subscribe`/`resources/unsubscribe`, `Mcp-Session-Id`, and SSE resumability. `tasks/result` and `tasks/list` are replaced by `tasks/get` plus `tasks/update`.
 - **New HTTP headers**: `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` (from tool `x-mcp-header` annotations).
 - **Caching**: `ttlMs` and `cacheScope` required on `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` results.
 

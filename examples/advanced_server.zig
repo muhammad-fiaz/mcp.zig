@@ -91,7 +91,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     });
 
     server.enableLogging();
-    server.enableTasks();
+    try server.enableTasks();
     server.enableCompletions();
 
     try server.run(io, allocator, .stdio);

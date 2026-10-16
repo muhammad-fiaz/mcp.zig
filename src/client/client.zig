@@ -410,6 +410,12 @@ pub const Client = struct {
         var handlers = self.notification_handlers.iterator();
         while (handlers.next()) |entry| self.allocator.free(entry.key_ptr.*);
         self.notification_handlers.deinit(self.allocator);
+        if (self.capabilities.extensions) |ext| {
+            if (ext == .object) {
+                var owned = ext.object;
+                owned.deinit(self.allocator);
+            }
+        }
         self.roots_list.deinit(self.allocator);
         if (self.authorization_token) |token| {
             self.allocator.free(token);
@@ -452,24 +458,13 @@ pub const Client = struct {
         self.capabilities.elicitation = .{ .url = .{} };
     }
 
-    /// Enables the tasks capability for managing long-running operations.
-    pub fn enableTasks(self: *Self) void {
-        self.capabilities.tasks = .{
-            .list = .{},
-            .cancel = .{},
-        };
-    }
-
-    /// Enables task-augmented requests for sampling and elicitation.
-    pub fn enableTasksAdvanced(self: *Self, sampling: bool, elicitation: bool) void {
-        self.capabilities.tasks = .{
-            .list = .{},
-            .cancel = .{},
-            .requests = .{
-                .sampling = if (sampling) .{ .createMessage = .{} } else null,
-                .elicitation = if (elicitation) .{ .create = .{} } else null,
-            },
-        };
+    /// Declares the tasks extension.
+    ///
+    /// Replaces the 2025-11-25 per-method task capabilities, which clients must
+    /// no longer advertise. Servers refuse `tasks/get`, `tasks/update` and
+    /// `tasks/cancel` with -32021 unless this label is present.
+    pub fn enableTasks(self: *Self) !void {
+        try self.enableExtension(protocol.EXTENSION_TASKS);
     }
 
     /// Adds a filesystem root that the server can access (deprecated).
@@ -969,12 +964,12 @@ test "Client capabilities" {
     client.enableSampling();
     client.enableRoots(true);
     client.enableElicitation();
-    client.enableTasks();
+    try client.enableTasks();
 
     try std.testing.expect(client.capabilities.sampling != null);
     try std.testing.expect(client.capabilities.roots.?.listChanged);
     try std.testing.expect(client.capabilities.elicitation != null);
-    try std.testing.expect(client.capabilities.tasks != null);
+    try std.testing.expect(client.hasExtension(protocol.EXTENSION_TASKS));
 }
 
 test "Client advanced sampling" {
@@ -1047,12 +1042,12 @@ test "Client enable all capabilities" {
     client.enableSamplingAdvanced(true, true);
     client.enableRoots(true);
     client.enableElicitation();
-    client.enableTasksAdvanced(true, true);
+    try client.enableTasks();
 
     try std.testing.expect(client.capabilities.sampling != null);
     try std.testing.expect(client.capabilities.roots != null);
     try std.testing.expect(client.capabilities.elicitation != null);
-    try std.testing.expect(client.capabilities.tasks != null);
+    try std.testing.expect(client.hasExtension(protocol.EXTENSION_TASKS));
 }
 
 test "MRTR driver walks input-required rounds automatically" {

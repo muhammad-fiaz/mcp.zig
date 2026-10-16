@@ -57,7 +57,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
 
     client.enableSamplingAdvanced(true, true);
     client.enableElicitation();
-    client.enableTasksAdvanced(true, true);
+    try client.enableTasks();
     client.enableRoots(true);
 
     try client.addRoot("file:///tmp", "Temp");
@@ -106,7 +106,7 @@ zig build
 1. **`Client.init`** creates a client identity with io and allocator stored internally
 2. **`enableSamplingAdvanced`** enables sampling with context and tool use support
 3. **`enableElicitation`** enables user-input elicitation capability
-4. **`enableTasksAdvanced`** enables task-related MCP methods (including request augmentation)
+4. **`enableTasks`** declares the `io.modelcontextprotocol/tasks` extension, without which a server refuses `tasks/get`, `tasks/update` and `tasks/cancel` with `-32021`
 5. **`enableRoots(true)`** enables roots capability and listChanged notification handling
 6. **`addRoot`** registers filesystem roots that the server may request
 

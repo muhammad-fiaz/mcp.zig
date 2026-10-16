@@ -90,6 +90,16 @@ pub fn notifyResourceUpdated(self: *Server, io: std.Io, allocator: std.mem.Alloc
 pub fn notifyPromptsChanged(self: *Server, io: std.Io, allocator: std.mem.Allocator) !void
 ```
 
+::: warning Log level is per-request
+Logging is opt-in per request. A client asks for logs by putting
+`io.modelcontextprotocol/logLevel` in that request's `_meta`, and the server
+emits **nothing** when the field is absent. `sendLogMessage` therefore only
+delivers while the request that asked for logs is still being handled, and a
+message below the requested level is dropped. An unrecognized level fails the
+request with `-32602`. The connection-wide `logging/setLevel` method was removed
+in 2026-07-28.
+:::
+
 ## Minimal Example
 
 ```zig
