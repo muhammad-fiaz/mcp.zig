@@ -852,6 +852,28 @@ pub const Client = struct {
         try self.sendRequest("completion/complete", .{ .object = params });
     }
 
+    /// Declares support for an extension on this client.
+    ///
+    /// The label is sent in `_meta.clientCapabilities.extensions` on every
+    /// request. The tasks extension, for example, is declared with
+    /// `protocol.EXTENSION_TASKS`, which a server requires before it will
+    /// answer `tasks/get`, `tasks/update` or `tasks/cancel`.
+    pub fn enableExtension(self: *Self, label: []const u8) !void {
+        var extensions: std.json.ObjectMap = .empty;
+        if (self.capabilities.extensions) |existing| {
+            if (existing == .object) extensions = existing.object;
+        }
+        try extensions.put(self.allocator, label, .{ .object = .empty });
+        self.capabilities.extensions = .{ .object = extensions };
+    }
+
+    /// True when this client declares `label` as an extension.
+    pub fn hasExtension(self: *Self, label: []const u8) bool {
+        const ext = self.capabilities.extensions orelse return false;
+        if (ext != .object) return false;
+        return ext.object.contains(label);
+    }
+
     /// Gets the status and metadata of a task.
     pub fn getTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
@@ -860,17 +882,18 @@ pub const Client = struct {
         try self.sendRequest("tasks/get", .{ .object = params });
     }
 
-    /// Gets the result payload of a completed task.
-    pub fn getTaskResult(self: *Self, taskId: []const u8) !void {
+    /// Sends responses to a task's outstanding input requests.
+    ///
+    /// The tasks extension replaced the blocking result fetch with polling via
+    /// `tasks/get`, and added this method for a task in `input_required`
+    /// status. The server acknowledges with an empty result; keep observing
+    /// the task with `getTask` until it reaches a terminal state.
+    pub fn updateTask(self: *Self, taskId: []const u8, inputResponses: ?std.json.Value) !void {
         var params: std.json.ObjectMap = .empty;
         defer params.deinit(self.allocator);
         try params.put(self.allocator, "taskId", .{ .string = taskId });
-        try self.sendRequest("tasks/result", .{ .object = params });
-    }
-
-    /// Lists all tasks.
-    pub fn listTasks(self: *Self) !void {
-        try self.sendRequest("tasks/list", null);
+        if (inputResponses) |r| try params.put(self.allocator, "inputResponses", r);
+        try self.sendRequest("tasks/update", .{ .object = params });
     }
 
     /// Cancels a running task.
@@ -1275,7 +1298,7 @@ test "Client request maps do not leak" {
     try client.listTools();
     try client.listResources();
     try client.listPrompts();
-    try client.listTasks();
+    try client.updateTask("task-1", null);
     try client.callTool("greet", null);
 
     var args: std.json.ObjectMap = .empty;
@@ -1301,7 +1324,6 @@ test "Client request maps do not leak" {
     // An empty filter still has to produce a well-formed request.
     try client.subscriptionsListen(.{});
     try client.getTask("task-1");
-    try client.getTaskResult("task-1");
     try client.cancelTask("task-1");
     try client.complete(.{ .string = "ref" }, .{ .string = "arg" });
     try client.notifyRootsChanged();

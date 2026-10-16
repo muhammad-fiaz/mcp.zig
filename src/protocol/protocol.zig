@@ -68,6 +68,9 @@ pub const RESULT_TYPE_TASK = "task";
 /// `subscriptions/listen` request on every subscription notification.
 pub const META_SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId";
 
+/// Extension label for the tasks extension (`io.modelcontextprotocol/tasks`).
+pub const EXTENSION_TASKS = "io.modelcontextprotocol/tasks";
+
 /// `_meta` key carrying an opaque server-side MRTR state blob.
 pub const META_REQUEST_STATE = "io.modelcontextprotocol/requestState";
 
@@ -215,10 +218,9 @@ pub const Method = enum {
 
     // Tasks
     @"tasks/get",
-    @"tasks/result",
-    @"tasks/list",
+    @"tasks/update",
     @"tasks/cancel",
-    @"notifications/tasks/status",
+    @"notifications/tasks",
 
     /// Returns the string representation of the method name.
     pub fn toString(self: Method) []const u8 {
@@ -503,29 +505,17 @@ pub const GetTaskResult = struct {
     pollInterval: ?i64 = null,
 };
 
-/// Parameters for tasks/result request.
-pub const GetTaskPayloadParams = struct {
+/// Parameters for `tasks/update`: client-to-server input for a running task.
+pub const UpdateTaskParams = struct {
     taskId: []const u8,
+    /// Application-defined input for the task.
+    update: ?std.json.Value = null,
 };
 
-/// Result of tasks/result — structure matches the result type of the original request.
-pub const GetTaskPayloadResult = struct {
-    _meta: ?std.json.Value = null,
-};
+/// Result of `tasks/update` — returns Result fields merged with Task fields.
+pub const UpdateTaskResult = GetTaskResult;
 
-/// Parameters for tasks/list request (paginated).
-pub const ListTasksParams = struct {
-    cursor: ?types.Cursor = null,
-};
-
-/// Result of tasks/list.
-pub const ListTasksResult = struct {
-    _meta: ?std.json.Value = null,
-    nextCursor: ?[]const u8 = null,
-    tasks: []const types.Task,
-};
-
-/// Parameters for tasks/cancel request.
+/// Parameters for `tasks/cancel` request.
 pub const CancelTaskParams = struct {
     taskId: []const u8,
 };
@@ -533,7 +523,7 @@ pub const CancelTaskParams = struct {
 /// Result of tasks/cancel — returns Result fields merged with Task fields.
 pub const CancelTaskResult = GetTaskResult;
 
-/// Parameters for notifications/tasks/status notification.
+/// Parameters for a notifications/tasks status notification.
 pub const TaskStatusNotificationParams = struct {
     _meta: ?std.json.Value = null,
     taskId: []const u8,
@@ -654,10 +644,9 @@ test "Method enum - no ping removed" {
 
 test "Method enum - new task methods" {
     try std.testing.expectEqualStrings("tasks/get", Method.@"tasks/get".toString());
-    try std.testing.expectEqualStrings("tasks/result", Method.@"tasks/result".toString());
-    try std.testing.expectEqualStrings("tasks/list", Method.@"tasks/list".toString());
+    try std.testing.expectEqualStrings("tasks/update", Method.@"tasks/update".toString());
     try std.testing.expectEqualStrings("tasks/cancel", Method.@"tasks/cancel".toString());
-    try std.testing.expectEqualStrings("notifications/tasks/status", Method.@"notifications/tasks/status".toString());
+    try std.testing.expectEqualStrings("notifications/tasks", Method.@"notifications/tasks".toString());
 }
 
 test "Method enum - elicitation complete" {

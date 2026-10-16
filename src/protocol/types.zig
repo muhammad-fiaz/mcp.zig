@@ -129,6 +129,10 @@ pub const ServerCapabilities = struct {
     resources: ?ResourcesCapability = null,
     tools: ?ToolsCapability = null,
     tasks: ?ServerTasksCapability = null,
+    /// Extension labels this server supports. The tasks extension, for
+    /// example, is declared as `io.modelcontextprotocol/tasks`; a client
+    /// negotiates it by seeing the label listed here.
+    extensions: ?std.json.Value = null,
 };
 
 pub const LoggingCapability = struct {};
@@ -165,6 +169,9 @@ pub const ClientCapabilities = struct {
     sampling: ?SamplingCapability = null,
     elicitation: ?ElicitationCapability = null,
     tasks: ?ClientTasksCapability = null,
+    /// Extension labels this client supports, serialised into
+    /// `_meta.clientCapabilities.extensions` on every request.
+    extensions: ?std.json.Value = null,
 
     /// Serialises the declared capabilities for
     /// `_meta["io.modelcontextprotocol/clientCapabilities"]`, which the spec
@@ -193,6 +200,9 @@ pub const ClientCapabilities = struct {
         }
         if (self.experimental) |exp| {
             try caps.put(allocator, "experimental", exp);
+        }
+        if (self.extensions) |ext| {
+            try caps.put(allocator, "extensions", ext);
         }
         return caps;
     }
@@ -735,10 +745,12 @@ pub const Task = struct {
     createdAt: []const u8,
     /// ISO 8601 timestamp when the task was last updated.
     lastUpdatedAt: []const u8,
-    /// Actual retention duration from creation in milliseconds, null for unlimited.
-    ttl: ?i64 = null,
-    /// Suggested polling interval in milliseconds.
-    pollInterval: ?i64 = null,
+    /// Actual retention duration from creation in milliseconds, null for
+    /// unlimited. The server may discard the task once this elapses, and the
+    /// value MAY change over the task's lifetime.
+    ttlMs: ?i64 = null,
+    /// Suggested polling interval in milliseconds. Clients SHOULD honor it.
+    pollIntervalMs: ?i64 = null,
 };
 
 /// Metadata for augmenting a request with task execution.

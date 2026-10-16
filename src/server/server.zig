@@ -102,8 +102,19 @@ pub const ServerConfig = struct {
         params: ?std.json.Value,
         allocator: std.mem.Allocator,
     ) anyerror!types.InputRequiredResult = null,
+    /// Invoked by `tasks/update` with the `inputResponses` the client sent for a
+    /// task that is still running. The extension added this method so a task in
+    /// `input_required` status can receive answers; observe the outcome by
+    /// polling `tasks/get`.
+    onTaskUpdate: ?*const fn (
+        user_data: ?*anyopaque,
+        task_id: []const u8,
+        input_responses: ?std.json.Value,
+    ) anyerror!void = null,
     /// Passed to the `mrtr` hook.
     mrtr_user_data: ?*anyopaque = null,
+    /// Passed to the `onTaskUpdate` hook.
+    taskUpdateUserData: ?*anyopaque = null,
 };
 
 /// Current state of the server
@@ -246,6 +257,12 @@ pub const Server = struct {
         self.pending_requests.deinit();
         self.cancelled_requests.deinit();
         self.subscriptions.deinit();
+        if (self.capabilities.extensions) |ext| {
+            if (ext == .object) {
+                var owned = ext.object;
+                owned.deinit(self.allocator);
+            }
+        }
         if (self.stdio_transport) |stdio| {
             stdio.deinit(self.allocator);
             self.allocator.destroy(stdio);
@@ -586,12 +603,24 @@ pub const Server = struct {
         } else if (std.mem.eql(u8, request.method, "completion/complete")) {
             try self.handleCompletion(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tasks/get")) {
+            // The tasks extension requires the client to declare it, and
+            // servers MUST refuse with -32021 otherwise.
+            if (!Self.clientDeclaredExtension(request.params, protocol.EXTENSION_TASKS)) {
+                try self.sendMissingExtension(io, allocator, request.id);
+                return;
+            }
             try self.handleTasksGet(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "tasks/result")) {
-            try self.handleTasksResult(io, allocator, request);
-        } else if (std.mem.eql(u8, request.method, "tasks/list")) {
-            try self.handleTasksList(io, allocator, request);
+        } else if (std.mem.eql(u8, request.method, "tasks/update")) {
+            if (!Self.clientDeclaredExtension(request.params, protocol.EXTENSION_TASKS)) {
+                try self.sendMissingExtension(io, allocator, request.id);
+                return;
+            }
+            try self.handleTasksUpdate(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "tasks/cancel")) {
+            if (!Self.clientDeclaredExtension(request.params, protocol.EXTENSION_TASKS)) {
+                try self.sendMissingExtension(io, allocator, request.id);
+                return;
+            }
             try self.handleTasksCancel(io, allocator, request);
         } else if (std.mem.eql(u8, request.method, "sampling/createMessage")) {
             // Deprecated but still functional
@@ -670,6 +699,11 @@ pub const Server = struct {
         }
         if (self.capabilities.completions != null) {
             try caps.put(allocator, "completions", .{ .object = .empty });
+        }
+        // Extension labels are the modern handshake; the legacy per-method
+        // `tasks` capability below is only for 2025-11-25 clients.
+        if (self.capabilities.extensions) |ext| {
+            try caps.put(allocator, "extensions", ext);
         }
         if (self.capabilities.tasks != null) {
             var tasks_cap: std.json.ObjectMap = .empty;
@@ -824,6 +858,8 @@ pub const Server = struct {
                     }
                 }
                 arguments = params.object.get("arguments");
+                // The tasks extension removed the `task` opt-in parameter, so
+                // this is only honoured for a legacy 2025-11-25 client.
                 if (params.object.get("task")) |task_val| {
                     if (task_val == .object) {
                         var ttl: ?i64 = null;
@@ -875,8 +911,8 @@ pub const Server = struct {
                     .statusMessage = status_message,
                     .createdAt = created_at,
                     .lastUpdatedAt = updated_at,
-                    .ttl = if (task_meta) |meta| meta.ttl else null,
-                    .pollInterval = null,
+                    .ttlMs = if (task_meta) |meta| meta.ttl else null,
+                    .pollIntervalMs = null,
                 };
 
                 try self.tasks.put(task_id, .{ .task = task, .result_json = result_json });
@@ -1102,6 +1138,40 @@ pub const Server = struct {
         return null;
     }
 
+    /// Declares support for an extension, advertised in `capabilities.extensions`.
+    ///
+    /// The tasks extension, for example, is declared with
+    /// `protocol.EXTENSION_TASKS`.
+    pub fn declareExtension(self: *Self, allocator: std.mem.Allocator, label: []const u8) !void {
+        var extensions: std.json.ObjectMap = .empty;
+        if (self.capabilities.extensions) |existing| {
+            if (existing == .object) extensions = existing.object;
+        }
+        try extensions.put(allocator, label, .{ .object = .empty });
+        self.capabilities.extensions = .{ .object = extensions };
+    }
+
+    /// True when this server declares `label` in its capabilities.
+    pub fn hasExtension(self: *Self, label: []const u8) bool {
+        const ext = self.capabilities.extensions orelse return false;
+        if (ext != .object) return false;
+        return ext.object.contains(label);
+    }
+
+    /// True when the client declared `label` in the per-request
+    /// `clientCapabilities.extensions` of this message.
+    fn clientDeclaredExtension(params: ?std.json.Value, label: []const u8) bool {
+        const p = params orelse return false;
+        if (p != .object) return false;
+        const meta = p.object.get("_meta") orelse return false;
+        if (meta != .object) return false;
+        const caps = meta.object.get(protocol.META_CLIENT_CAPABILITIES) orelse return false;
+        if (caps != .object) return false;
+        const extensions = caps.object.get("extensions") orelse return false;
+        if (extensions != .object) return false;
+        return extensions.object.contains(label);
+    }
+
     /// Returns the first capability the client did not declare that the given
     /// input requests need, or null when everything is declared.
     ///
@@ -1148,6 +1218,26 @@ pub const Server = struct {
             "Client did not declare a required capability",
             .{ .object = data },
         );
+    }
+
+    /// Rejects a request that needs an extension the client did not declare.
+    ///
+    /// `data.requiredCapabilities` carries the `extensions` object the spec
+    /// shows for extension negotiation, rather than a flat name.
+    fn sendMissingExtension(self: *Self, io: anytype, allocator: std.mem.Allocator, id: types.RequestId) !void {
+        var extensions: std.json.ObjectMap = .empty;
+        try extensions.put(allocator, protocol.EXTENSION_TASKS, .{ .object = .empty });
+        var data: std.json.ObjectMap = .empty;
+        defer data.deinit(allocator);
+        try data.put(allocator, "requiredCapabilities", .{ .object = extensions });
+
+        const response = jsonrpc.createErrorResponse(
+            id,
+            jsonrpc.ErrorCode.MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Client did not declare the " ++ protocol.EXTENSION_TASKS ++ " extension",
+            .{ .object = data },
+        );
+        try self.sendResponse(io, allocator, .{ .error_response = response });
     }
 
     /// Emits an MRTR `InputRequiredResult` when a handler asked for more input.
@@ -1538,16 +1628,23 @@ pub const Server = struct {
         }
     }
 
-    /// Handle tasks/result request
-    fn handleTasksResult(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+    /// Handle `tasks/update`: client responses to a task's outstanding input
+    /// requests.
+    ///
+    /// The extension replaced the blocking `tasks/result` method with polling
+    /// via `tasks/get`, and added this method so a task in `input_required`
+    /// status can receive answers. The response is an empty acknowledgement:
+    /// the client keeps observing the task by polling, because the update is
+    /// only eventually consistent.
+    fn handleTasksUpdate(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var task_id: ?[]const u8 = null;
+        var responses: ?std.json.Value = null;
         if (request.params) |params| {
             if (params == .object) {
                 if (params.object.get("taskId")) |id_val| {
-                    if (id_val == .string) {
-                        task_id = id_val.string;
-                    }
+                    if (id_val == .string) task_id = id_val.string;
                 }
+                if (params.object.get("inputResponses")) |r| responses = r;
             }
         }
 
@@ -1557,43 +1654,36 @@ pub const Server = struct {
             return;
         };
 
-        if (self.tasks.get(id)) |entry| {
-            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, entry.result_json, .{});
-            defer parsed.deinit();
-
-            if (parsed.value == .object) {
-                var result_obj = parsed.value.object;
-                if (result_obj.get("_meta") == null) {
-                    var meta_obj: std.json.ObjectMap = .empty;
-                    var related_obj: std.json.ObjectMap = .empty;
-                    try related_obj.put(allocator, "taskId", .{ .string = entry.task.taskId });
-                    try meta_obj.put(allocator, "io.modelcontextprotocol/related-task", .{ .object = related_obj });
-                    try result_obj.put(allocator, "_meta", .{ .object = meta_obj });
-                }
-                const response = jsonrpc.createResponse(request.id, .{ .object = result_obj });
-                try self.sendResponse(io, allocator, .{ .response = response });
-                return;
-            }
-
-            const error_response = jsonrpc.createInternalError(request.id, .{ .string = "Invalid task result" });
-            try self.sendResponse(io, allocator, .{ .error_response = error_response });
-        } else {
+        const entry = self.tasks.get(id) orelse {
             const error_response = jsonrpc.createInvalidParams(request.id, "Task not found");
             try self.sendResponse(io, allocator, .{ .error_response = error_response });
-        }
-    }
+            return;
+        };
 
-    /// Handle tasks/list request
-    fn handleTasksList(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
+        // A terminal task can no longer accept input.
+        switch (entry.task.status) {
+            .completed, .failed, .cancelled => {
+                const error_response = jsonrpc.createInvalidParams(request.id, "Task is no longer running");
+                try self.sendResponse(io, allocator, .{ .error_response = error_response });
+                return;
+            },
+            else => {},
+        }
+
+        // Hand the responses to the application, which decides what they mean.
+        // Keys that are not outstanding are ignored rather than rejected, so a
+        // duplicate or stale response cannot fail an otherwise valid update.
+        if (self.config.onTaskUpdate) |hook| {
+            hook(self.config.taskUpdateUserData, id, responses) catch {
+                const error_response = jsonrpc.createInternalError(request.id, .{ .string = "Task update failed" });
+                try self.sendResponse(io, allocator, .{ .error_response = error_response });
+                return;
+            };
+        }
+
         var result: std.json.ObjectMap = .empty;
-        var tasks_array: std.json.Array = .init(allocator);
-
-        var iter = self.tasks.iterator();
-        while (iter.next()) |entry| {
-            const task_obj = try buildTaskObject(allocator, entry.value_ptr.task);
-            try tasks_array.append(.{ .object = task_obj });
-        }
-        try result.put(allocator, "tasks", .{ .array = tasks_array });
+        defer result.deinit(allocator);
+        try Self.putResultComplete(allocator, &result);
 
         const response = jsonrpc.createResponse(request.id, .{ .object = result });
         try self.sendResponse(io, allocator, .{ .response = response });
@@ -1907,6 +1997,35 @@ pub const Server = struct {
         }
     }
 
+    /// Records a task so the polling methods can find it.
+    ///
+    /// Applications call this when they materialize a task; the server then
+    /// answers `tasks/get`, `tasks/update` and `tasks/cancel` for it. The
+    /// `result` is returned verbatim once the task completes.
+    pub fn storeTask(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        task_id: []const u8,
+        status: types.TaskStatus,
+        result: ?[]const u8,
+    ) !void {
+        const now = try nowIsoTimestamp(self.io orelse std.Io.failing, allocator);
+        errdefer allocator.free(now);
+
+        const task = types.Task{
+            .taskId = try allocator.dupe(u8, task_id),
+            .status = status,
+            .createdAt = now,
+            .lastUpdatedAt = try allocator.dupe(u8, now),
+        };
+
+        const entry = TaskEntry{
+            .task = task,
+            .result_json = result orelse "",
+        };
+        try self.tasks.put(task_id, entry);
+    }
+
     fn deinitTasks(self: *Self) void {
         var iter = self.tasks.iterator();
         while (iter.next()) |entry| {
@@ -2030,11 +2149,15 @@ pub const Server = struct {
         }
         try task_obj.put(allocator, "createdAt", .{ .string = task.createdAt });
         try task_obj.put(allocator, "lastUpdatedAt", .{ .string = task.lastUpdatedAt });
-        if (task.ttl) |ttl| {
-            try task_obj.put(allocator, "ttl", .{ .integer = ttl });
+        // The extension names these `ttlMs` and `pollIntervalMs`, and allows a
+        // null `ttlMs` for an unlimited retention.
+        if (task.ttlMs) |ttl| {
+            try task_obj.put(allocator, "ttlMs", .{ .integer = ttl });
+        } else {
+            try task_obj.put(allocator, "ttlMs", .null);
         }
-        if (task.pollInterval) |interval| {
-            try task_obj.put(allocator, "pollInterval", .{ .integer = interval });
+        if (task.pollIntervalMs) |interval| {
+            try task_obj.put(allocator, "pollIntervalMs", .{ .integer = interval });
         }
         return task_obj;
     }
@@ -2429,6 +2552,12 @@ const CaptureTransport = struct {
         // rather than the per-request one.
         try self.messages.append(self.allocator, try self.allocator.dupe(u8, message));
         _ = al;
+    }
+
+    /// Drops the captured log so a test can assert on the next exchange alone.
+    fn clearMessages(self: *CaptureTransport) void {
+        for (self.messages.items) |m| self.allocator.free(m);
+        self.messages.clearRetainingCapacity();
     }
     fn receive(_: *CaptureTransport, _: std.Io, _: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
         return null;
@@ -3145,6 +3274,134 @@ test "spec: subscriptions/listen acknowledges and stays open" {
         @as(i64, 7),
         result.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer,
     );
+}
+
+test "spec: tasks methods require the client to declare the extension" {
+    const a = std.testing.allocator;
+    var server = Server.init(a, .{ .name = "task-ext", .version = "1.0.0" });
+    defer server.deinit();
+
+    try server.declareExtension(a, protocol.EXTENSION_TASKS);
+    try std.testing.expect(server.hasExtension(protocol.EXTENSION_TASKS));
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Without the extension declared, tasks/get is refused with -32021 and
+    // data.requiredCapabilities naming the extension.
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"taskId":"t1","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+    );
+
+    var refused = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer refused.deinit();
+    const err = refused.value.object.get("error").?.object;
+    try std.testing.expectEqual(
+        @as(i64, jsonrpc.ErrorCode.MISSING_REQUIRED_CLIENT_CAPABILITY),
+        err.get("code").?.integer,
+    );
+    const required = err.get("data").?.object.get("requiredCapabilities").?.object;
+    try std.testing.expect(required.contains(protocol.EXTENSION_TASKS));
+
+    // The same request succeeds once the client declares the extension.
+    collector.clearMessages();
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"taskId":"t1","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
+    );
+    // The extension gate no longer fires: the request now reaches task lookup
+    // and fails only because no such task exists.
+    try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
+    var reached = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer reached.deinit();
+    const code = reached.value.object.get("error").?.object.get("code").?.integer;
+    try std.testing.expectEqual(@as(i64, -32602), code);
+}
+
+test "spec: tasks/update acknowledges without embedding the task" {
+    const a = std.testing.allocator;
+    var server = Server.init(a, .{ .name = "task-update", .version = "1.0.0" });
+    defer server.deinit();
+    try server.declareExtension(a, protocol.EXTENSION_TASKS);
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // An unknown task is an invalid-params error, per the extension.
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":1,"method":"tasks/update","params":{"taskId":"missing","inputResponses":{"name":{"action":"accept"}},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
+    );
+    var msg = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer msg.deinit();
+    try std.testing.expectEqual(@as(i64, -32602), msg.value.object.get("error").?.object.get("code").?.integer);
+
+    // With a real task the response is an empty acknowledgement: the spec makes
+    // the update eventually consistent, so no task is inlined.
+    collector.clearMessages();
+    try server.storeTask(a, "t1", .working, null);
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":2,"method":"tasks/update","params":{"taskId":"t1","inputResponses":{"name":{"action":"accept"}},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
+    );
+    var ack = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer ack.deinit();
+    const result = ack.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("complete", result.get("resultType").?.string);
+    try std.testing.expect(result.get("task") == null);
 }
 
 test "spec: the cancellation token reflects notifications/cancelled" {
