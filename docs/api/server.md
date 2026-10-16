@@ -67,12 +67,16 @@ pub fn addResourceTemplate(self: *Server, template: mcp.resources.ResourceTempla
 pub fn addPrompt(self: *Server, prompt: mcp.prompts.Prompt) !void
 ```
 
-## Capability Toggles
+## Capability & Extension Toggles
 
 ```zig
 pub fn enableLogging(self: *Server) void
 pub fn enableCompletions(self: *Server) void
-pub fn enableTasks(self: *Server) void
+pub fn enableTasks(self: *Server) !void
+pub fn enableUi(self: *Server) !void
+pub fn enableUiWithSettings(self: *Server, settings: std.json.Value) !void
+pub fn isUiEnabled(self: *Server) bool
+pub fn isTasksEnabled(self: *Server) bool
 ```
 
 Tools/resources/prompts capabilities are advertised automatically once components are registered.

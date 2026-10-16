@@ -147,10 +147,7 @@ pub fn isHeaderSafe(value: []const u8) bool {
     if (first == ' ' or first == '\t' or last == ' ' or last == '\t') return false;
 
     for (value) |ch| {
-        const ok = switch (ch) {
-            0x21...0x7E, 0x20, 0x09 => true,
-            else => false,
-        };
+        const ok = std.ascii.isPrint(ch) or ch == '\t';
         if (!ok) return false;
     }
     return true;

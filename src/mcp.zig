@@ -79,6 +79,7 @@ pub const tools = @import("server/tools.zig");
 pub const Tool = tools.Tool;
 pub const ToolBuilder = tools.ToolBuilder;
 pub const ToolResult = tools.ToolResult;
+pub const ToolUi = types.ToolUi;
 
 pub const resources = @import("server/resources.zig");
 pub const Resource = resources.Resource;

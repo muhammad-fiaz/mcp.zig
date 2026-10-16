@@ -230,7 +230,26 @@ try server.addTool(.{
 - Use side effects without documenting them
 - Return empty content on success
 - Ignore input validation
-  :::
+:::
+
+## MCP Apps UI Extension
+
+Tools can link to interactive HTML interfaces via the [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps/overview) (`io.modelcontextprotocol/ui`):
+
+```zig
+var builder: mcp.ToolBuilder = .init("render_chart");
+_ = try builder
+    .description("Render an interactive chart")
+    .ui(allocator, "ui://charts/interactive");
+
+const tool = builder.build();
+try server.addTool(tool);
+try server.enableUi();
+```
+
+Inspect UI metadata with:
+- `tool.getUiResourceUri()` — returns the linked `ui://` resource URI, if present.
+- `result.hasUi()` — checks if a `ToolResult` carries UI metadata.
 
 ## Complete Example
 

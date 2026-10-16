@@ -1148,6 +1148,16 @@ pub const Client = struct {
         return ext.object.get(label);
     }
 
+    /// Returns true if the connected server declared the MCP Apps UI extension (`io.modelcontextprotocol/ui`).
+    pub fn hasServerUi(self: *Self) bool {
+        return self.hasServerExtension(protocol.EXTENSION_UI);
+    }
+
+    /// Returns true if the connected server declared the tasks extension.
+    pub fn hasServerTasks(self: *Self) bool {
+        return self.hasServerExtension(protocol.EXTENSION_TASKS);
+    }
+
     /// Gets the status and metadata of a task.
     pub fn getTask(self: *Self, taskId: []const u8) !void {
         var params: std.json.ObjectMap = .empty;
@@ -1267,6 +1277,8 @@ test "Client extension negotiation with server discovery" {
 
     try std.testing.expect(client.server_capabilities != null);
     try std.testing.expect(client.hasServerExtension(protocol.EXTENSION_UI));
+    try std.testing.expect(client.hasServerUi());
+    try std.testing.expect(!client.hasServerTasks());
     try std.testing.expect(!client.hasServerExtension("nonexistent/ext"));
 }
 

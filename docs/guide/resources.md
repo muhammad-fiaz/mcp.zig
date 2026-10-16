@@ -83,14 +83,21 @@ try server.addResourceTemplate(.{
 });
 ```
 
-## Subscribing to Resources
+## MCP Apps UI Resources
 
-Enable resource subscriptions for real-time updates:
+MCP Apps UI resources expose HTML applications with the `text/html;profile=mcp-app` MIME type and `ui://` URI scheme:
 
 ```zig
-// Resource changed notification
-try server.notifyResourceUpdated(io, allocator, "file:///data.json");
+var builder = mcp.resources.ResourceBuilder.init("ui://dashboard", "Interactive Dashboard");
+const ui_resource = builder
+    .description("Live dashboard interface")
+    .mcpApp()
+    .build();
+
+try server.addResource(ui_resource);
 ```
+
+Check if a resource is an MCP App HTML component using `resource.isMcpApp()`.
 
 ## Complete Example
 

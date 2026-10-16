@@ -209,7 +209,7 @@ pub fn valueAtPath(arguments: std.json.Value, path: []const []const u8) ?std.jso
 /// header name and value is owned by the caller.
 pub fn appendHeaders(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(@import("httpx").Header),
+    out: *std.ArrayList(httpx.Header),
     annotations: []const Annotation,
     arguments: std.json.Value,
 ) (Error || std.mem.Allocator.Error)!void {
@@ -327,7 +327,7 @@ test "x-mcp-header: extracts by path, omits absent and null" {
     , .{});
     defer args.deinit();
 
-    var headers: std.ArrayList(@import("httpx").Header) = .empty;
+    var headers: std.ArrayList(httpx.Header) = .empty;
     defer {
         for (headers.items) |h| {
             testing.allocator.free(h.name);
@@ -357,7 +357,7 @@ test "x-mcp-header: enforces the JavaScript safe integer range" {
     , .{});
     defer args.deinit();
 
-    var headers: std.ArrayList(@import("httpx").Header) = .empty;
+    var headers: std.ArrayList(httpx.Header) = .empty;
     defer headers.deinit(testing.allocator);
     try testing.expectError(
         error.IntegerOutOfRange,

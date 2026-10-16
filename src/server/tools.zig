@@ -23,6 +23,17 @@ pub const Tool = struct {
     _meta: ?std.json.Value = null,
     handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult,
     user_data: ?*anyopaque = null,
+
+    /// Returns the UI resource URI declared in `_meta.ui`, if any.
+    pub fn getUiResourceUri(self: Tool) ?[]const u8 {
+        const m = self._meta orelse return null;
+        if (m != .object) return null;
+        const ui_val = m.object.get("ui") orelse return null;
+        if (ui_val != .object) return null;
+        const uri_val = ui_val.object.get("resourceUri") orelse return null;
+        if (uri_val != .string) return null;
+        return uri_val.string;
+    }
 };
 
 /// Annotations describing tool behavior characteristics for client display and safety.
@@ -46,6 +57,13 @@ pub const ToolResult = struct {
     structuredContent: ?std.json.Value = null,
     _meta: ?std.json.Value = null,
     is_error: bool = false,
+
+    /// Returns true if this result carries metadata for the MCP Apps UI extension.
+    pub fn hasUi(self: ToolResult) bool {
+        const m = self._meta orelse return false;
+        if (m != .object) return false;
+        return m.object.contains("ui");
+    }
 };
 
 /// Errors that can occur during tool execution.
@@ -455,6 +473,17 @@ test "ToolBuilder with meta and ui" {
     try std.testing.expectEqual(@as(usize, 2), vis.items.len);
     try std.testing.expectEqualStrings("model", vis.items[0].string);
     try std.testing.expectEqualStrings("app", vis.items[1].string);
+
+    try std.testing.expectEqualStrings("ui://charts/interactive", tool.getUiResourceUri().?);
+    const result_with_ui = ToolResult{
+        .content = &.{},
+        ._meta = tool._meta,
+    };
+    try std.testing.expect(result_with_ui.hasUi());
+    const result_without_ui = ToolResult{
+        .content = &.{},
+    };
+    try std.testing.expect(!result_without_ui.hasUi());
 }
 
 test "isValidToolName" {

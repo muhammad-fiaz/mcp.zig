@@ -63,7 +63,11 @@ pub fn enableElicitation(self: *Client) void
 pub fn enableElicitationForm(self: *Client) void
 pub fn enableElicitationUrl(self: *Client) void
 pub fn enableTasks(self: *Client) !void      // declares the io.modelcontextprotocol/tasks extension
+pub fn enableUi(self: *Client) !void         // declares the io.modelcontextprotocol/ui extension
+pub fn enableUiWithSettings(self: *Client, settings: std.json.Value) !void
 pub fn enableExtension(self: *Client, label: []const u8) !void
+pub fn hasServerUi(self: *Client) bool
+pub fn hasServerTasks(self: *Client) bool
 ```
 
 ---

@@ -976,6 +976,12 @@ pub const Result = struct {
     _meta: ?std.json.Value = null,
 };
 
+/// MCP Apps UI metadata (`io.modelcontextprotocol/ui`).
+pub const ToolUi = struct {
+    resourceUri: []const u8,
+    visibility: ?[]const []const u8 = null,
+};
+
 test "RequestId equality" {
     const id1: RequestId = .{ .integer = 42 };
     const id2: RequestId = .{ .integer = 42 };

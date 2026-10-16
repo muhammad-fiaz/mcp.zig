@@ -18,6 +18,7 @@
 //! version is `UnsupportedProtocolVersion` (`-32022`).
 
 const std = @import("std");
+const httpx = @import("httpx");
 const protocol = @import("../protocol/protocol.zig");
 const jsonrpc = @import("../protocol/jsonrpc.zig");
 const param_headers = @import("../protocol/param_headers.zig");
@@ -366,28 +367,28 @@ pub const HeaderSource = struct {
 
     fn protocolVersion(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
-            const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(c));
+            const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_protocol_version);
         }
         return self.fallback.?[0];
     }
     fn method(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
-            const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(c));
+            const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_method);
         }
         return self.fallback.?[1];
     }
     fn name(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
-            const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(c));
+            const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_name);
         }
         return self.fallback.?[2];
     }
     pub fn origin(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
-            const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(c));
+            const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header("Origin");
         }
         return null;
@@ -405,7 +406,7 @@ pub const HeaderSource = struct {
 
         if (self.context == null) return .{ .items = &.{}, .owned = false };
 
-        const ctx: *const @import("httpx").Context = @ptrCast(@alignCast(self.context.?));
+        const ctx: *const httpx.Context = @ptrCast(@alignCast(self.context.?));
         var list: std.ArrayList(ParamHeader) = .empty;
         errdefer list.deinit(allocator);
         for (ctx.headers) |h| {

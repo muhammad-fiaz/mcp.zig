@@ -354,6 +354,16 @@ pub const Server = struct {
         try self.declareExtensionWithSettings(self.allocator, protocol.EXTENSION_UI, settings);
     }
 
+    /// Returns true if the MCP Apps UI extension (`io.modelcontextprotocol/ui`) is declared on this server.
+    pub fn isUiEnabled(self: *Self) bool {
+        return self.getExtension(protocol.EXTENSION_UI) != null;
+    }
+
+    /// Returns true if the tasks extension is declared on this server.
+    pub fn isTasksEnabled(self: *Self) bool {
+        return self.getExtension(protocol.EXTENSION_TASKS) != null;
+    }
+
     /// Options for running the server
     pub const HttpRunConfig = struct {
         port: u16 = 8080,
@@ -2435,7 +2445,7 @@ pub const Server = struct {
     fn nowIsoTimestamp(io: anytype, allocator: std.mem.Allocator) ![]const u8 {
         const now_ts = std.Io.Clock.real.now(io);
         const now_secs: i64 = now_ts.toSeconds();
-        const secs: u64 = if (now_secs < 0) 0 else @intCast(now_secs);
+        const secs: u64 = @intCast(@max(@as(i64, 0), now_secs));
         const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = secs };
         const epoch_day = epoch_seconds.getEpochDay();
         const year_day = epoch_day.calculateYearDay();
@@ -2724,7 +2734,7 @@ pub const Server = struct {
         ttl_ms: i64,
         scope: types.CacheScope,
     ) !void {
-        const clamped = if (ttl_ms < 0) 0 else ttl_ms;
+        const clamped = @max(@as(i64, 0), ttl_ms);
         // An MRTR retry is not cacheable, so the hints are omitted entirely.
         if (self.suppress_cache_hints) return;
         try result.put(allocator, "ttlMs", .{ .integer = clamped });
@@ -3717,6 +3727,8 @@ test "spec: server/discover advertises extensions including MCP Apps UI" {
     });
     defer server.deinit();
     try server.enableUi();
+    try std.testing.expect(server.isUiEnabled());
+    try std.testing.expect(!server.isTasksEnabled());
 
     const parsed = try runRequest(&server, a, "server/discover", null);
     defer parsed.deinit();

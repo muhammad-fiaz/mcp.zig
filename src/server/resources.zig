@@ -21,6 +21,14 @@ pub const Resource = struct {
     _meta: ?std.json.Value = null,
     handler: *const fn (user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, uri: []const u8) ResourceError!ResourceContent,
     user_data: ?*anyopaque = null,
+
+    /// Returns true if this resource has the MCP App HTML UI MIME type (`text/html;profile=mcp-app`).
+    pub fn isMcpApp(self: Resource) bool {
+        if (self.mimeType) |m| {
+            return std.mem.eql(u8, m, @import("../protocol/protocol.zig").MIME_TYPE_MCP_APP);
+        }
+        return false;
+    }
 };
 
 /// Content returned when reading a resource.
@@ -98,6 +106,12 @@ pub const ResourceBuilder = struct {
         return self;
     }
 
+    /// Sets the resource MIME type to the MCP App HTML UI type (`text/html;profile=mcp-app`).
+    pub fn mcpApp(self: *ResourceBuilder) *ResourceBuilder {
+        self.resource.mimeType = @import("../protocol/protocol.zig").MIME_TYPE_MCP_APP;
+        return self;
+    }
+
     /// Sets the resource handler function.
     pub fn handler(self: *ResourceBuilder, h: *const fn (?*anyopaque, std.Io, std.mem.Allocator, []const u8) ResourceError!ResourceContent) *ResourceBuilder {
         self.resource.handler = h;
@@ -138,6 +152,9 @@ fn pathExtension(path: []const u8) []const u8 {
 
 /// Detects the MIME type based on file extension.
 pub fn detectMimeType(path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, path, ".mcp-app") or std.mem.endsWith(u8, path, ".ui.html")) {
+        return @import("../protocol/protocol.zig").MIME_TYPE_MCP_APP;
+    }
     const ext = pathExtension(path);
     if (std.mem.eql(u8, ext, ".txt")) return "text/plain";
     if (std.mem.eql(u8, ext, ".json")) return "application/json";
@@ -174,4 +191,18 @@ test "ResourceBuilder with title and annotations" {
 
 test "getUriScheme" {
     try std.testing.expectEqualStrings("file", getUriScheme("file:///path").?);
+}
+
+test "ResourceBuilder mcpApp and isMcpApp" {
+    var builder: ResourceBuilder = .init("ui://dashboard", "Dashboard");
+    const res = builder.mcpApp().build();
+    try std.testing.expect(res.isMcpApp());
+    try std.testing.expectEqualStrings("text/html;profile=mcp-app", res.mimeType.?);
+
+    var normal_builder = ResourceBuilder.init("file:///data.json", "Data");
+    const normal = normal_builder.mimeType("application/json").build();
+    try std.testing.expect(!normal.isMcpApp());
+
+    try std.testing.expectEqualStrings("text/html;profile=mcp-app", detectMimeType("view.mcp-app"));
+    try std.testing.expectEqualStrings("text/html;profile=mcp-app", detectMimeType("component.ui.html"));
 }
