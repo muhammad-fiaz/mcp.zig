@@ -79,6 +79,14 @@ pub const META_REQUEST_STATE = "io.modelcontextprotocol/requestState";
 /// emit nothing when it is absent.
 pub const META_LOG_LEVEL = "io.modelcontextprotocol/logLevel";
 
+/// `_meta` key with which a client augments a request to have it executed as a
+/// task. The value is a `TaskMetadata` object, currently `{ "ttl": <ms> }`.
+pub const META_TASK = "io.modelcontextprotocol/task";
+
+/// `_meta` key relating a result or notification to the task that produced it,
+/// carrying a `RelatedTaskMetadata` object, i.e. `{ "taskId": "..." }`.
+pub const META_RELATED_TASK = "io.modelcontextprotocol/relatedTask";
+
 /// Server-to-client requests a server MAY embed in MRTR `inputRequests`.
 pub const MRTR_METHOD_ELICITATION = "elicitation/create";
 pub const MRTR_METHOD_SAMPLING = "sampling/createMessage";

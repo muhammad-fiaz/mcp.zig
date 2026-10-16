@@ -9,8 +9,10 @@
 //! Required headers on every POST to the MCP endpoint:
 //!   - `MCP-Protocol-Version` — must equal `_meta["io.modelcontextprotocol/protocolVersion"]`
 //!   - `Mcp-Method`            — must equal the JSON-RPC `method`
-//!   - `Mcp-Name`              — required for tools/call, resources/read and
-//!                               prompts/get; must equal `params.name` / `params.uri`
+//!   - `Mcp-Name`              — required for tools/call, resources/read,
+//!                               prompts/get and every `tasks/*` method; must
+//!                               equal `params.name` / `params.uri` /
+//!                               `params.taskId`
 //!
 //! Any mismatch is a `HeaderMismatch` error (`-32020`); an unsupported protocol
 //! version is `UnsupportedProtocolVersion` (`-32022`).
@@ -338,7 +340,8 @@ pub fn requiresName(method: []const u8) bool {
     for (name_required_methods) |m| {
         if (std.mem.eql(u8, m, method)) return true;
     }
-    return false;
+    // Every `tasks/*` request is keyed by `taskId`, so it carries Mcp-Name too.
+    return std.mem.startsWith(u8, method, "tasks/");
 }
 
 fn isKnownMethod(method: []const u8) bool {
@@ -349,7 +352,12 @@ fn isKnownMethod(method: []const u8) bool {
 fn paramsIdentity(method: []const u8, params: ?std.json.Value) ?[]const u8 {
     const p = params orelse return null;
     if (p != .object) return null;
-    const key = if (std.mem.eql(u8, method, "resources/read")) "uri" else "name";
+    const key = if (std.mem.eql(u8, method, "resources/read"))
+        "uri"
+    else if (std.mem.startsWith(u8, method, "tasks/"))
+        "taskId"
+    else
+        "name";
     const v = p.object.get(key) orelse return null;
     return if (v == .string) v.string else null;
 }

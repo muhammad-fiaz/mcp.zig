@@ -791,6 +791,22 @@ pub const Task = struct {
     ttlMs: ?i64 = null,
     /// Suggested polling interval in milliseconds. Clients SHOULD honor it.
     pollIntervalMs: ?i64 = null,
+    /// Failure detail, present when `status` is `failed`.
+    @"error": ?TaskError = null,
+    /// Outstanding server-to-client requests, present when `status` is
+    /// `input_required`. The client answers them through `tasks/update`.
+    inputRequests: ?InputRequests = null,
+    /// Opaque state echoed back on the next `tasks/update`, so the server can
+    /// resume the round that is blocked on client input.
+    requestState: ?[]const u8 = null,
+};
+
+/// Why a task failed. `message` is human-readable and always present in
+/// results emitted by this library.
+pub const TaskError = struct {
+    code: ?i64 = null,
+    message: ?[]const u8 = null,
+    data: ?std.json.Value = null,
 };
 
 /// Metadata for augmenting a request with task execution.
@@ -951,6 +967,8 @@ pub const SubscriptionFilter = struct {
     resourcesListChanged: bool = false,
     /// Receive `notifications/resources/updated` for these resource URIs.
     resourceSubscriptions: ?[]const []const u8 = null,
+    /// Receive `notifications/tasks` for these task ids.
+    taskIds: ?[]const []const u8 = null,
 };
 
 /// Base result type. All results can carry _meta.

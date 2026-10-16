@@ -31,30 +31,38 @@
 
 ## What is MCP?
 
-**Model Context Protocol (MCP)** is an open-source standard for connecting AI applications to external systems.
-**Think of MCP like a USB-C port for AI applications.** Just as USB-C provides a standardized way to connect electronic devices, MCP provides a standardized way to connect AI applications to external systems.
+**Model Context Protocol (MCP)** is an open standard for connecting AI applications to external systems.
+It defines a common wire format and vocabulary for the tools, resources, and prompts an application exposes.
 
 ## Why mcp.zig?
 
 The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro) is an open standard by Anthropic for connecting AI applications to external systems. While MCP has official SDKs for TypeScript, Python, and other languages, **Zig currently lacks proper MCP support**.
 
-**mcp.zig** aims to fill this gap by providing a native, high-performance MCP implementation for the Zig programming language, enabling Zig developers to:
+**mcp.zig** is a native Zig implementation of MCP revision `2026-07-28`, with
+both a server and a client, so that Zig programs can:
 
-- Build MCP servers that expose tools, resources, and prompts to AI applications
-- Create MCP clients that connect to any MCP-compatible server
-- Leverage Zig's performance and safety features for AI integrations
+- Serve tools, resources, resource templates, and prompts to any MCP client
+- Act as an MCP client over STDIO or Streamable HTTP
+- Depend on a single external package (`httpx.zig`) rather than a runtime
 
 ## Features
 
-- **Server Framework** - Build MCP servers that expose tools, resources, and prompts
-- **Client Framework** - Create MCP clients with full support for roots, sampling, and elicitation
-- **MRTR Support** - Multi Round-Trip Requests via InputRequiredResult for interactive workflows
-- **Tasks System** - Advanced support for long-running, interactive tasks
-- **Rich Content** - Full support for text, images, audio, and embedded resources
-- **Transport Layer** - STDIO and HTTP transport support (httpx.zig)
-- **Full Protocol Support** - JSON-RPC 2.0, capability negotiation, lifecycle management
-- **Native Performance** - Written in pure Zig for optimal performance
-- **Comprehensive Testing** - Unit tests for all components
+- **Server framework** - Expose tools, resource templates, and prompts over STDIO or HTTP
+- **Client framework** - Connect over STDIO or HTTP and declare elicitation, sampling, roots, and extension capabilities
+- **MCP 2026-07-28** - Stateless per-request model: `server/discover` as the entry point, `_meta` on every request, `resultType` on every result, no `initialize` handshake
+- **MRTR** - Multi Round-Trip Requests: a handler returning `error.InputRequired` yields an `input_required` result that the client resolves and retries under a new request id
+- **Tasks extension** - Opt-in `io.modelcontextprotocol/tasks` support with in-memory task storage, `tasks/get`, `tasks/update`, and `tasks/cancel` on both sides
+- **Content types** - Text, image, audio, resource-link, and structured tool results
+- **Transports** - STDIO and Streamable HTTP, built on [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig)
+- **Middleware** - Optional rate limiting, request validation, batch requests, and logging around tool handlers
+- **Tests** - Unit tests for the protocol layer, transports, server, and client
+
+### Known limitations
+
+- **Streamable HTTP streams** - The transport vtable exchanges whole messages, so the per-request SSE stream lifetime that `subscriptions/listen` needs is not modelled end to end. The HTTP client accepts both `application/json` and `text/event-stream` responses; the HTTP server answers a single POST with a single response.
+- **Authorization** - Only `setAuthorizationToken` (a bearer token) is implemented. There is no protected-resource or authorization-server metadata discovery, no `WWW-Authenticate` parsing, no PKCE, dynamic client registration, token refresh, or step-up.
+- **Tasks** - The tasks extension implements `tasks/get`, `tasks/update`, and `tasks/cancel`. The server does not create tasks from `tools/call` and never emits `notifications/tasks`.
+- **Cancellation** - Cooperative and poll-based: a synchronous handler that never consults its cancellation token cannot be interrupted.
 
 ## Documentation
 
@@ -81,21 +89,18 @@ For the official MCP specification and resources, visit:
 
 ### Installation
 
-Run the following command to add mcp.zig to your project:
+mcp.zig requires **Zig 0.17.0** or later (`minimum_zig_version` in `build.zig.zon`).
 
 ```bash
-# Latest development branch
+# Current development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.17.0
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.9.tar.gz
-
-# Zig 0.16.x
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
-
-# Zig 0.15.x
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
+# Latest published release (Zig 0.17.0)
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
 ```
+
+Releases before `0.0.8` target older Zig versions; `0.0.3` and earlier implement
+protocol revision `2025-11-25`, not the `2026-07-28` revision documented below.
 
 Then in your `build.zig`:
 
@@ -136,6 +141,9 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     // Run with STDIO transport
     try server.run(io, allocator, .stdio);
+
+    // Or serve Streamable HTTP on POST /mcp:
+    // try server.run(io, allocator, .{ .http = .{ .host = "127.0.0.1", .port = 8080 } });
 }
 
 fn greetHandler(
@@ -169,50 +177,102 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     });
     defer client.deinit();
 
-    // Enable capabilities
-    client.enableSampling();
-    client.enableRoots(); // Deprecated; presence-only capability
+    // Declare client capabilities before the first request
+    client.enableSampling();     // Deprecated in 2026-07-28, still supported
+    client.enableRoots();        // Deprecated in 2026-07-28, presence-only
+    client.enableElicitation();  // Form and URL elicitation
+    try client.enableTasks();
 
-    // Connect to server
+    // Connect to a server
     try client.connectStdio("my-server-binary", &.{});
 
-    // Discover server capabilities (2026-07-28)
+    // server/discover is the entry point in 2026-07-28; there is no
+    // initialize handshake and no session id
     try client.discover();
-
-    // List tools
     try client.listTools();
+}
+```
+
+Request helpers such as `discover`, `listTools`, `callTool`, and `readResource`
+return `!void`: they write the request to the transport and do **not** hand back
+a request id. Results arrive as separate messages.
+
+- `handleMessage(payload)` takes one raw JSON-RPC message, resolves the matching
+  pending request, and stores its final result.
+- `takeResult(id)` returns the owned raw JSON of that result, which the caller
+  must `free`, or `null` while the request is still outstanding.
+
+`callToolResolved`, `readResourceResolved`, and `getPromptResolved` are the
+request helpers that return the id (`!i64`), because they drive MRTR rounds
+automatically:
+
+```zig
+const Resolver = struct {
+    fn resolve(
+        _: *anyopaque,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        _: std.json.Value,
+    ) anyerror!std.json.Value {
+        var answer: std.json.ObjectMap = .empty;
+        try answer.put(allocator, key, .{ .string = "accept" });
+        return .{ .object = answer };
+    }
+};
+
+fn call(io: std.Io, allocator: std.mem.Allocator) !void {
+    var client: mcp.Client = .init(io, allocator, .{ .name = "my-client", .version = "1.0.0" });
+    defer client.deinit();
+
+    try client.connectStdio("my-server-binary", &.{});
+
+    const id = try client.callToolResolved("greet", null, .{
+        .ctx = undefined,
+        .resolve = Resolver.resolve,
+    });
+
+    // Pump every message the transport delivers
+    const t = client.transport orelse return error.NotConnected;
+    if (try t.receive(io, allocator)) |message| {
+        defer allocator.free(message);
+        try client.handleMessage(message);
+    }
+
+    if (client.takeResult(id)) |raw| {
+        defer allocator.free(raw);
+        // raw is the JSON text of the result
+    }
 }
 ```
 
 ## Examples
 
-The `examples/` directory contains several example implementations:
+The `examples/` directory contains fifteen runnable programs, each wired to its own
+build step:
 
 | Example                                                 | Description                                        | Run step           |
 | ------------------------------------------------------- | -------------------------------------------------- | ------------------ |
-| [simple_server.zig](examples/simple_server.zig)         | Basic server with greeting tool                    | `run-server`       |
-| [simple_client.zig](examples/simple_client.zig)         | Basic client setup                                 | `run-client`       |
-| [full_client.zig](examples/full_client.zig)             | Full client/server round trip: calls every tool    | `run-full-client`  |
-| [weather_server.zig](examples/weather_server.zig)       | Weather information server                         | `run-weather`      |
-| [calculator_server.zig](examples/calculator_server.zig) | Calculator with arithmetic operations              | `run-calc`         |
-| [advanced_server.zig](examples/advanced_server.zig)     | Advanced schemas and task support                  | `run-advanced`     |
-| [filesystem_server.zig](examples/filesystem_server.zig) | Filesystem resources server                        | `run-filesystem`   |
-| [notes_server.zig](examples/notes_server.zig)           | In-memory notes server                             | `run-notes`        |
-| [http_server.zig](examples/http_server.zig)             | HTTP transport server                              | `run-http`         |
-| [middleware_server.zig](examples/middleware_server.zig) | Middleware usage server                            | `run-middleware`   |
-| [batch_client.zig](examples/batch_client.zig)           | Batch request client                               | `run-batch`        |
-| [rate_limiter_example.zig](examples/rate_limiter_example.zig) | Rate limiter example                        | `run-rate-limiter` |
-| [health_check_example.zig](examples/health_check_example.zig) | Health check example                        | `run-health-check` |
-| [shutdown_example.zig](examples/shutdown_example.zig)   | Graceful shutdown example                          | `run-shutdown`     |
-| [validator_example.zig](examples/validator_example.zig) | Request validator example                          | `run-validator`    |
+| [simple_server.zig](examples/simple_server.zig)         | Minimal server: two tools, one resource, one prompt | `run-server`       |
+| [simple_client.zig](examples/simple_client.zig)         | Connect, discover, list tools/resources/prompts     | `run-client`       |
+| [full_client.zig](examples/full_client.zig)             | Client and server over a loopback transport, asserting every response | `run-full-client`  |
+| [weather_server.zig](examples/weather_server.zig)       | Multi-tool weather server with a resource template  | `run-weather`      |
+| [calculator_server.zig](examples/calculator_server.zig) | Arithmetic tools with structured output schemas     | `run-calc`         |
+| [advanced_server.zig](examples/advanced_server.zig)     | JSON Schema 2020-12, icons, annotations, templates, tasks extension | `run-advanced`     |
+| [filesystem_server.zig](examples/filesystem_server.zig) | Dynamic filesystem resources and URI templates      | `run-filesystem`   |
+| [notes_server.zig](examples/notes_server.zig)           | Stateful in-memory notes with list-change notifications | `run-notes`      |
+| [http_server.zig](examples/http_server.zig)             | HTTP transport server on `127.0.0.1:8080`           | `run-http`         |
+| [middleware_server.zig](examples/middleware_server.zig) | Wrapping tool handlers in middleware                | `run-middleware`   |
+| [batch_client.zig](examples/batch_client.zig)           | Sending several requests as one JSON-RPC batch      | `run-batch`        |
+| [rate_limiter_example.zig](examples/rate_limiter_example.zig) | Rate limiting tool calls                     | `run-rate-limiter` |
+| [health_check_example.zig](examples/health_check_example.zig) | The built-in `health/check` method            | `run-health-check` |
+| [shutdown_example.zig](examples/shutdown_example.zig)   | Graceful shutdown after the current request         | `run-shutdown`     |
+| [validator_example.zig](examples/validator_example.zig) | Validating tool arguments against a schema          | `run-validator`    |
 
-Run examples:
+Build every example without running it, or run one:
 
 ```bash
-# Build all examples
 zig build run-all-examples
 
-# Run examples
 zig build run-server
 zig build run-weather
 zig build run-calc
@@ -223,32 +283,32 @@ zig build run-advanced
 
 ```
 src/
-├── mcp.zig              # Main entry point
+├── mcp.zig              # Module entry point and re-exports
 ├── version.zig          # Library version
-├── report.zig           # Error reporting
+├── report.zig           # Error reporting (mcp.reportError, mcp.ISSUES_URL)
 ├── protocol/
-│   ├── protocol.zig     # MCP protocol definitions
-│   ├── types.zig        # Type definitions
-│   ├── jsonrpc.zig      # JSON-RPC 2.0 implementation
-│   └── schema.zig       # JSON Schema utilities
+│   ├── protocol.zig     # Methods, _meta keys, error codes, HTTP headers
+│   ├── types.zig        # Payload and capability types
+│   ├── jsonrpc.zig      # JSON-RPC 2.0 codec
+│   ├── schema.zig       # JSON Schema 2020-12 builders
+│   └── param_headers.zig # x-mcp-header parameter annotations
 ├── transport/
-│   └── transport.zig    # STDIO and HTTP transports (httpx.zig)
+│   └── transport.zig    # Transport vtable, STDIO and HTTP (httpx.zig)
 ├── server/
 │   ├── server.zig       # Server implementation
-│   ├── tools.zig        # Tool primitive
-│   ├── resources.zig    # Resource primitive
+│   ├── http_rules.zig   # Streamable HTTP header and origin validation
+│   ├── tools.zig        # Tool primitive and ToolBuilder
+│   ├── resources.zig    # Resource primitive and templates
 │   └── prompts.zig      # Prompt primitive
 ├── client/
 │   ├── client.zig       # Client implementation
 │   ├── elicitation.zig  # Elicitation support
-│   ├── roots.zig        # Roots support
-│   └── sampling.zig     # Sampling support
+│   ├── roots.zig        # Roots support (deprecated)
+│   └── sampling.zig     # Sampling support (deprecated)
 └── utils/
     ├── mod.zig          # Utility module index
-    ├── errors.zig       # Error definitions
     ├── logging.zig      # Logging helpers
-    ├── middleware.zig   # Middleware, batching, validation
-    ├── network.zig      # Network helpers
+    ├── middleware.zig   # Rate limiting, batching, validation
     └── progress.zig     # Progress reporting
 ```
 
@@ -256,7 +316,9 @@ src/
 
 ### Tools
 
-Tools are executable functions that AI applications can invoke:
+Tools are functions that an AI application can invoke. A handler receives
+`(?*anyopaque, std.Io, std.mem.Allocator, ?std.json.Value)` and returns
+`mcp.tools.ToolError!mcp.tools.ToolResult`:
 
 ```zig
 try server.addTool(.{
@@ -266,9 +328,30 @@ try server.addTool(.{
 });
 ```
 
+`mcp.ToolBuilder.init(name)` takes one argument and `.build()` is not
+fallible, so a builder chain never needs `try` on `build()`:
+
+```zig
+const tool = mcp.ToolBuilder.init("search_files")
+    .description("Search for files matching a pattern")
+    .inputSchema(schema)
+    .readOnly()
+    .handler(searchHandler)
+    .build();
+
+try server.addTool(tool);
+```
+
+`inputSchema` and `outputSchema` are complete JSON Schema 2020-12 documents.
+Keywords the typed schema builder cannot express are supplied through
+`InputSchema.fromJson(value)` or `ToolBuilder.inputSchemaFromRaw(value)`; the
+server emits that document verbatim before overlaying the typed fields.
+
 ### Resources
 
-Resources provide read-only data to AI applications:
+Resources expose read-only data. A handler receives
+`(?*anyopaque, std.Io, std.mem.Allocator, []const u8)` and returns
+`mcp.resources.ResourceError!mcp.resources.ResourceContent`:
 
 ```zig
 try server.addResource(.{
@@ -279,9 +362,13 @@ try server.addResource(.{
 });
 ```
 
+Parameterised URIs use `addResourceTemplate` with a `uriTemplate`.
+
 ### Prompts
 
-Prompts are reusable templates for LLM interactions:
+Prompts are reusable message templates. A handler receives
+`(?*anyopaque, std.Io, std.mem.Allocator, ?std.json.Value)` and returns
+`mcp.prompts.PromptError![]const mcp.prompts.PromptMessage`:
 
 ```zig
 try server.addPrompt(.{
@@ -298,36 +385,57 @@ try server.addPrompt(.{
 
 ### Roots
 
-Define filesystem boundaries:
+Advertise the filesystem boundaries a server may work within. Deprecated in
+`2026-07-28` but still supported; the capability is presence-only, there is no
+`listChanged` flag, and the server ignores
+`notifications/roots/list_changed`:
 
 ```zig
 client.enableRoots();
-try client.addRoot(allocator, "file:///projects", "Projects");
+try client.addRoot("file:///projects", "Projects");
 ```
 
 ### Sampling
 
-Allow servers to request LLM completions:
+Allow a server to request an LLM completion, in practice through an
+`input_required` round. Also deprecated in `2026-07-28` but supported:
 
 ```zig
 client.enableSampling();
+// Or, with optional context and tools support:
+client.enableSamplingAdvanced(true, true);
+```
+
+### Elicitation
+
+```zig
+client.enableElicitation(); // Form and URL elicitation
+client.enableElicitationForm();
+client.enableElicitationUrl();
 ```
 
 ## Testing
 
-Run the test suite:
+Run the unit tests:
 
 ```bash
 zig build test
+zig build test --summary all
 ```
 
-Compile tests for a target without executing them (useful for cross-target validation):
+Compile the tests and every example for another target without executing them,
+which works for targets that cannot run on the host:
 
 ```bash
 zig build test-compile -Dtarget=x86_64-linux
 zig build test-compile -Dtarget=x86_64-windows
 zig build test-compile -Dtarget=x86_64-macos
 ```
+
+CI runs these three commands on Linux, Windows, and macOS: `zig build test`,
+`zig build run-all-examples`, and `zig fmt --check src examples build.zig`.
+`zig fmt --check src examples build.zig` should also pass locally before you
+open a pull request.
 
 ## Generating Documentation
 
@@ -341,41 +449,57 @@ The generated files (including `index.html`, `main.js`, and `main.wasm`) will be
 
 ## Protocol Version
 
-This library implements MCP protocol version **2026-07-28**, and speaks that
-version by default everywhere. Every request carries its version and the
-client's capabilities in `_meta`; there is no `initialize` handshake.
+This library implements MCP protocol version **2026-07-28** (`protocol.VERSION`)
+and speaks that revision everywhere. There is no `initialize` handshake, no
+`ping`, no `logging/setLevel`, no `resources/subscribe` or `resources/unsubscribe`,
+and no `Mcp-Session-Id`: `server/discover` is the entry point and every request is
+independent. Each request carries `_meta` with
+`io.modelcontextprotocol/protocolVersion`,
+`io.modelcontextprotocol/clientInfo`, and
+`io.modelcontextprotocol/clientCapabilities`; each result carries a `resultType`
+of `"complete"`, `"input_required"`, or `"task"`. Cacheable results may add
+`ttlMs` and `cacheScope`.
 
-| Version    | Status                    |
-| ---------- | ------------------------- |
-| 2026-07-28 | Supported (default)       |
+| Version    | Status              |
+| ---------- | ------------------- |
+| 2026-07-28 | Supported (default) |
 
 Earlier revisions (`2025-11-25` and older) are **not** supported: they
 established a session with an `initialize` handshake, which this revision
-removed. A server speaking one of them will reject these requests, and this
-client will not fall back to the legacy handshake.
+removed. This library offers no legacy fallback, and a server speaking an
+earlier revision rejects these requests.
+
+Methods removed by `2026-07-28` and deliberately not implemented:
+`initialize`, `notifications/initialized`, `ping`, `logging/setLevel`,
+`notifications/roots/list_changed`, `resources/subscribe`,
+`resources/unsubscribe`, `tasks/result`, and `tasks/list`. Resource
+subscriptions use `subscriptions/listen`, which the server ends with
+`Server.endSubscription`.
 
 ### Deprecated but supported features
 
-Roots, Sampling, and Logging are deprecated in `2026-07-28` but remain part of
-the specification, so they are fully supported here:
+Roots, Sampling, and Logging are deprecated in `2026-07-28` but remain in the
+specification, and mcp.zig implements them:
 
-- **Roots** and **Sampling** are reachable through Multi Round-Trip Requests,
-  because the MRTR schema still defines `ListRootsRequest` and
-  `CreateMessageRequest` as valid `inputRequests` entries.
-- **Logging** is per-request: a client opts in with
-  `_meta.io.modelcontextprotocol/logLevel`, and the server emits no
-  `notifications/message` when the field is absent. The removed
-  `logging/setLevel` method is not implemented.
+- **Roots** and **Sampling** are reachable through Multi Round-Trip Requests:
+  the MRTR schema still defines `ListRootsRequest` and `CreateMessageRequest`
+  as valid `inputRequests` entries, and a handler that returns
+  `error.InputRequired` turns into such a request.
+- **Logging** is per-request. A client opts in with
+  `_meta.io.modelcontextprotocol/logLevel`, and `Server.sendLogMessage` emits
+  `notifications/message` only for requests that supplied the field.
+  `logging/setLevel` is not implemented.
+- Roots is presence-only (`roots?: {}`). There is no `listChanged` flag and no
+  `notifyRootsChanged` on the client; the server ignores
+  `notifications/roots/list_changed`.
 
-New code should prefer tool parameters, resource URIs, and `stderr` over these
-features.
+Prefer tool parameters, resource URIs, and `stderr` for new work.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributing Guide](https://muhammad-fiaz.github.io/mcp.zig/contributing) for guidelines.
-For security vulnerabilities, see [SECURITY.md](SECURITY.md) — report privately using the contact details listed there.
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [Contributing guide](https://muhammad-fiaz.github.io/mcp.zig/contributing).
+For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## Support
 

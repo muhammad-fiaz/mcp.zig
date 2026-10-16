@@ -212,7 +212,9 @@ pub const Server = struct {
     /// Open `subscriptions/listen` streams, keyed by the JSON-RPC id of the
     /// listen request. Every notification matching a subscription is tagged
     /// with that id so clients can demultiplex concurrent subscriptions.
-    subscriptions: std.AutoHashMap(i64, types.SubscriptionFilter),
+    subscriptions: std.AutoHashMap(i64, Subscription),
+    /// Guarantees distinct task ids even when the entropy source fails.
+    next_task_seq: u64 = 0,
     log_level: protocol.LogLevel = .info,
     /// Log level requested by the request currently being handled, from
     /// `_meta.io.modelcontextprotocol/logLevel`. Null means the client did not
@@ -237,6 +239,20 @@ pub const Server = struct {
     const TaskEntry = struct {
         task: types.Task,
         result_json: []const u8,
+        /// Owns the single buffer referenced by BOTH `task.statusMessage` and
+        /// `task.error.?.message`, so it is only ever freed through here.
+        error_message: ?[]const u8 = null,
+    };
+
+    /// An open `subscriptions/listen` stream.
+    ///
+    /// The filter outlives the request that negotiated it, so anything read
+    /// from the request arena has to be copied into the server allocator and
+    /// tracked here. `owned` is false only for filters installed directly by
+    /// tests with static storage.
+    const Subscription = struct {
+        filter: types.SubscriptionFilter,
+        owned: bool = false,
     };
 
     /// Initialize a new MCP Server
@@ -264,6 +280,8 @@ pub const Server = struct {
         self.deinitTasks();
         self.pending_requests.deinit();
         self.cancelled_requests.deinit();
+        var subs = self.subscriptions.iterator();
+        while (subs.next()) |entry| self.freeSubscription(entry.value_ptr.*);
         self.subscriptions.deinit();
         if (self.capabilities.extensions) |ext| {
             if (ext == .object) {
@@ -891,17 +909,33 @@ pub const Server = struct {
                     }
                 }
                 arguments = params.object.get("arguments");
-                // The tasks extension removed the `task` opt-in parameter, so
-                // this is only honoured for a legacy 2025-11-25 client.
-                if (params.object.get("task")) |task_val| {
-                    if (task_val == .object) {
-                        var ttl: ?i64 = null;
-                        if (task_val.object.get("ttl")) |ttl_val| {
-                            if (ttl_val == .integer) {
-                                ttl = @intCast(ttl_val.integer);
+                // 2026-07-28: the tasks extension opts in through request
+                // `_meta`, so a compliant client never sends a `task` param.
+                if (params.object.get("_meta")) |meta| {
+                    if (meta == .object) {
+                        if (meta.object.get(protocol.META_TASK)) |task_val| {
+                            if (task_val == .object) {
+                                var ttl: ?i64 = null;
+                                if (task_val.object.get("ttl")) |ttl_val| {
+                                    if (ttl_val == .integer) ttl = ttl_val.integer;
+                                }
+                                task_meta = .{ .ttl = ttl };
                             }
                         }
-                        task_meta = .{ .ttl = ttl };
+                    }
+                }
+                // Retained only for a legacy 2025-11-25 client.
+                if (task_meta == null) {
+                    if (params.object.get("task")) |task_val| {
+                        if (task_val == .object) {
+                            var ttl: ?i64 = null;
+                            if (task_val.object.get("ttl")) |ttl_val| {
+                                if (ttl_val == .integer) {
+                                    ttl = @intCast(ttl_val.integer);
+                                }
+                            }
+                            task_meta = .{ .ttl = ttl };
+                        }
                     }
                 }
             }
@@ -928,6 +962,7 @@ pub const Server = struct {
                 }
 
                 var status_message: ?[]const u8 = null;
+                errdefer if (status_message) |m| self.allocator.free(m);
                 const tool_result: tools_mod.ToolResult = tool.handler(tool.user_data, io, allocator, arguments) catch |err| blk: {
                     const msg = try std.fmt.allocPrint(self.allocator, "{s}", .{@errorName(err)});
                     status_message = msg;
@@ -936,27 +971,55 @@ pub const Server = struct {
                     break :blk tools_mod.ToolResult{ .content = content, .is_error = true };
                 };
 
+                // A handler may also report failure by returning an error
+                // result instead of throwing. A failed task has to carry the
+                // reason, so lift it out of the first text block.
+                if (tool_result.is_error and status_message == null) {
+                    for (tool_result.content) |block| {
+                        if (block == .text) {
+                            status_message = try self.allocator.dupe(u8, block.text.text);
+                            break;
+                        }
+                    }
+                }
+
                 const result_json = try self.serializeToolCallResult(tool_result);
-                const task_id = try generateTaskId(io, self.allocator);
+                const task_id = try self.generateTaskId(io, self.allocator);
                 const created_at = try nowIsoTimestamp(io, self.allocator);
                 const updated_at = try self.allocator.dupe(u8, created_at);
 
-                const task: types.Task = .{
+                // `statusMessage` and `error.message` share one owned buffer,
+                // freed once through `TaskEntry.error_message`.
+                var task: types.Task = .{
                     .taskId = task_id,
                     .status = if (tool_result.is_error) .failed else .completed,
-                    .statusMessage = status_message,
                     .createdAt = created_at,
                     .lastUpdatedAt = updated_at,
                     .ttlMs = if (task_meta) |meta| meta.ttl else null,
                     .pollIntervalMs = null,
                 };
+                if (status_message) |msg| {
+                    task.statusMessage = msg;
+                    // A failed task must carry the reason, not just a label.
+                    if (tool_result.is_error) {
+                        task.@"error" = .{ .message = msg };
+                    }
+                }
 
-                try self.tasks.put(task_id, .{ .task = task, .result_json = result_json });
+                try self.tasks.put(task_id, .{ .task = task, .result_json = result_json, .error_message = status_message });
 
                 const task_obj = try buildTaskObject(allocator, task);
                 var result: std.json.ObjectMap = .empty;
                 try result.put(allocator, "task", .{ .object = task_obj });
-                try Self.putResultComplete(allocator, &result);
+                try Self.putResultTask(allocator, &result);
+
+                // Let the client correlate this acknowledgement with the task
+                // without having to parse the embedded snapshot.
+                var task_meta_obj: std.json.ObjectMap = .empty;
+                try task_meta_obj.put(allocator, "taskId", .{ .string = task_id });
+                var result_meta: std.json.ObjectMap = .empty;
+                try result_meta.put(allocator, protocol.META_RELATED_TASK, .{ .object = task_meta_obj });
+                try result.put(allocator, "_meta", .{ .object = result_meta });
 
                 const response = jsonrpc.createResponse(request.id, .{ .object = result });
                 try self.sendResponse(io, allocator, .{ .response = response });
@@ -1326,6 +1389,11 @@ pub const Server = struct {
             }
         }
 
+        // The parsed string arrays belong to the request allocator and the
+        // negotiated copy is deep-copied below, so release them when this
+        // request finishes.
+        defer Self.freeFilterLists(allocator, requested);
+
         // Honour only what this server actually supports.
         const agreed = types.SubscriptionFilter{
             .toolsListChanged = requested.toolsListChanged and
@@ -1338,6 +1406,8 @@ pub const Server = struct {
                 requested.resourceSubscriptions
             else
                 null,
+            // Task notifications only exist when the tasks extension is declared.
+            .taskIds = if (self.hasExtension(protocol.EXTENSION_TASKS)) requested.taskIds else null,
         };
 
         var ack_meta: std.json.ObjectMap = .empty;
@@ -1354,6 +1424,13 @@ pub const Server = struct {
                 try ack_filter.put(allocator, "resourceSubscriptions", .{ .array = arr });
             }
         }
+        if (agreed.taskIds) |ids| {
+            if (ids.len > 0) {
+                var arr: std.json.Array = .init(allocator);
+                for (ids) |id| try arr.append(.{ .string = id });
+                try ack_filter.put(allocator, "taskIds", .{ .array = arr });
+            }
+        }
 
         // The subscription id travels in params._meta, not at the top of
         // params, alongside the agreed filter.
@@ -1365,7 +1442,45 @@ pub const Server = struct {
 
         // Keep the stream open: record the agreed filter so later change
         // notifications are routed here with this subscription's id attached.
-        try self.subscriptions.put(listen_id, agreed);
+        try self.subscriptions.put(listen_id, .{ .filter = try self.ownSubscriptionFilter(agreed), .owned = true });
+    }
+
+    /// Deep-copies the negotiated filter into the server allocator.
+    ///
+    /// `params` (and therefore `requested`) lives in the per-request arena, so
+    /// storing its slices directly would leave the open subscription reading
+    /// freed memory once the request completes.
+    fn ownSubscriptionFilter(self: *Self, filter: types.SubscriptionFilter) !types.SubscriptionFilter {
+        var owned = filter;
+        owned.resourceSubscriptions = try self.dupeStringList(filter.resourceSubscriptions);
+        owned.taskIds = try self.dupeStringList(filter.taskIds);
+        return owned;
+    }
+
+    fn dupeStringList(self: *Self, list: ?[]const []const u8) !?[]const []const u8 {
+        const items = list orelse return null;
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc([]const u8, items.len);
+        errdefer self.allocator.free(out);
+        for (items, out) |item, *slot| slot.* = try self.allocator.dupe(u8, item);
+        return out;
+    }
+
+    /// Frees an owned subscription filter. Safe to call on borrowed filters.
+    fn freeSubscription(self: *Self, sub: Subscription) void {
+        if (!sub.owned) return;
+        if (sub.filter.resourceSubscriptions) |list| {
+            if (list.len > 0) {
+                for (list) |s| self.allocator.free(s);
+                self.allocator.free(list);
+            }
+        }
+        if (sub.filter.taskIds) |list| {
+            if (list.len > 0) {
+                for (list) |s| self.allocator.free(s);
+                self.allocator.free(list);
+            }
+        }
     }
 
     /// Tears a subscription down at the server's initiative.
@@ -1374,7 +1489,8 @@ pub const Server = struct {
     /// originating `subscriptions/listen` request, with the subscription id in
     /// `_meta` of the result, before the stream closes.
     pub fn endSubscription(self: *Self, io: anytype, allocator: std.mem.Allocator, subscription_id: i64) !void {
-        if (self.subscriptions.fetchRemove(subscription_id) == null) return;
+        const removed = self.subscriptions.fetchRemove(subscription_id) orelse return;
+        self.freeSubscription(removed.value);
 
         var result: std.json.ObjectMap = .empty;
         defer result.deinit(allocator);
@@ -1416,7 +1532,7 @@ pub const Server = struct {
         defer ids.deinit(allocator);
         var it = self.subscriptions.iterator();
         while (it.next()) |entry| {
-            if (admits(entry.value_ptr.*, subject)) try ids.append(allocator, entry.key_ptr.*);
+            if (admits(entry.value_ptr.filter, subject)) try ids.append(allocator, entry.key_ptr.*);
         }
 
         for (ids.items) |sub_id| {
@@ -1450,15 +1566,44 @@ pub const Server = struct {
             if (v == .bool) filter.resourcesListChanged = v.bool;
         }
         if (obj.get("resourceSubscriptions")) |v| {
-            if (v == .array) {
-                var list: std.ArrayList([]const u8) = .empty;
-                for (v.array.items) |item| {
-                    if (item == .string) list.append(allocator, item.string) catch return filter;
-                }
-                filter.resourceSubscriptions = list.items;
-            }
+            if (v == .array) filter.resourceSubscriptions = copyStringArray(allocator, v);
+        }
+        if (obj.get("taskIds")) |v| {
+            if (v == .array) filter.taskIds = copyStringArray(allocator, v);
         }
         return filter;
+    }
+
+    /// Copies the strings of a JSON string array into a single slice owned by
+    /// `allocator`. The scratch `ArrayList` is released, so the only allocation
+    /// handed back is the one the caller must free.
+    /// Releases the string arrays `copyStringArray` allocated in a request.
+    fn freeFilterLists(allocator: std.mem.Allocator, filter: types.SubscriptionFilter) void {
+        if (filter.resourceSubscriptions) |list| {
+            if (list.len > 0) allocator.free(list);
+        }
+        if (filter.taskIds) |list| {
+            if (list.len > 0) allocator.free(list);
+        }
+    }
+
+    fn copyStringArray(allocator: std.mem.Allocator, value: std.json.Value) ?[]const []const u8 {
+        var list: std.ArrayList([]const u8) = .empty;
+        defer list.deinit(allocator);
+        for (value.array.items) |item| {
+            if (item == .string) list.append(allocator, item.string) catch return null;
+        }
+        return allocator.dupe([]const u8, list.items) catch null;
+    }
+
+    /// Admits `notifications/tasks` for the task id it is asked about.
+    fn admitsTask(f: types.SubscriptionFilter, subject: ?[]const u8) bool {
+        const ids = f.taskIds orelse return false;
+        const subject_id = subject orelse return false;
+        for (ids) |id| {
+            if (std.mem.eql(u8, id, subject_id)) return true;
+        }
+        return false;
     }
 
     /// Handle prompts/list request
@@ -1900,7 +2045,8 @@ pub const Server = struct {
                         // than just recording a cancellation a handler would
                         // never poll.
                         if (req_id == .integer) {
-                            if (self.subscriptions.fetchRemove(req_id.integer) != null) {
+                            if (self.subscriptions.fetchRemove(req_id.integer)) |removed| {
+                                self.freeSubscription(removed.value);
                                 return;
                             }
                         }
@@ -2105,13 +2251,112 @@ pub const Server = struct {
         try self.tasks.put(task_id, entry);
     }
 
+    /// A change to a stored task, applied by `storeTask` and `updateTask`.
+    pub const TaskUpdate = struct {
+        status: types.TaskStatus,
+        /// Human-readable progress or failure note.
+        statusMessage: ?[]const u8 = null,
+        /// Failure detail. Required in practice when `status` is `failed`, in
+        /// which case a message is synthesised from `statusMessage` if absent.
+        errorMessage: ?[]const u8 = null,
+        errorCode: ?i64 = null,
+        /// Outstanding client requests, for `input_required` tasks.
+        inputRequests: ?types.InputRequests = null,
+        /// Opaque state for the next `tasks/update` round.
+        requestState: ?[]const u8 = null,
+        pollIntervalMs: ?i64 = null,
+    };
+
+    /// Applies `update` to a stored task and pushes `notifications/tasks` to
+    /// every subscription watching that task id.
+    ///
+    /// The strings in `update` are copied into the server's allocator;
+    /// `inputRequests` and `requestState` are only read while the notification
+    /// is being built, so pass arena-backed values.
+    pub fn updateTask(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        task_id: []const u8,
+        update: TaskUpdate,
+    ) !void {
+        const entry = self.tasks.getPtr(task_id) orelse return error.UnknownTask;
+
+        if (update.statusMessage orelse update.errorMessage) |msg| {
+            const owned = try self.allocator.dupe(u8, msg);
+            if (entry.error_message) |old| self.allocator.free(old);
+            entry.error_message = owned;
+            entry.task.statusMessage = owned;
+        }
+        if (update.errorMessage != null or update.status == .failed) {
+            if (entry.task.statusMessage) |m| {
+                entry.task.@"error" = .{ .code = update.errorCode, .message = m };
+            }
+        } else if (update.status != .failed) {
+            entry.task.@"error" = null;
+        }
+
+        entry.task.status = update.status;
+        entry.task.pollIntervalMs = update.pollIntervalMs;
+        entry.task.requestState = update.requestState;
+        entry.task.inputRequests = update.inputRequests;
+
+        const stamp = try nowIsoTimestamp(io, self.allocator);
+        defer self.allocator.free(stamp);
+        const previous = entry.task.lastUpdatedAt;
+        entry.task.lastUpdatedAt = try self.allocator.dupe(u8, stamp);
+        self.allocator.free(previous);
+
+        try self.notifyTask(io, allocator, task_id);
+    }
+
+    /// Pushes the current state of `task_id` as `notifications/tasks`.
+    ///
+    /// Only subscriptions whose filter lists this task id receive it.
+    pub fn notifyTask(
+        self: *Self,
+        io: anytype,
+        allocator: std.mem.Allocator,
+        task_id: []const u8,
+    ) !void {
+        const entry = self.tasks.getPtr(task_id) orelse return error.UnknownTask;
+
+        // The notification is serialized here and discarded, so its whole
+        // object graph is scoped to a local arena rather than the caller's.
+        var arena: std.heap.ArenaAllocator = .init(allocator);
+        defer arena.deinit();
+        const scratch = arena.allocator();
+
+        var params: std.json.ObjectMap = .empty;
+        try params.put(scratch, "task", .{ .object = try buildTaskObject(scratch, entry.task) });
+        try self.broadcastSubscription(io, scratch, "notifications/tasks", params, task_id, admitsTask);
+    }
+
+    /// Reads a stored task, or null when the id is unknown or expired.
+    pub fn getTask(self: *Self, task_id: []const u8) ?types.Task {
+        const entry = self.tasks.get(task_id) orelse return null;
+        return entry.task;
+    }
+
+    /// Removes a stored task and frees its owned strings.
+    pub fn removeTask(self: *Self, task_id: []const u8) bool {
+        const removed = self.tasks.fetchRemove(task_id) orelse return false;
+        self.allocator.free(removed.value.task.taskId);
+        self.allocator.free(removed.value.task.createdAt);
+        self.allocator.free(removed.value.task.lastUpdatedAt);
+        if (removed.value.error_message) |m| self.allocator.free(m);
+        self.allocator.free(removed.value.result_json);
+        return true;
+    }
+
     fn deinitTasks(self: *Self) void {
         var iter = self.tasks.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.task.taskId);
             self.allocator.free(entry.value_ptr.task.createdAt);
             self.allocator.free(entry.value_ptr.task.lastUpdatedAt);
-            if (entry.value_ptr.task.statusMessage) |msg| {
+            // `statusMessage` and `error.message` alias this one buffer.
+            if (entry.value_ptr.error_message) |msg| {
                 self.allocator.free(msg);
             }
             self.allocator.free(entry.value_ptr.result_json);
@@ -2146,9 +2391,16 @@ pub const Server = struct {
         });
     }
 
-    fn generateTaskId(io: anytype, allocator: std.mem.Allocator) ![]const u8 {
-        var bytes: [16]u8 = undefined;
-        io.randomSecure(&bytes) catch io.random(&bytes);
+    fn generateTaskId(self: *Self, io: anytype, allocator: std.mem.Allocator) ![]const u8 {
+        // Entropy may be unavailable (for example under a failing test `Io`).
+        // Mixing in a per-server counter keeps ids unique regardless, instead
+        // of handing out an uninitialised buffer.
+        var bytes: [16]u8 = @splat(0);
+        if (io.randomSecure(&bytes)) |_| {} else |_| {
+            io.random(&bytes);
+        }
+        std.mem.writeInt(u64, bytes[8..16], self.next_task_seq, .little);
+        self.next_task_seq += 1;
 
         var hex_buf: [32]u8 = undefined;
         var i: usize = 0;
@@ -2238,6 +2490,22 @@ pub const Server = struct {
         if (task.pollIntervalMs) |interval| {
             try task_obj.put(allocator, "pollIntervalMs", .{ .integer = interval });
         }
+        // A failed task must explain itself; clients render `error` verbatim.
+        if (task.@"error") |err| {
+            var err_obj: std.json.ObjectMap = .empty;
+            if (err.code) |code| try err_obj.put(allocator, "code", .{ .integer = code });
+            if (err.message) |msg| try err_obj.put(allocator, "message", .{ .string = msg });
+            if (err.data) |data| try err_obj.put(allocator, "data", data);
+            try task_obj.put(allocator, "error", .{ .object = err_obj });
+        }
+        // An `input_required` task carries the round it is blocked on so the
+        // client knows what to answer and the server can resume it.
+        if (task.inputRequests) |requests| {
+            try task_obj.put(allocator, "inputRequests", .{ .object = requests });
+        }
+        if (task.requestState) |state| {
+            try task_obj.put(allocator, "requestState", .{ .string = state });
+        }
         return task_obj;
     }
 
@@ -2286,6 +2554,14 @@ pub const Server = struct {
     /// Every result emitted by the server carries this in MCP 2026-07-28.
     fn putResultComplete(allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
         try result.put(allocator, "resultType", .{ .string = protocol.RESULT_TYPE_COMPLETE });
+    }
+
+    /// Marks a result as a task acknowledgement: `resultType: "task"`.
+    ///
+    /// A task-augmented request answers with this discriminator plus the
+    /// `task` snapshot; the real outcome is retrieved later via `tasks/get`.
+    pub fn putResultTask(allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
+        try result.put(allocator, "resultType", .{ .string = protocol.RESULT_TYPE_TASK });
     }
 
     /// Builds an MRTR `InputRequiredResult` payload.
@@ -3418,6 +3694,196 @@ test "spec: subscriptions/listen acknowledges and stays open" {
     );
 }
 
+test "spec: task-augmented tools/call answers resultType task and reports failures" {
+    const a = std.testing.allocator;
+
+    const OkHandler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, al: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.textResult(al, "done") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+    const FailHandler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, al: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.errorResult(al, "boom") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    var server = Server.init(a, .{ .name = "task-result", .version = "1.0.0" });
+    defer server.deinit();
+    try server.declareExtension(a, protocol.EXTENSION_TASKS);
+    try server.addTool(.{
+        .name = "slow",
+        .description = "runs as a task",
+        .handler = OkHandler.handler,
+        .execution = .{ .taskSupport = "optional" },
+    });
+    try server.addTool(.{
+        .name = "failing",
+        .description = "fails as a task",
+        .handler = FailHandler.handler,
+        .execution = .{ .taskSupport = "optional" },
+    });
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    const task_caps = "\"io.modelcontextprotocol/clientCapabilities\":{\"extensions\":{\"io.modelcontextprotocol/tasks\":{}}}";
+
+    // The 2026-07-28 opt-in lives in request _meta, not a `task` param.
+    const slow_req = try std.fmt.allocPrint(
+        a,
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"slow","_meta":{{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/task":{{"ttl":60000}},{s}}}}}}}
+    ,
+        .{task_caps},
+    );
+    defer a.free(slow_req);
+    try server.handleMessage(std.Io.failing, a, slow_req);
+
+    var ok = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer ok.deinit();
+    const ok_result = ok.value.object.get("result").?.object;
+    // A task acknowledgement is `resultType: "task"`, never "complete".
+    try std.testing.expectEqualStrings("task", ok_result.get("resultType").?.string);
+    const ok_task = ok_result.get("task").?.object;
+    try std.testing.expectEqualStrings("completed", ok_task.get("status").?.string);
+    try std.testing.expectEqual(@as(i64, 60000), ok_task.get("ttlMs").?.integer);
+    try std.testing.expect(!ok_task.contains("error"));
+    // The result correlates back to the task id.
+    const related = ok_result.get("_meta").?.object.get(protocol.META_RELATED_TASK).?.object;
+    try std.testing.expectEqualStrings(ok_task.get("taskId").?.string, related.get("taskId").?.string);
+
+    // A failing task must explain itself through `error`.
+    collector.clearMessages();
+    const fail_req = try std.fmt.allocPrint(
+        a,
+        \\{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"failing","_meta":{{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/task":{{}},{s}}}}}}}
+    ,
+        .{task_caps},
+    );
+    defer a.free(fail_req);
+    try server.handleMessage(std.Io.failing, a, fail_req);
+
+    var bad = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[0], .{});
+    defer bad.deinit();
+    const bad_task = bad.value.object.get("result").?.object.get("task").?.object;
+    try std.testing.expectEqualStrings("failed", bad_task.get("status").?.string);
+    try std.testing.expectEqualStrings("boom", bad_task.get("error").?.object.get("message").?.string);
+
+    // The stored task is retrievable through tasks/get.
+    const ok_task_id = ok_task.get("taskId").?.string;
+    try std.testing.expectEqual(types.TaskStatus.completed, server.getTask(ok_task_id).?.status);
+    try std.testing.expect(server.getTask("does-not-exist") == null);
+}
+
+test "spec: notifications/tasks is routed only to subscriptions watching that id" {
+    const a = std.testing.allocator;
+
+    var server = Server.init(a, .{ .name = "task-notify", .version = "1.0.0" });
+    defer server.deinit();
+    try server.declareExtension(a, protocol.EXTENSION_TASKS);
+
+    var collector = CaptureTransport{ .allocator = a };
+    defer collector.deinitCapture();
+    const prev = server.transport;
+    defer server.transport = prev;
+    server.transport = .{
+        .ptr = &collector,
+        .vtable = &.{
+            .send = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator, m: []const u8) transport_mod.Transport.SendError!void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.send(io, al, m) catch return error.OutOfMemory;
+                }
+            }.f,
+            .receive = struct {
+                fn f(p: *anyopaque, io: std.Io, al: std.mem.Allocator) transport_mod.Transport.ReceiveError!?[]const u8 {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    return self.receive(io, al);
+                }
+            }.f,
+            .close = struct {
+                fn f(p: *anyopaque) void {
+                    const self: *CaptureTransport = @ptrCast(@alignCast(p));
+                    self.close();
+                }
+            }.f,
+            .destroy = struct {
+                fn f(_: *anyopaque, _: std.mem.Allocator) void {}
+            }.f,
+        },
+    };
+
+    // Subscription 1 watches t-watch, subscription 2 watches a different id.
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{"notifications":{"taskIds":["t-watch"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
+    );
+    try server.handleMessage(std.Io.failing, a,
+        \\{"jsonrpc":"2.0","id":2,"method":"subscriptions/listen","params":{"notifications":{"taskIds":["t-other"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
+    );
+    try std.testing.expectEqual(@as(usize, 2), server.activeSubscriptions());
+
+    // The acknowledgement echoes the agreed filter.
+    collector.clearMessages();
+    try server.storeTask(a, "t-watch", .working, null);
+    try server.storeTask(a, "t-other", .working, null);
+    try server.updateTask(std.Io.failing, a, "t-watch", .{ .status = .completed, .statusMessage = "finished" });
+
+    var pushed: usize = 0;
+    for (collector.messages.items) |raw| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+        defer parsed.deinit();
+        const obj = parsed.value.object;
+        const method = obj.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "notifications/tasks")) continue;
+        pushed += 1;
+        const params = obj.get("params").?.object;
+        const task = params.get("task").?.object;
+        try std.testing.expectEqualStrings("t-watch", task.get("taskId").?.string);
+        try std.testing.expectEqualStrings("completed", task.get("status").?.string);
+        try std.testing.expectEqualStrings("finished", task.get("statusMessage").?.string);
+        // Tagged with the listen request that opened the stream.
+        try std.testing.expectEqual(@as(i64, 1), params.get("_meta").?.object.get(protocol.META_SUBSCRIPTION_ID).?.integer);
+    }
+    // Only the watching subscription was notified.
+    try std.testing.expectEqual(@as(usize, 1), pushed);
+
+    // A failing transition records the reason.
+    collector.clearMessages();
+    try server.updateTask(std.Io.failing, a, "t-watch", .{ .status = .failed, .errorMessage = "exploded" });
+    const stored = server.getTask("t-watch").?;
+    try std.testing.expectEqualStrings("exploded", stored.@"error".?.message.?);
+    try std.testing.expect(server.removeTask("t-watch"));
+    try std.testing.expect(!server.removeTask("t-watch"));
+}
+
 test "spec: tasks methods require the client to declare the extension" {
     const a = std.testing.allocator;
     var server = Server.init(a, .{ .name = "task-ext", .version = "1.0.0" });
@@ -3725,8 +4191,8 @@ test "spec: notifications reach only the subscribers whose filter admits them" {
     };
 
     // Two concurrent subscriptions with disjoint filters.
-    try server.subscriptions.put(1, .{ .toolsListChanged = true });
-    try server.subscriptions.put(2, .{ .promptsListChanged = true });
+    try server.subscriptions.put(1, .{ .filter = .{ .toolsListChanged = true } });
+    try server.subscriptions.put(2, .{ .filter = .{ .promptsListChanged = true } });
 
     try server.notifyToolsChanged(std.Io.failing, a);
     try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);
@@ -3776,8 +4242,8 @@ test "spec: resources/updated only reaches subscribers naming that URI" {
     };
 
     const watched = [_][]const u8{"file:///a.json"};
-    try server.subscriptions.put(3, .{ .resourceSubscriptions = &watched });
-    try server.subscriptions.put(4, .{ .resourceSubscriptions = &.{} });
+    try server.subscriptions.put(3, .{ .filter = .{ .resourceSubscriptions = &watched } });
+    try server.subscriptions.put(4, .{ .filter = .{ .resourceSubscriptions = &.{} } });
 
     try server.notifyResourceUpdated(std.Io.failing, a, "file:///a.json");
     try std.testing.expectEqual(@as(usize, 1), collector.messages.items.len);

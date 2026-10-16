@@ -2,45 +2,86 @@
 
 ## Reporting a Vulnerability
 
-**Do not open a public GitHub issue for security vulnerabilities.**
+**Do not open a public GitHub issue for a security vulnerability.**
 
-Report privately by email to **contact@muhammadfiaz.com** with:
+Send the report by email to **contact@muhammadfiaz.com**. That address is the
+private channel published by this repository in
+`.github/ISSUE_TEMPLATE/config.yml` and `CONTRIBUTING.md`.
 
-- A description of the vulnerability and its potential impact
-- Steps to reproduce (minimal example preferred)
-- Affected version(s) of mcp.zig and your Zig toolchain version
-- Any relevant logs (redact secrets, tokens, and private data first)
+Include:
 
-What to expect:
+- What the vulnerability is, and what an attacker gains from it
+- The smallest reproduction you can manage — a request body, a config
+  combination, or a handler that triggers it
+- The affected version: `mcp.VERSION` of the library, and your Zig toolchain
+  version
+- Relevant logs, with tokens, credentials, and private paths redacted first
 
-- Acknowledgment of your report
-- Coordinated handling and a fix in a subsequent release
-- Public credit if you wish (optional)
+For ordinary bugs, use the public issue tracker instead. `mcp.reportError`
+prints that URL (`mcp.ISSUES_URL`, from `src/report.zig`) whenever an
+application surfaces an error it believes may be a library defect.
 
-Please allow reasonable time for a fix before any public disclosure.
+This project does not publish a response-time commitment or a formal
+coordinated-disclosure programme. If a fix is warranted, it ships in a
+subsequent release; credit in the changelog is given if you ask for it.
 
 ## Supported Versions
 
-| Version | Status                |
-| ------- | --------------------- |
-| 0.0.9   | Supported             |
+| Version | Status                                          |
+| ------- | ----------------------------------------------- |
+| 0.0.9   | Current development version on the `dev` branch  |
+| 0.0.8   | Latest published release; upgrade advised        |
 
-Security fixes are released for the latest version only. Older releases are unsupported; please upgrade.
+`0.0.9` is the version string in `src/version.zig` on `dev`; `0.0.8` is the
+newest published tag. Older releases receive no fixes.
 
 ## Scope and Boundaries
 
-mcp.zig is a protocol library. When deploying MCP servers built with it, operators remain responsible for transport-level controls outside the library's scope (TLS termination, reverse proxies, firewalling, secret storage).
+mcp.zig is a protocol library. Operators deploying a server built with it remain
+responsible for everything outside it — TLS termination, reverse proxies,
+firewalling, credential storage, and rate limiting at the network edge.
 
-Defenses implemented by the library:
+Implemented in the library:
 
-- HTTP request bodies are bounded (`maxBody`, 4 MiB default) and oversized STDIO messages are rejected.
-- Unknown methods and malformed JSON-RPC produce error responses; internal failures return generic `500` / `Internal error` messages without stack or state details.
-- Server request logging records method names only, never credentials or full payloads.
-- Per-request arenas reclaim transient allocations on the server message path.
+- **Bounded input** — the HTTP server caps request bodies with httpx's `maxBody`
+  (set from `Server.max_http_body_size`, 4 MiB), and the STDIO transport
+  rejects messages at or beyond `max_message_size` (4 MiB by default) with
+  `error.MessageTooLarge`.
+- **Streamable HTTP conformance** — `MCP-Protocol-Version`, `Mcp-Method`,
+  `Mcp-Name`, and `Mcp-Param-*` headers are validated against the JSON-RPC body
+  before a request is dispatched; a mismatch is `-32020` and an unsupported
+  protocol version is `-32022`. The MCP endpoint answers `POST` only, and
+  answers anything else with `405`.
+- **DNS-rebinding protection** — when the server binds to a loopback host, only
+  loopback `Origin` values are accepted (`403 Forbidden` otherwise). Requests
+  without an `Origin` header are allowed.
+- **Bounded error disclosure** — unknown methods return `-32601` and
+  unparseable messages a JSON-RPC parse error, without echoing the input. HTTP
+  failures return a generic `500` body; stack traces and internal state are not
+  returned to the client.
+- **Minimal logging** — the server writes `Received request: <method>` to stderr
+  for each request. Request and response payloads, credentials, and tokens are
+  not logged.
+- **Scoped allocation** — `Server.handleMessage` serves each message from a
+  per-request arena that is released once the response has been written.
 
-Out of scope for the library itself: authentication policy, authorization decisions, TLS configuration, and sandboxing of tool handlers — these belong to the application built on top of mcp.zig.
+Deliberately not implemented, and therefore your responsibility:
+
+- **Authorization** — the HTTP client sends a bearer token via
+  `Client.setAuthorizationToken`. There is no OAuth 2.1 or OIDC discovery, no
+  `WWW-Authenticate` challenge parsing, no PKCE, dynamic client registration,
+  refresh, or step-up. An unauthenticated HTTP endpoint is unauthenticated.
+- **Long-lived streams** — per-request SSE stream lifetime for Streamable HTTP
+  is not implemented, so do not rely on a server-held stream to bound access to
+  a subscription.
+- **Handler isolation** — tool, resource, and prompt handlers run in-process
+  with the server's full privileges. Sandbox them, and gate them on your own
+  authorization checks.
+- **Secrets in configuration** — tokens are held in memory for the client's
+  lifetime. Do not log them or include them in error messages.
 
 ## Contact
 
-- Security reports: **contact@muhammadfiaz.com**
-- General questions: [discussions](https://github.com/muhammad-fiaz/mcp.zig/discussions)
+- Security reports (private): **contact@muhammadfiaz.com**
+- Defects and feature requests: [issue tracker](https://github.com/muhammad-fiaz/mcp.zig/issues)
+- Questions: [discussions](https://github.com/muhammad-fiaz/mcp.zig/discussions)

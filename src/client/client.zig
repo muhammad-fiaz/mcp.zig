@@ -684,6 +684,36 @@ pub const Client = struct {
         try self.callToolRound(name, arguments, null);
     }
 
+    /// Invokes a tool asking the server to execute it as a task.
+    ///
+    /// Adds the tasks-extension opt-in to request `_meta`; the server answers
+    /// with `resultType: "task"` and a task snapshot to poll via `getTask`.
+    /// `ttlMs` is the requested retention, or null for unlimited.
+    pub fn callToolAsTask(
+        self: *Self,
+        name: []const u8,
+        arguments: ?std.json.Value,
+        ttlMs: ?i64,
+    ) !void {
+        var params: std.json.ObjectMap = .empty;
+        errdefer params.deinit(self.allocator);
+        try params.put(self.allocator, "name", .{ .string = name });
+        if (arguments) |a| try params.put(self.allocator, "arguments", a);
+
+        var task_meta: std.json.ObjectMap = .empty;
+        defer task_meta.deinit(self.allocator);
+        if (ttlMs) |ttl| try task_meta.put(self.allocator, "ttl", .{ .integer = ttl });
+
+        // `sendRequest` preserves caller `_meta` and only overwrites the
+        // protocol-reserved keys, so the task opt-in rides along.
+        var meta: std.json.ObjectMap = .empty;
+        errdefer meta.deinit(self.allocator);
+        try meta.put(self.allocator, protocol.META_TASK, .{ .object = task_meta });
+        try params.put(self.allocator, "_meta", .{ .object = meta });
+
+        try self.sendRequest("tools/call", .{ .object = params });
+    }
+
     /// Retries `tools/call` with the `inputResponses` and `requestState` from
     /// a previous `InputRequiredResult`.
     ///
@@ -805,6 +835,11 @@ pub const Client = struct {
         var uris: ?std.json.Array = null;
         defer if (uris) |*a| a.deinit();
 
+        // Same lifetime caveat as `uris` below: the array must outlive the
+        // `notifications` map that stores a copy of its slice.
+        var task_ids: ?std.json.Array = null;
+        defer if (task_ids) |*a| a.deinit();
+
         if (filter.toolsListChanged) try notifications.put(self.allocator, "toolsListChanged", .{ .bool = true });
         if (filter.promptsListChanged) try notifications.put(self.allocator, "promptsListChanged", .{ .bool = true });
         if (filter.resourcesListChanged) try notifications.put(self.allocator, "resourcesListChanged", .{ .bool = true });
@@ -814,6 +849,14 @@ pub const Client = struct {
                 for (list) |u| try arr.append(.{ .string = u });
                 try notifications.put(self.allocator, "resourceSubscriptions", .{ .array = arr });
                 uris = arr;
+            }
+        }
+        if (filter.taskIds) |list| {
+            if (list.len > 0) {
+                var arr: std.json.Array = .init(self.allocator);
+                for (list) |id| try arr.append(.{ .string = id });
+                try notifications.put(self.allocator, "taskIds", .{ .array = arr });
+                task_ids = arr;
             }
         }
 

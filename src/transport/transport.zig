@@ -192,6 +192,9 @@ fn nameFieldForMethod(method: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, method, "tools/call")) return "name";
     if (std.mem.eql(u8, method, "prompts/get")) return "name";
     if (std.mem.eql(u8, method, "resources/read")) return "uri";
+    // The tasks extension keys every `tasks/*` request by `taskId`, so the
+    // header carries the task rather than a tool, prompt or resource name.
+    if (std.mem.startsWith(u8, method, "tasks/")) return "taskId";
     return null;
 }
 

@@ -2,13 +2,13 @@
 layout: home
 title: Model Context Protocol (MCP) Library for Zig
 titleTemplate: false
-description: The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.
+description: A native Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, and JSON-RPC 2.0, implementing protocol revision 2026-07-28.
 keywords: zig, mcp, model context protocol, ai, llm, tools, resources, prompts, zig library, json-rpc, mcp server, mcp client, stdio transport, http transport, ai integration, ziglang
 
 hero:
   name: MCP.zig
   text: Model Context Protocol for Zig
-  tagline: The first comprehensive MCP library for Zig — build AI-ready servers and clients with native performance
+  tagline: A native Zig implementation of MCP revision 2026-07-28, with a server framework, a client framework, and STDIO and HTTP transports
   image:
     src: /logo.png
     alt: MCP.zig - Model Context Protocol Library for Zig
@@ -24,24 +24,18 @@ hero:
       link: https://modelcontextprotocol.io/docs/getting-started/intro
 
 features:
-  - icon: 🚀
-    title: Fast & Efficient
-    details: Built in Zig for maximum performance with zero runtime overhead. Compile-time optimizations ensure blazing fast execution.
-  - icon: 🔧
-    title: Full MCP Support
-    details: Complete implementation of the Model Context Protocol including tools, resources, prompts, and JSON-RPC communication.
-  - icon: 🔌
-    title: Multiple Transports
-    details: Support for STDIO and HTTP transports out of the box. Easily extensible for custom transport implementations.
-  - icon: 📦
-    title: Easy Integration
-    details: Simple API design makes it easy to create MCP servers and clients. Get started with just a few lines of code.
-  - icon: 🛡️
-    title: Type Safe
-    details: Leverages Zig's powerful type system for compile-time safety and clear error messages.
-  - icon: 🌐
-    title: AI Ready
-    details: Connect AI applications to external systems like data sources, tools, and workflows using the open MCP standard.
+  - title: Server and client
+    details: Both halves of the protocol are implemented — serve tools, resource templates, and prompts, and consume them from any conforming peer.
+  - title: MCP 2026-07-28
+    details: server/discover as the entry point, _meta on every request, resultType on every result, and Multi Round-Trip Requests. No initialize handshake.
+  - title: Two transports
+    details: STDIO and Streamable HTTP, built on httpx.zig, behind a whole-message transport interface that custom transports can implement.
+  - title: Full JSON Schema
+    details: inputSchema and outputSchema are complete JSON Schema 2020-12 documents. Typed builders cover the common cases; raw documents are emitted verbatim.
+  - title: Type-safe handlers
+    details: Tool, resource, and prompt handlers are plain Zig functions with typed results, so mistakes surface at compile time.
+  - title: Testable
+    details: Unit tests cover the protocol layer, both transports, the server, and the client, and CI runs them on Linux, Windows, and macOS.
 ---
 
 <style>
@@ -67,9 +61,9 @@ features:
 
 ## Why MCP.zig?
 
-The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro) is an open standard by Anthropic for connecting AI applications to external systems. While MCP has official SDKs for TypeScript, Python, and other languages, **Zig currently lacks proper MCP support**.
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro) is an open standard for connecting AI applications to external systems. Official SDKs exist for TypeScript, Python, and other languages; **Zig has no first-party MCP implementation**.
 
-**MCP.zig** fills this gap by providing a native, high-performance MCP implementation for Zig developers.
+**MCP.zig** is a native Zig implementation of revision `2026-07-28`, providing both a server and a client framework with no runtime dependency beyond [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig).
 
 ::: info Official MCP Resources
 For the official MCP specification and documentation, visit [modelcontextprotocol.io](https://modelcontextprotocol.io/docs/getting-started/intro)
@@ -79,20 +73,24 @@ For the official MCP specification and documentation, visit [modelcontextprotoco
 
 ### Installation
 
-Run the following command to add mcp.zig to your project:
+mcp.zig requires **Zig 0.17.0** or later (`minimum_zig_version` in `build.zig.zon`).
 
 ```bash
-# Latest development branch
+# Current development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 
-# Zig 0.17.0
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.9.tar.gz
+# Latest published release (Zig 0.17.0)
+zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
+```
 
-# Zig 0.16.x
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.6.tar.gz
+Wire the module into your `build.zig`:
 
-# Zig 0.15.x
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.3.tar.gz
+```zig
+const mcp_dep = b.dependency("mcp", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("mcp", mcp_dep.module("mcp"));
 ```
 
 ### Create a Simple Server
@@ -124,33 +122,51 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     // Run with STDIO transport
     try server.run(io, allocator, .stdio);
 }
+
+fn greetHandler(
+    _: ?*anyopaque,
+    _: std.Io,
+    allocator: std.mem.Allocator,
+    args: ?std.json.Value,
+) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const name = mcp.tools.getString(args, "name") orelse "World";
+    const message = try std.fmt.allocPrint(allocator, "Hello, {s}!", .{name});
+    return mcp.tools.textResult(allocator, message);
+}
 ```
 
-## Why Choose mcp.zig?
+## At a Glance
 
-| Feature            | MCP.zig                    | Other Languages |
-| ------------------ | -------------------------- | --------------- |
-| **Performance**    | ⚡ Native Zig speed        | Interpreted/JIT |
-| **Memory Safety**  | ✅ Compile-time guarantees | Runtime checks  |
-| **Binary Size**    | 📦 Minimal (~100KB)        | Large runtimes  |
-| **Dependencies**   | 🔗 Minimal (httpx.zig)     | Many packages   |
-| **Cross-Platform** | 🌍 Linux, macOS, Windows   | Varies          |
+| Area           | What mcp.zig provides                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| **Protocol**   | Revision `2026-07-28` over JSON-RPC 2.0, stateless per request, `server/discover` entry point, MRTR        |
+| **Server**     | Tools, resources, resource templates, prompts, pagination, caching hints, subscriptions, MRTR, tasks        |
+| **Client**     | STDIO and HTTP transports, tool calls, reads, prompts, completion, batches, elicitation, sampling, roots   |
+| **Transports** | STDIO and Streamable HTTP via httpx.zig, behind a whole-message `Transport` interface                       |
+| **Dependencies** | One external package: `httpx.zig`. No other runtime dependencies                                         |
+| **Platforms**  | Linux, macOS, Windows (CI runs the test suite on all three)                                                |
+
+Not implemented: per-request SSE stream lifetime for Streamable HTTP, and OAuth
+2.1/OIDC discovery — authorization is limited to
+`Client.setAuthorizationToken` (bearer token). See the
+[README](https://github.com/muhammad-fiaz/mcp.zig#known-limitations) for the
+full list.
 
 ## What is MCP?
 
-The **Model Context Protocol (MCP)** is an open standard that enables:
+The **Model Context Protocol (MCP)** standardises four things:
 
-- 🔧 **Tools** - Functions that AI can call to perform actions
-- 📁 **Resources** - Data that AI can read and reference
-- 💬 **Prompts** - Reusable templates for AI interactions
-- 🔌 **Transports** - Communication channels (STDIO, HTTP)
+- **Tools** - functions an application can invoke
+- **Resources** - data an application can read and reference
+- **Prompts** - reusable message templates
+- **Transports** - the channels those are exchanged over (STDIO, HTTP)
 
 Learn more at the [official MCP documentation](https://modelcontextprotocol.io/docs/getting-started/intro).
 
 ## Community
 
-- [📖 Documentation](https://muhammad-fiaz.github.io/mcp.zig/)
-- [💻 GitHub Repository](https://github.com/muhammad-fiaz/mcp.zig)
-- [🐛 Issue Tracker](https://github.com/muhammad-fiaz/mcp.zig/issues)
-- [💬 Discussions](https://github.com/muhammad-fiaz/mcp.zig/discussions)
-- [🌐 Official MCP Site](https://modelcontextprotocol.io/)
+- [Documentation](https://muhammad-fiaz.github.io/mcp.zig/)
+- [GitHub repository](https://github.com/muhammad-fiaz/mcp.zig)
+- [Issue tracker](https://github.com/muhammad-fiaz/mcp.zig/issues)
+- [Discussions](https://github.com/muhammad-fiaz/mcp.zig/discussions)
+- [Official MCP site](https://modelcontextprotocol.io/)
