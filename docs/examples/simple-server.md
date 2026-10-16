@@ -224,7 +224,7 @@ echo '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | ./zig-out/bin/example-se
 **Discover response:**
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"simple-server","version":"1.0.0","title":"Simple MCP Server","description":"A minimal example MCP server demonstrating tools, resources, and prompts"}},"resultType":"complete","ttlMs":300000,"cacheScope":"public"}}
+{"jsonrpc":"2.0","id":1,"result":{"supportedVersions":["2026-07-28"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"simple-server","version":"1.0.0","title":"Simple MCP Server","description":"A minimal example MCP server demonstrating tools, resources, and prompts"}},"resultType":"complete","ttlMs":300000,"cacheScope":"public"}}
 ```
 
 **greet("Alice") response:**

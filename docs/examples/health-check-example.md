@@ -120,7 +120,7 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arg
 **Discover response:**
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"health-check-server","version":"1.0.0","title":"Health Check Server","description":"Demonstrates the built-in health check endpoint"}},"resultType":"complete","ttlMs":300000,"cacheScope":"public"}}
+{"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28"],"capabilities":{"tools":{"listChanged":true},"logging":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"health-check-server","version":"1.0.0","title":"Health Check Server","description":"Demonstrates the built-in health check endpoint"}},"resultType":"complete","ttlMs":300000,"cacheScope":"public"}}
 ```
 
 **Echo tool response:**

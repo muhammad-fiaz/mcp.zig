@@ -517,6 +517,16 @@ test "validate rejects an unsupported protocol version" {
     try testing.expect(v == .unsupported_version);
 }
 
+test "validate rejects deprecated protocol versions as unsupported" {
+    const b = body("tools/list", "2025-11-25", "");
+    defer testing.allocator.free(b);
+    const v = try validate(testing.allocator, .fromHeaders("2025-11-25", "tools/list", null), b, true);
+    try testing.expect(v == .unsupported_version);
+    try testing.expectEqualStrings("2025-11-25", v.unsupported_version.requested);
+    try testing.expectEqual(@as(usize, 1), v.unsupported_version.supported.len);
+    try testing.expectEqualStrings("2026-07-28", v.unsupported_version.supported[0]);
+}
+
 test "validate rejects a method header/body mismatch" {
     const b = body("tools/list", null, "");
     defer testing.allocator.free(b);

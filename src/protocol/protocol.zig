@@ -21,15 +21,21 @@ pub const PROTOCOL_VERSION = "2026-07-28";
 /// Legacy alias for compatibility.
 pub const VERSION = PROTOCOL_VERSION;
 
-/// List of all MCP protocol versions recognized by this library.
+/// List of MCP protocol versions actively supported by this library.
 ///
-/// - `2026-07-28`: Supported (default, latest active revision).
-/// - `2025-11-25`: Deprecated (session/handshake removed).
-/// - `2025-06-18`: Deprecated (session/handshake removed).
-/// - `2025-03-26`: Deprecated (session/handshake removed).
-/// - `2024-11-05`: Deprecated (session/handshake removed).
+/// Under MCP 2026-07-28, servers advertise only the protocol versions they can
+/// actually serve in `server/discover`. Because this library implements the stateless
+/// 2026-07-28 flow without legacy session-handshake fallback, only `2026-07-28` is listed.
 pub const SUPPORTED_VERSIONS = [_][]const u8{
-    "2026-07-28",
+    PROTOCOL_VERSION,
+};
+
+/// Deprecated historical MCP protocol versions that are not supported.
+///
+/// These older revisions relied on stateful session establishment with an `initialize`
+/// handshake, `ping`, and session-bound lifecycle methods that were removed in 2026-07-28.
+/// Requests targeting these versions cannot be served.
+pub const DEPRECATED_VERSIONS = [_][]const u8{
     "2025-11-25",
     "2025-06-18",
     "2025-03-26",
@@ -189,7 +195,7 @@ pub fn decodeSentinel(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
     return buf;
 }
 
-/// Returns true when `version` is one of the recognized versions.
+/// Returns true when `version` is actively supported by this library.
 pub fn supportsVersion(version: []const u8) bool {
     for (SUPPORTED_VERSIONS) |v| {
         if (std.mem.eql(u8, v, version)) return true;
@@ -197,10 +203,17 @@ pub fn supportsVersion(version: []const u8) bool {
     return false;
 }
 
-/// Returns true when `version` is a deprecated MCP revision (earlier than 2026-07-28).
+/// Returns true when `version` is a deprecated historical MCP revision (earlier than 2026-07-28).
 pub fn isDeprecatedVersion(version: []const u8) bool {
-    if (std.mem.eql(u8, version, PROTOCOL_VERSION)) return false;
-    return supportsVersion(version);
+    for (DEPRECATED_VERSIONS) |v| {
+        if (std.mem.eql(u8, v, version)) return true;
+    }
+    return false;
+}
+
+/// Returns true when `version` is recognized either as currently supported or as a deprecated revision.
+pub fn isKnownVersion(version: []const u8) bool {
+    return supportsVersion(version) or isDeprecatedVersion(version);
 }
 
 /// All MCP method names as defined in the 2026-07-28 protocol specification.
@@ -744,10 +757,10 @@ test "Method fromString round-trip (Zig 0.17 @typeInfo migration)" {
 
 test "protocol versions and deprecation status" {
     try std.testing.expect(supportsVersion("2026-07-28"));
-    try std.testing.expect(supportsVersion("2025-11-25"));
-    try std.testing.expect(supportsVersion("2025-06-18"));
-    try std.testing.expect(supportsVersion("2025-03-26"));
-    try std.testing.expect(supportsVersion("2024-11-05"));
+    try std.testing.expect(!supportsVersion("2025-11-25"));
+    try std.testing.expect(!supportsVersion("2025-06-18"));
+    try std.testing.expect(!supportsVersion("2025-03-26"));
+    try std.testing.expect(!supportsVersion("2024-11-05"));
     try std.testing.expect(!supportsVersion("2023-01-01"));
 
     try std.testing.expect(!isDeprecatedVersion("2026-07-28"));
@@ -756,4 +769,11 @@ test "protocol versions and deprecation status" {
     try std.testing.expect(isDeprecatedVersion("2025-03-26"));
     try std.testing.expect(isDeprecatedVersion("2024-11-05"));
     try std.testing.expect(!isDeprecatedVersion("2023-01-01"));
+
+    try std.testing.expect(isKnownVersion("2026-07-28"));
+    try std.testing.expect(isKnownVersion("2025-11-25"));
+    try std.testing.expect(isKnownVersion("2025-06-18"));
+    try std.testing.expect(isKnownVersion("2025-03-26"));
+    try std.testing.expect(isKnownVersion("2024-11-05"));
+    try std.testing.expect(!isKnownVersion("2023-01-01"));
 }

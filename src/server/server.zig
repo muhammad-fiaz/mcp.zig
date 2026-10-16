@@ -3137,7 +3137,9 @@ test "spec: server/discover emits resultType, cache hints and _meta serverInfo" 
     try std.testing.expectEqualStrings("9.9.9", info.object.get("version").?.string);
 
     // supportedVersions and capabilities remain top-level.
-    try std.testing.expect(result.get("supportedVersions") != null);
+    const supported_versions = result.get("supportedVersions") orelse return error.MissingSupportedVersions;
+    try std.testing.expectEqual(@as(usize, 1), supported_versions.array.items.len);
+    try std.testing.expectEqualStrings("2026-07-28", supported_versions.array.items[0].string);
     try std.testing.expect(result.get("capabilities") != null);
 }
 

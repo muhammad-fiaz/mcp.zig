@@ -495,22 +495,19 @@ independent. Each request carries `_meta` with
 of `"complete"`, `"input_required"`, or `"task"`. Cacheable results may add
 `ttlMs` and `cacheScope`.
 
-| Version    | Status                                                                          |
-| ---------- | ------------------------------------------------------------------------------- |
-| 2026-07-28 | Supported (latest, default)                                                     |
-| 2025-11-25 | Deprecated (older session-based revision; removed methods answered with -32601) |
-| 2025-06-18 | Deprecated (older session-based revision; removed methods answered with -32601) |
-| 2025-03-26 | Deprecated (older session-based revision; removed methods answered with -32601) |
-| 2024-11-05 | Deprecated (initial specification; removed methods answered with -32601)        |
+| Version    | Status                                                                                  |
+| ---------- | --------------------------------------------------------------------------------------- |
+| 2026-07-28 | Supported (latest, default)                                                             |
+| 2025-11-25 | Unsupported / Deprecated (older session-based revision; methods removed in 2026-07-28) |
+| 2025-06-18 | Unsupported / Deprecated (older session-based revision; methods removed in 2026-07-28) |
+| 2025-03-26 | Unsupported / Deprecated (older session-based revision; methods removed in 2026-07-28) |
+| 2024-11-05 | Unsupported / Deprecated (initial specification; methods removed in 2026-07-28)        |
 
-`protocol.PROTOCOL_VERSION` (`2026-07-28`) is the only revision this library actively speaks. Earlier
+`protocol.PROTOCOL_VERSION` (`2026-07-28`) is the only revision this library actively speaks and serves. Earlier
 revisions (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) established a stateful session with an `initialize`
-handshake, which this revision removed in favor of the stateless per-request model. There is no legacy fallback: the
-removed methods are answered with `-32601` (`Method not found`). `server/discover` still lists the
-older version identifiers in `supportedVersions`, and HTTP `MCP-Protocol-Version`
-header validation still accepts them as known versions, because a rejected version string is not a useful
-diagnostic; an older client nevertheless fails because the methods it calls no
-longer exist.
+handshake, which this revision removed in favor of the stateless per-request model. There is no legacy fallback:
+`protocol.SUPPORTED_VERSIONS` contains only `["2026-07-28"]`, `server/discover` advertises only `["2026-07-28"]`,
+and requests specifying older revisions in `MCP-Protocol-Version` or body `_meta` are rejected with `ErrorCode.UNSUPPORTED_PROTOCOL_VERSION` (-32022).
 
 Methods removed by `2026-07-28` and deliberately not implemented:
 `initialize`, `notifications/initialized`, `ping`, `logging/setLevel`,
