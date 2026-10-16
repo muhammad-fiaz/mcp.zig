@@ -19,11 +19,8 @@ Include:
 
 For ordinary bugs, use the public issue tracker instead. `mcp.reportError`
 prints that URL (`mcp.ISSUES_URL`, from `src/report.zig`) whenever an
-application surfaces an error it believes may be a library defect.
-
-This project does not publish a response-time commitment or a formal
-coordinated-disclosure programme. If a fix is warranted, it ships in a
-subsequent release; credit in the changelog is given if you ask for it.
+application surfaces an error it believes may be a library defect. That module
+performs no network access of its own.
 
 ## Supported Versions
 
@@ -51,7 +48,13 @@ Implemented in the library:
   `Mcp-Name`, and `Mcp-Param-*` headers are validated against the JSON-RPC body
   before a request is dispatched; a mismatch is `-32020` and an unsupported
   protocol version is `-32022`. The MCP endpoint answers `POST` only, and
-  answers anything else with `405`.
+  answers anything else with `405`. Header values that cannot be sent safely as
+  plain ASCII are base64-encoded with the spec's `=?base64?<base64>?=`
+  sentinel and decoded again before comparison.
+- **Schema-aware parameter headers** — when the tool's `inputSchema` is
+  available, `x-mcp-header` annotations decide exactly which `Mcp-Param-*`
+  headers are required and what they must agree with, so a header cannot smuggle
+  an argument the schema does not declare.
 - **DNS-rebinding protection** — when the server binds to a loopback host, only
   loopback `Origin` values are accepted (`403 Forbidden` otherwise). Requests
   without an `Origin` header are allowed.

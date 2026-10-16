@@ -8,6 +8,13 @@ keywords: [MCP server, tools, resources, prompts, capabilities, server features]
 
 MCP servers are programs that expose specific capabilities to AI applications through standardized protocol interfaces.
 
+In revision `2026-07-28` a server is stateless per request. `server/discover` is
+the entry point and returns `supportedVersions`, `capabilities`, and the server
+identity under `_meta["io.modelcontextprotocol/serverInfo"]`; there is no
+`initialize` handshake and no session id. Every subsequent request is
+independent, and every result carries a `resultType` of `"complete"`,
+`"input_required"`, or `"task"`.
+
 ## Core Server Features
 
 Servers provide functionality through three building blocks:
@@ -22,8 +29,15 @@ Servers provide functionality through three building blocks:
 
 Tools enable AI models to perform actions. Each tool defines a specific operation with typed inputs (JSON Schema) and outputs.
 
-- **list**: Discover available tools.
-- **call**: Execute a specific tool.
+- **list**: Discover available tools (`tools/list`).
+- **call**: Execute a specific tool (`tools/call`).
+
+`inputSchema` and `outputSchema` are complete JSON Schema 2020-12 documents.
+Keywords the typed helpers cannot express — `$ref`, `$defs`, `allOf`,
+`additionalProperties`, bounds — are supplied verbatim through
+`InputSchema.fromJson(value)` or `ToolBuilder.inputSchemaFromRaw(value)`, so
+nothing is silently dropped on the wire. When a tool declares an
+`outputSchema`, its result may also carry `structuredContent`.
 
 Example definition:
 
@@ -31,7 +45,7 @@ Example definition:
 {
   "name": "searchFlights",
   "description": "Search for available flights",
-  "inputSchema": { ... }
+  "inputSchema": { "type": "object", "properties": { "origin": { "type": "string" } }, "required": ["origin"] }
 }
 ```
 
@@ -43,12 +57,48 @@ Resources provide structured access to information (files, databases, APIs) as c
 - **Resource Templates**: Dynamic URIs (e.g., `travel://activities/{city}`).
 - **Operations**: list, read, template listing, plus `subscriptions/listen` for updates.
 
+`resources/subscribe` and `resources/unsubscribe` were removed in this revision.
+A client opens one long-lived stream with `subscriptions/listen` and filters what
+it receives; the server delivers each matching notification tagged with that
+subscription's id and tears the stream down with `Server.endSubscription` or when
+the client cancels it.
+
 ### Prompts
 
 Prompts are user-controlled templates (like "Plan a vacation"). They help structure interactions.
 
 - **list**: Discover prompts.
 - **get**: Retrieve prompt details and arguments.
+
+## Pagination and caching
+
+Every `*/list` method accepts an opaque `cursor` and answers with `nextCursor`
+while pages remain. The server's `page_size` is `0` by default, which returns
+everything in one page and omits `nextCursor` entirely. An undecodable cursor is
+a client mistake and is answered with `-32602`, not an internal error.
+
+Results for `server/discover`, `tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list`, and `resources/read` carry the mandatory caching
+hints `ttlMs` and `cacheScope` (`"public"` or `"private"`). The server omits them
+on an MRTR retry, whose inputs are not part of the cache key.
+
+## Needing input from the client
+
+A tool, resource, or prompt handler that cannot finish without client input
+returns `error.InputRequired`. The server turns that into a result with
+`resultType: "input_required"` carrying an `inputRequests` map and an opaque
+`requestState`; the client answers and retries the original request with a new
+id. This replaces the server-initiated requests of earlier revisions.
+
+## Long-running work
+
+The tasks extension (`io.modelcontextprotocol/tasks`) is opt-in. A client augments
+a `tools/call` with `_meta["io.modelcontextprotocol/task"] = {"ttl": <ms>}`; the
+server answers with `resultType: "task"` and a task snapshot, repeats the id under
+`_meta["io.modelcontextprotocol/relatedTask"]`, and pushes `notifications/tasks` as
+the task moves. The client observes the outcome with `tasks/get`, answers a task
+blocked on input with `tasks/update`, and stops it with `tasks/cancel`.
+`tasks/*` is refused with `-32021` unless both sides declared the extension.
 
 ## Bringing Servers Together
 

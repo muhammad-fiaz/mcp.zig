@@ -27,7 +27,7 @@ features:
   - title: Server and client
     details: Both halves of the protocol are implemented — serve tools, resource templates, and prompts, and consume them from any conforming peer.
   - title: MCP 2026-07-28
-    details: server/discover as the entry point, _meta on every request, resultType on every result, and Multi Round-Trip Requests. No initialize handshake.
+    details: server/discover as the entry point, _meta on every request, resultType on every result, Multi Round-Trip Requests, and the opt-in tasks extension. No initialize handshake.
   - title: Two transports
     details: STDIO and Streamable HTTP, built on httpx.zig, behind a whole-message transport interface that custom transports can implement.
   - title: Full JSON Schema
@@ -76,11 +76,9 @@ For the official MCP specification and documentation, visit [modelcontextprotoco
 mcp.zig requires **Zig 0.17.0** or later (`minimum_zig_version` in `build.zig.zon`).
 
 ```bash
-# Current development branch
 zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
-
-# Latest published release (Zig 0.17.0)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
+zig build                  # static library
+zig build run-all-examples # library plus every example
 ```
 
 Wire the module into your `build.zig`:
@@ -148,7 +146,8 @@ fn greetHandler(
 
 Not implemented: per-request SSE stream lifetime for Streamable HTTP, and OAuth
 2.1/OIDC discovery — authorization is limited to
-`Client.setAuthorizationToken` (bearer token). See the
+`Client.setAuthorizationToken` (bearer token). Cancellation is cooperative, so
+a handler that never polls its token is not interrupted. See the
 [README](https://github.com/muhammad-fiaz/mcp.zig#known-limitations) for the
 full list.
 

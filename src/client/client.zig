@@ -58,6 +58,11 @@ pub const Client = struct {
     /// Raw JSON text of each completed result, keyed by request id. Entries
     /// are taken with `takeResult`, which frees them.
     results: std.AutoHashMap(i64, []u8),
+    /// Retained so `x-mcp-header` annotations learned from `tools/list`
+    /// can be validated and cached for later `tools/call` requests.
+    http_transport: ?*transport_mod.HttpTransport = null,
+    /// Tool parameter annotations seen in `tools/list` results.
+    annotations: transport_mod.AnnotationCache = .{ .owned_by = undefined },
     /// Handlers for server-initiated notifications, keyed by method.
     notification_handlers: std.StringHashMapUnmanaged(NotificationHandler) = .empty,
     /// Subscription id of the most recent notification, for demultiplexing
@@ -123,6 +128,7 @@ pub const Client = struct {
             .config = config,
             .pending_requests = .init(allocator),
             .results = .init(allocator),
+            .annotations = .{ .owned_by = allocator },
             .roots_list = .empty,
         };
     }
@@ -203,6 +209,15 @@ pub const Client = struct {
             std.mem.eql(u8, kind, protocol.RESULT_TYPE_TASK);
     }
 
+    /// True when `code` is the pre-`2026-07-28` resource-not-found code.
+    ///
+    /// `2026-07-28` replaced it with `-32602`, but a client talking to an
+    /// older server should still recognise this code rather than treating it
+    /// as an unrelated failure.
+    pub fn isDeprecatedResourceNotFound(code: i64) bool {
+        return code == jsonrpc.ErrorCode.DEPRECATED_RESOURCE_NOT_FOUND;
+    }
+
     /// Feeds one received JSON-RPC payload into the client.
     ///
     /// Applications pump this for every line or chunk the transport produces.
@@ -281,7 +296,79 @@ pub const Client = struct {
         }
     }
 
-    fn storeResult(self: *Self, id: i64, result: std.json.Value) !void {
+    /// Validates `x-mcp-header` annotations on a `tools/list` result.
+    ///
+    /// A tool whose schema violates the annotation constraints makes the tool
+    /// definition invalid, and the spec requires such a tool to be excluded from
+    /// the list the client presents; the rest of the list stays usable.
+    fn filterToolDefinitions(self: *Self, scratch: std.mem.Allocator, result: std.json.Value) !std.json.Value {
+        const obj = switch (result) {
+            .object => |o| o,
+            else => return result,
+        };
+        const tools = obj.get("tools") orelse return result;
+        if (tools != .array) return result;
+
+        // Validate against the client's own cache so the rule applies regardless
+        // of transport, then mirror into the HTTP transport, which needs the
+        // annotations to build the `Mcp-Param-*` headers. These caches live
+        // as long as the client, so they use its allocator, not the scratch
+        // arena that only backs the filtered copy below.
+        const rejected = try transport_mod.registerToolAnnotationsFromList(
+            &self.annotations,
+            self.allocator,
+            tools,
+        );
+        defer {
+            for (rejected) |name| self.allocator.free(name);
+            self.allocator.free(rejected);
+        }
+        if (self.http_transport) |http| {
+            const mirrored = try transport_mod.registerToolAnnotationsFromList(
+                &http.annotations,
+                self.allocator,
+                tools,
+            );
+            for (mirrored) |name| self.allocator.free(name);
+            self.allocator.free(mirrored);
+        }
+        if (rejected.len == 0) return result;
+
+        var kept: std.json.Array = .init(scratch);
+        for (tools.array.items) |tool| {
+            var drop = false;
+            if (tool == .object) {
+                if (tool.object.get("name")) |n| {
+                    if (n == .string) {
+                        for (rejected) |name| {
+                            if (std.mem.eql(u8, name, n.string)) {
+                                drop = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!drop) try kept.append(tool);
+        }
+
+        var out: std.json.ObjectMap = .empty;
+        var it = obj.iterator();
+        while (it.next()) |kv| try out.put(scratch, kv.key_ptr.*, kv.value_ptr.*);
+        try out.put(scratch, "tools", .{ .array = kept });
+        return .{ .object = out };
+    }
+
+    fn storeResult(self: *Self, id: i64, raw: std.json.Value) !void {
+        // The filtered copy only has to outlive serialization, so it is built
+        // in a scratch arena rather than the client's own allocator.
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena.deinit();
+
+        // Tools whose `inputSchema` breaks the `x-mcp-header` rules must not be
+        // presented to callers; the rest of the list stays usable.
+        const result = self.filterToolDefinitions(arena.allocator(), raw) catch raw;
+
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
         defer aw.deinit();
         std.json.Stringify.value(result, .{}, &aw.writer) catch return;
@@ -438,6 +525,7 @@ pub const Client = struct {
         var it = self.results.valueIterator();
         while (it.next()) |raw| self.allocator.free(raw.*);
         self.results.deinit();
+        self.annotations.deinit();
         var handlers = self.notification_handlers.iterator();
         while (handlers.next()) |entry| self.allocator.free(entry.key_ptr.*);
         self.notification_handlers.deinit(self.allocator);
@@ -540,6 +628,7 @@ pub const Client = struct {
         }
         try http.setClientInfo(self.allocator, self.config.name, self.config.version);
         self.transport = http.transport();
+        self.http_transport = http;
 
         self.state = .connected;
         self.log("Connected via HTTP");
@@ -1622,6 +1711,48 @@ test "progressToken is sent in params._meta, not at the top level" {
         "tok-1",
         params.get("_meta").?.object.get("progressToken").?.string,
     );
+}
+
+test "tools with invalid x-mcp-header annotations are excluded from tools/list" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    // The spec makes a tool definition invalid when an x-mcp-header annotation
+    // breaks the constraints, and requires clients to exclude it from the list.
+    const payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"resultType\":\"complete\",\"tools\":[" ++
+        "{\"name\":\"good\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"region\":{\"type\":\"string\",\"x-mcp-header\":\"Region\"}}}}," ++
+        "{\"name\":\"bad\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"amount\":{\"type\":\"number\",\"x-mcp-header\":\"Amount\"}}}}" ++
+        "]}}";
+
+    try client.handleMessage(payload);
+    const raw = client.takeResult(1).?;
+    defer a.free(raw);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+    defer parsed.deinit();
+    const tools = parsed.value.object.get("tools").?.array;
+    try std.testing.expectEqual(@as(usize, 1), tools.items.len);
+    try std.testing.expectEqualStrings("good", tools.items[0].object.get("name").?.string);
+}
+
+test "results without a resultType are treated as complete" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    // An earlier-protocol server omits resultType; clients MUST accept it.
+    try client.handleMessage("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}");
+    const raw = client.takeResult(7).?;
+    defer a.free(raw);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "tools") != null);
+    try std.testing.expect(client.last_error == null);
+}
+
+test "the deprecated resource-not-found code is still recognised" {
+    // 2025-11-25 and earlier used -32002; clients SHOULD still accept it.
+    try std.testing.expect(Client.isDeprecatedResourceNotFound(-32002));
+    try std.testing.expect(!Client.isDeprecatedResourceNotFound(-32602));
 }
 
 test "cancel sends notifications/cancelled carrying the request id" {

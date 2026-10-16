@@ -17,7 +17,7 @@ The Model Context Protocol includes the following projects:
 - **MCP Development Tools**: Tools for developing MCP servers and clients, including the MCP Inspector.
 - **MCP Reference Server Implementations**: Reference implementations of MCP servers.
 
-MCP focuses solely on the protocol for context exchange—it does not dictate how AI applications use LLMs or manage the provided context.
+MCP focuses solely on the protocol for context exchange—it does not dictate how AI applications use LLMs or manage the provided context. mcp.zig implements revision `2026-07-28`, in which the protocol is stateless per request: `server/discover` replaces the former initialize handshake, and every request repeats the protocol version and client capabilities in `_meta` rather than relying on a negotiated session.
 
 ## Architecture Diagram
 
@@ -58,7 +58,7 @@ Note that _MCP server_ refers to the program that serves context data, regardles
 
 MCP consists of two layers:
 
-1.  **Data layer**: Defines the JSON-RPC based protocol for client-server communication, including lifecycle management, and core primitives, such as tools, resources, prompts and notifications.
+1.  **Data layer**: Defines the JSON-RPC based protocol for client-server communication, including discovery, capability negotiation, and core primitives, such as tools, resources, prompts and notifications.
 2.  **Transport layer**: Defines the communication mechanisms and channels that enable data exchange between clients and servers, including transport-specific connection establishment, message framing, and authorization.
 
 Conceptually the data layer is the inner layer, while the transport layer is the outer layer.
@@ -67,18 +67,37 @@ Conceptually the data layer is the inner layer, while the transport layer is the
 
 The data layer implements a JSON-RPC 2.0 based exchange protocol that defines the message structure and semantics. This layer includes:
 
-- **Lifecycle management**: Handles connection initialization, capability negotiation, and connection termination between clients and servers.
+- **Discovery**: `server/discover` is the entry point. There is no
+  `initialize`/`notifications/initialized` handshake and no session id: a server
+  is stateless per request, and each request carries the protocol version, the
+  client identity, and the client capabilities in its `_meta`.
 - **Server features**: Enables servers to provide core functionality including tools for AI actions, resources for context data, and prompts for interaction templates from and to the client.
 - **Client features**: Enables servers to ask the client to sample from the host LLM, elicit input from the user, and log messages to the client.
-- **Utility features**: Supports additional capabilities like notifications for real-time updates and progress tracking for long-running operations.
+- **Multi Round-Trip Requests**: when a server cannot finish without client
+  input, it answers with `resultType: "input_required"` and an `inputRequests`
+  map instead of blocking. The client answers and retries the original request
+  under a new id, which keeps the exchange stateless.
+- **Utility features**: Supports additional capabilities like notifications for real-time updates, progress tracking for long-running operations, and the opt-in tasks extension (`io.modelcontextprotocol/tasks`).
 
 #### Transport layer
 
-The transport layer manages communication channels and authentication between clients and servers. It handles connection establishment, message framing, and secure communication between MCP participants.
+The transport layer manages communication channels between clients and servers. It handles connection establishment, message framing, and authorization.
 
-MCP supports two transport mechanisms:
+MCP defines two transport mechanisms, both of which mcp.zig implements:
 
 - **Stdio transport**: Uses standard input/output streams for direct process communication between local processes on the same machine, providing optimal performance with no network overhead.
-- **Streamable HTTP transport**: Uses HTTP POST for client-to-server messages with optional Server-Sent Events for streaming capabilities. This transport enables remote server communication and supports standard HTTP authentication methods including bearer tokens, API keys, and custom headers. MCP recommends using OAuth to obtain authentication tokens.
+- **Streamable HTTP transport**: Uses HTTP `POST /mcp` for client-to-server messages, replying with `application/json` or with Server-Sent Events when the request's `Accept` header asks for them.
+
+Both ends mirror selected body fields into headers so intermediaries can route
+without parsing the body: `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, and
+the `Mcp-Param-*` family derived from a tool's `x-mcp-header` annotations. The
+server validates every one of them against the body and answers a mismatch with
+`-32020`.
+
+Authorization is deliberately minimal in this library. The HTTP client attaches
+a bearer token through `Client.setAuthorizationToken` and nothing else: there is
+no OAuth 2.1 or OIDC discovery, no `WWW-Authenticate` parsing, no PKCE, dynamic
+client registration, token refresh, or step-up. Anything beyond a static bearer
+token has to be provided by the deployment.
 
 The transport layer abstracts communication details from the protocol layer, enabling the same JSON-RPC 2.0 message format across all transport mechanisms.

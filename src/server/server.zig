@@ -1520,6 +1520,14 @@ pub const Server = struct {
         const removed = self.subscriptions.fetchRemove(subscription_id) orelse return;
         self.freeSubscription(removed.value);
 
+        // The spec requires a server that tears a subscription down to send
+        // notifications/cancelled naming the subscriptions/listen request, and
+        // forbids sending it for any other purpose.
+        var cancel_params: std.json.ObjectMap = .empty;
+        defer cancel_params.deinit(allocator);
+        try cancel_params.put(allocator, "requestId", .{ .integer = subscription_id });
+        try self.sendNotification(io, allocator, "notifications/cancelled", .{ .object = cancel_params });
+
         var result: std.json.ObjectMap = .empty;
         defer result.deinit(allocator);
         try Self.putResultComplete(allocator, &result);
@@ -3791,9 +3799,16 @@ test "spec: subscriptions/listen acknowledges and stays open" {
     // Tearing the subscription down closes the stream gracefully.
     try server.endSubscription(std.Io.failing, a, 7);
     try std.testing.expectEqual(@as(usize, 0), server.activeSubscriptions());
-    try std.testing.expectEqual(@as(usize, 3), collector.messages.items.len);
+    // A server-initiated teardown sends notifications/cancelled naming the
+    // subscriptions/listen request, then the graceful completion response.
+    try std.testing.expectEqual(@as(usize, 4), collector.messages.items.len);
 
-    var closed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[2], .{});
+    var cancelled = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[2], .{});
+    defer cancelled.deinit();
+    try std.testing.expectEqualStrings("notifications/cancelled", cancelled.value.object.get("method").?.string);
+    try std.testing.expectEqual(@as(i64, 7), cancelled.value.object.get("params").?.object.get("requestId").?.integer);
+
+    var closed = try std.json.parseFromSlice(std.json.Value, a, collector.messages.items[3], .{});
     defer closed.deinit();
     const result = closed.value.object.get("result").?.object;
     try std.testing.expectEqualStrings("complete", result.get("resultType").?.string);

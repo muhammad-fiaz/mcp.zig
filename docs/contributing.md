@@ -62,8 +62,10 @@ zig build test-compile -Dtarget=x86_64-macos
 ```
 
 CI runs `zig build test`, `zig build run-all-examples`, and
-`zig fmt --check src examples build.zig` on Linux, Windows, and macOS, and
-`zig build test-compile` for seven additional targets.
+`zig fmt --check src examples build.zig` on Linux, Windows, and macOS. A second
+job compiles the library and the tests, without executing them, for seven
+targets (`x86-linux`, `x86_64-linux`, `aarch64-linux`, `x86-windows`,
+`x86_64-windows`, `x86_64-macos`, `aarch64-macos`).
 
 ### 4. Make Your Changes
 
@@ -86,6 +88,14 @@ Methods removed in this revision — `initialize`, `notifications/initialized`,
 `resources/subscribe`, `resources/unsubscribe`, `tasks/result`, and
 `tasks/list` — must not be reintroduced. There is no legacy fallback and no
 session id.
+
+The tasks extension (`io.modelcontextprotocol/tasks`) is implemented on both
+sides: opt-in `_meta` key, `resultType: "task"`, `relatedTask` metadata,
+`notifications/tasks`, and `tasks/get`, `tasks/update`, `tasks/cancel`. Keep it
+that way. A task-augmented `tools/call` is driven by
+`_meta["io.modelcontextprotocol/task"]`, never by a `task` request parameter,
+except for the single retained compatibility branch for 2025-11-25 clients in
+`Server.handleToolsCall`.
 
 ## Code Guidelines
 

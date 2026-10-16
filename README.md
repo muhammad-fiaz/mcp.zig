@@ -51,7 +51,7 @@ both a server and a client, so that Zig programs can:
 - **Client framework** - Connect over STDIO or HTTP and declare elicitation, sampling, roots, and extension capabilities
 - **MCP 2026-07-28** - Stateless per-request model: `server/discover` as the entry point, `_meta` on every request, `resultType` on every result, no `initialize` handshake
 - **MRTR** - Multi Round-Trip Requests: a handler returning `error.InputRequired` yields an `input_required` result that the client resolves and retries under a new request id
-- **Tasks extension** - Opt-in `io.modelcontextprotocol/tasks` support with in-memory task storage, `tasks/get`, `tasks/update`, and `tasks/cancel` on both sides
+- **Tasks extension** - Opt-in `io.modelcontextprotocol/tasks` support: a `tools/call` augmented with `_meta["io.modelcontextprotocol/task"]` returns `resultType: "task"`, results carry `_meta["io.modelcontextprotocol/relatedTask"]`, and the server pushes `notifications/tasks`; `tasks/get`, `tasks/update`, and `tasks/cancel` are available on both sides
 - **Content types** - Text, image, audio, resource-link, and structured tool results
 - **Transports** - STDIO and Streamable HTTP, built on [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig)
 - **Middleware** - Optional rate limiting, request validation, batch requests, and logging around tool handlers
@@ -61,7 +61,6 @@ both a server and a client, so that Zig programs can:
 
 - **Streamable HTTP streams** - The transport vtable exchanges whole messages, so the per-request SSE stream lifetime that `subscriptions/listen` needs is not modelled end to end. The HTTP client accepts both `application/json` and `text/event-stream` responses; the HTTP server answers a single POST with a single response.
 - **Authorization** - Only `setAuthorizationToken` (a bearer token) is implemented. There is no protected-resource or authorization-server metadata discovery, no `WWW-Authenticate` parsing, no PKCE, dynamic client registration, token refresh, or step-up.
-- **Tasks** - The tasks extension implements `tasks/get`, `tasks/update`, and `tasks/cancel`. The server does not create tasks from `tools/call` and never emits `notifications/tasks`.
 - **Cancellation** - Cooperative and poll-based: a synchronous handler that never consults its cancellation token cannot be interrupted.
 
 ## Documentation
@@ -91,16 +90,18 @@ For the official MCP specification and resources, visit:
 
 mcp.zig requires **Zig 0.17.0** or later (`minimum_zig_version` in `build.zig.zon`).
 
-```bash
-# Current development branch
-zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
+Add the package to your project:
 
-# Latest published release (Zig 0.17.0)
-zig fetch --save https://github.com/muhammad-fiaz/mcp.zig/archive/refs/tags/0.0.8.tar.gz
+```bash
+zig fetch --save git+https://github.com/muhammad-fiaz/mcp.zig.git
 ```
 
-Releases before `0.0.8` target older Zig versions; `0.0.3` and earlier implement
-protocol revision `2025-11-25`, not the `2026-07-28` revision documented below.
+Build it with `zig build`:
+
+```bash
+zig build                  # static library
+zig build run-all-examples # library plus every example
+```
 
 Then in your `build.zig`:
 
@@ -204,7 +205,8 @@ a request id. Results arrive as separate messages.
 
 `callToolResolved`, `readResourceResolved`, and `getPromptResolved` are the
 request helpers that return the id (`!i64`), because they drive MRTR rounds
-automatically:
+automatically. `callToolAsTask(name, arguments, ttlMs)` asks the server to run a
+tool as a task; like `callTool` it returns `!void`.
 
 ```zig
 const Resolver = struct {
@@ -332,7 +334,8 @@ try server.addTool(.{
 fallible, so a builder chain never needs `try` on `build()`:
 
 ```zig
-const tool = mcp.ToolBuilder.init("search_files")
+var builder: mcp.ToolBuilder = .init("search_files");
+const tool = builder
     .description("Search for files matching a pattern")
     .inputSchema(schema)
     .readOnly()
@@ -380,6 +383,38 @@ try server.addPrompt(.{
     .handler = summarizeHandler,
 });
 ```
+
+### Tasks
+
+The tasks extension (`io.modelcontextprotocol/tasks`) is opt-in on both sides.
+`Server.enableTasks()` declares it, and a tool opts into task augmentation with
+`ToolBuilder.taskSupport("optional" | "required" | "forbidden")`:
+
+```zig
+var builder: mcp.ToolBuilder = .init("reindex");
+const tool = builder
+    .description("Rebuild the search index")
+    .taskSupport("optional")
+    .handler(reindexHandler)
+    .build();
+
+try server.enableTasks();
+try server.addTool(tool);
+```
+
+A `tools/call` carrying `_meta["io.modelcontextprotocol/task"] = {"ttl": <ms>}`
+then answers with `resultType: "task"` and a task snapshot, and repeats the task
+id under `_meta["io.modelcontextprotocol/relatedTask"] = {"taskId": ...}`.
+Clients opt in with `Client.callToolAsTask(name, arguments, ttlMs)` and observe
+the outcome by polling `getTask`, answering blocked rounds with `updateTask`, or
+cancelling with `cancelTask`.
+
+Servers that manage task lifetime directly can `storeTask`, `updateTask` with a
+`Server.TaskUpdate`, `getTask`, and `removeTask`; `notifyTask` pushes a single
+`notifications/tasks` snapshot, and `updateTask` pushes it automatically.
+`notifications/tasks` reaches only the subscriptions whose
+`types.SubscriptionFilter.taskIds` list the task. `tasks/*` is refused with
+`-32021` unless the client also declares the extension.
 
 ## Client Features
 
@@ -464,10 +499,14 @@ of `"complete"`, `"input_required"`, or `"task"`. Cacheable results may add
 | ---------- | ------------------- |
 | 2026-07-28 | Supported (default) |
 
-Earlier revisions (`2025-11-25` and older) are **not** supported: they
-established a session with an `initialize` handshake, which this revision
-removed. This library offers no legacy fallback, and a server speaking an
-earlier revision rejects these requests.
+`protocol.PROTOCOL_VERSION` is the only revision this library speaks. Earlier
+revisions (`2025-11-25` and older) established a session with an `initialize`
+handshake, which this revision removed, so there is no legacy fallback: the
+removed methods are answered with `-32601`. `server/discover` still lists the
+older version identifiers in `supportedVersions`, and `MCP-Protocol-Version`
+validation still accepts them, because a rejected version string is not a useful
+diagnostic; an older client nevertheless fails because the methods it calls no
+longer exist.
 
 Methods removed by `2026-07-28` and deliberately not implemented:
 `initialize`, `notifications/initialized`, `ping`, `logging/setLevel`,

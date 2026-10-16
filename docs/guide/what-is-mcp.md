@@ -34,18 +34,18 @@ Depending on where you sit in the ecosystem, MCP can have a range of benefits:
 
 While MCP has official SDKs for TypeScript, Python, and other languages, **Zig currently lacks proper MCP support**.
 
-`mcp.zig` aims to fill this gap by providing a native, high-performance MCP implementation for the Zig programming language.
+`mcp.zig` provides a native Zig implementation of MCP revision `2026-07-28`,
+with both a server and a client, on top of a single external package
+(`httpx.zig`).
 
 ### Comparison
 
-| Feature            | mcp.zig      | TypeScript SDK | Python SDK  |
-| ------------------ | ------------ | -------------- | ----------- |
-| **Language**       | Zig          | TypeScript     | Python      |
-| **Performance**    | ⚡ Native    | JIT            | Interpreted |
-| **Binary Size**    | ~100KB       | ~50MB+ (Node)  | ~100MB+     |
-| **Memory Safety**  | Compile-time | Runtime        | Runtime     |
-| **Dependencies**   | Minimal (httpx.zig) | Many (npm)     | Many (pip)  |
-| **Cross-Platform** | ✅           | ✅             | ✅          |
+| Aspect          | mcp.zig                       | TypeScript SDK | Python SDK |
+| --------------- | ----------------------------- | -------------- | ---------- |
+| **Language**    | Zig                           | TypeScript     | Python     |
+| **Compilation** | Ahead-of-time, static binary  | JIT            | Interpreted |
+| **Memory safety** | Checked at compile time    | Checked at runtime | Checked at runtime |
+| **Dependencies** | One (`httpx.zig`)            | npm tree       | pip tree   |
 
 ## Core Concepts
 
@@ -88,7 +88,10 @@ try server.addPrompt(.{
 
 ## Protocol Overview
 
-MCP uses JSON-RPC 2.0 for communication:
+MCP uses JSON-RPC 2.0 for communication. In revision `2026-07-28` the protocol
+is stateless per request: there is no `initialize` handshake and no session id,
+so **every** request carries the protocol version, the client identity, and the
+client capabilities in `_meta`:
 
 ```json
 {
@@ -99,31 +102,46 @@ MCP uses JSON-RPC 2.0 for communication:
     "name": "get_weather",
     "arguments": {
       "location": "San Francisco"
+    },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "my-client",
+        "version": "1.0.0"
+      },
+      "io.modelcontextprotocol/clientCapabilities": {}
     }
   }
 }
 ```
 
-Responses follow the same format:
+Responses follow the same format, and every result carries a `resultType`:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
+    "resultType": "complete",
     "content": [
       {
         "type": "text",
-        "text": "Weather in San Francisco: 68°F, Sunny"
+        "text": "Weather in San Francisco: 68F, Sunny"
       }
-    ]
+    ],
+    "isError": false
   }
 }
 ```
 
+A result is `complete`, `input_required` when the server needs more input from
+the client before it can finish, or `task` when the request was augmented with
+the tasks extension. Cacheable results additionally carry `ttlMs` and
+`cacheScope`.
+
 ## Transports
 
-MCP supports multiple transport mechanisms:
+mcp.zig implements two transports:
 
 ### STDIO
 
@@ -133,9 +151,11 @@ For local process communication (most common):
 try server.run(io, allocator, .stdio);
 ```
 
-### HTTP
+### Streamable HTTP
 
-For remote communication:
+For remote communication. The server listens on `POST /mcp` and answers with
+`application/json`, or with `text/event-stream` when the request's `Accept`
+header asks for it:
 
 ```zig
 try server.run(io, allocator, .{ .http = .{ .port = 8080 } });
