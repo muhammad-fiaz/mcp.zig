@@ -413,13 +413,30 @@ pub const Server = struct {
 
         // Streamable HTTP conformance: validate headers against the body and
         // map the outcome onto the status codes the spec prescribes.
-        const verdict = http_rules.validate(
+        const verdict = http_rules.validateWithSchemas(
             ctx.allocator,
             .{ .context = ctx },
             body,
             // Servers bound to a loopback host reject cross-origin browser
             // requests (DNS rebinding protection).
             isLoopbackHost(config),
+            .{
+                .ctx = mcp_server,
+                .resolve = struct {
+                    fn f(user: *const anyopaque, tool_name: []const u8) ?std.json.Value {
+                        const self: *const Server = @ptrCast(@alignCast(user));
+                        const tool = self.tools.get(tool_name) orelse return null;
+                        const schema = tool.inputSchema orelse return null;
+                        // Serialise just the schema so annotations can be
+                        // collected from the same document clients receive.
+                        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+                        defer arena.deinit();
+                        var obj: std.json.ObjectMap = .empty;
+                        putInputSchemaFields(arena.allocator(), &obj, schema) catch return null;
+                        return .{ .object = obj };
+                    }
+                }.f,
+            },
         ) catch |err| {
             std.log.warn("HTTP request validation failed: {s}", .{@errorName(err)});
             return jsonRpcHttpError(ctx.allocator, 400, null, jsonrpc.ErrorCode.INVALID_REQUEST, "Invalid request", null);
@@ -809,32 +826,7 @@ pub const Server = struct {
 
             var input_schema: std.json.ObjectMap = .empty;
             if (entry.inputSchema) |schema| {
-                // Start from the caller's full 2020-12 document so $ref/$defs
-                // and composition keywords survive, then overlay the typed
-                // convenience fields on top.
-                if (schema.raw) |raw| {
-                    switch (raw) {
-                        .object => |obj| {
-                            var it = obj.iterator();
-                            while (it.next()) |kv| {
-                                try input_schema.put(allocator, kv.key_ptr.*, kv.value_ptr.*);
-                            }
-                        },
-                        else => {},
-                    }
-                }
-
-                try input_schema.put(allocator, "type", .{ .string = schema.type });
-
-                if (schema.@"$schema") |s| try input_schema.put(allocator, "$schema", .{ .string = s });
-                if (schema.description) |d| try input_schema.put(allocator, "description", .{ .string = d });
-                if (schema.properties) |p| try input_schema.put(allocator, "properties", p);
-
-                if (schema.required) |req| {
-                    var arr: std.json.Array = .init(allocator);
-                    for (req) |name| try arr.append(.{ .string = name });
-                    try input_schema.put(allocator, "required", .{ .array = arr });
-                }
+                try putInputSchemaFields(allocator, &input_schema, schema);
             } else {
                 try input_schema.put(allocator, "type", .{ .string = "object" });
             }
@@ -896,6 +888,39 @@ pub const Server = struct {
     }
 
     /// Handle tools/call request
+    /// Writes a tool's `inputSchema` exactly as clients receive it: the caller's
+    /// full 2020-12 document first, then the typed convenience fields on top.
+    ///
+    /// Shared by `tools/list` and by `x-mcp-header` validation, which must read
+    /// annotations from the very same document.
+    fn putInputSchemaFields(
+        allocator: std.mem.Allocator,
+        obj: *std.json.ObjectMap,
+        schema: types.InputSchema,
+    ) !void {
+        if (schema.raw) |raw| {
+            switch (raw) {
+                .object => |raw_obj| {
+                    var it = raw_obj.iterator();
+                    while (it.next()) |kv| {
+                        try obj.put(allocator, kv.key_ptr.*, kv.value_ptr.*);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        try obj.put(allocator, "type", .{ .string = schema.type });
+        if (schema.@"$schema") |s| try obj.put(allocator, "$schema", .{ .string = s });
+        if (schema.description) |d| try obj.put(allocator, "description", .{ .string = d });
+        if (schema.properties) |p| try obj.put(allocator, "properties", p);
+        if (schema.required) |req| {
+            var arr: std.json.Array = .init(allocator);
+            for (req) |name| try arr.append(.{ .string = name });
+            try obj.put(allocator, "required", .{ .array = arr });
+        }
+    }
+
     fn handleToolsCall(self: *Self, io: anytype, allocator: std.mem.Allocator, request: jsonrpc.Request) !void {
         var tool_name: []const u8 = "";
         var arguments: ?std.json.Value = null;

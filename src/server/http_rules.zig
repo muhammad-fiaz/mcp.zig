@@ -20,6 +20,7 @@
 const std = @import("std");
 const protocol = @import("../protocol/protocol.zig");
 const jsonrpc = @import("../protocol/jsonrpc.zig");
+const param_headers = @import("../protocol/param_headers.zig");
 
 // Canonical definitions live in the protocol layer so the client and server
 // cannot disagree about them; these remain as readable aliases.
@@ -140,6 +141,25 @@ pub fn validate(
     request_body: []const u8,
     loopback_only: bool,
 ) !Verdict {
+    return validateWithSchemas(allocator, headers, request_body, loopback_only, .{});
+}
+
+/// Resolves the `inputSchema` a tool was declared with.
+///
+/// The server needs this to know which arguments a client is required to
+/// mirror as `Mcp-Param-*` headers, and what values they must agree with.
+pub const ArgumentSchemas = struct {
+    ctx: ?*const anyopaque = null,
+    resolve: ?*const fn (ctx: *const anyopaque, tool_name: []const u8) ?std.json.Value = null,
+};
+
+pub fn validateWithSchemas(
+    allocator: std.mem.Allocator,
+    headers: HeaderSource,
+    request_body: []const u8,
+    loopback_only: bool,
+    schemas: ArgumentSchemas,
+) !Verdict {
     if (!isOriginAllowed(headers.origin(), loopback_only)) {
         return .forbidden_origin;
     }
@@ -217,22 +237,26 @@ pub fn validate(
     }
 
     // Mirrored per-parameter headers must agree with the body.
-    if (!try validateParamHeaders(allocator, headers, req.params)) {
+    if (!try validateParamHeaders(allocator, headers, req.params, schemas)) {
         return .{ .mismatch = .{ .message = "Mcp-Param-* header does not match request params" } };
     }
 
     return .ok;
 }
 
-/// Validates every `Mcp-Param-<name>` header against the matching body field.
+/// Validates every `Mcp-Param-<Name>` header against the matching body field.
 ///
 /// A mirrored parameter that disagrees with the body is a header mismatch
-/// (`-32020`). Parameters the server did not mirror are ignored, so a partial
-/// set of headers is still valid.
+/// (`-32020`). When the tool's `inputSchema` is available through `schemas`,
+/// the check is exact: every argument annotated with `x-mcp-header` must be
+/// present with an agreeing header, and a header naming an argument that is
+/// not annotated is rejected. Without a schema the check falls back to
+/// matching headers against same-named top-level params.
 pub fn validateParamHeaders(
     allocator: std.mem.Allocator,
     source: HeaderSource,
     params: ?std.json.Value,
+    schemas: ArgumentSchemas,
 ) !bool {
     const p = params orelse return true;
     if (p != .object) return true;
@@ -240,27 +264,84 @@ pub fn validateParamHeaders(
     const mirrored = try source.collectParamHeaders(allocator);
     defer if (mirrored.owned) allocator.free(mirrored.items);
 
+    const method = source.method() orelse "";
+
+    // `x-mcp-header` mirrors tool *arguments*, which live under
+    // `params.arguments`; other methods have no such nesting.
+    var annotations: []param_headers.Annotation = @constCast(&.{});
+    defer param_headers.Annotation.freeList(allocator, annotations);
+
+    var body_root: std.json.Value = p;
+    if (std.mem.eql(u8, method, "tools/call")) {
+        if (schemas.resolve) |resolve| {
+            const schema_ctx = schemas.ctx orelse return true;
+            if (p.object.get("name")) |n| {
+                if (n == .string) {
+                    if (resolve(schema_ctx, n.string)) |schema| {
+                        // A schema that cannot be walked is the tool author's
+                        // bug; leave the request to the normal validation path.
+                        annotations = param_headers.collect(allocator, schema) catch &.{};
+                    }
+                }
+            }
+        }
+        if (annotations.len != 0) {
+            const args = p.object.get("arguments") orelse return true;
+            body_root = args;
+        }
+    }
+    if (body_root != .object) return true;
+
     for (mirrored.items) |entry| {
         if (!std.mem.startsWith(u8, entry.name, header_param_prefix)) continue;
 
         const field = entry.name[header_param_prefix.len..];
         if (field.len == 0) return false;
 
-        const body_value = p.object.get(field) orelse return false;
+        var body_value: ?std.json.Value = null;
+        if (annotations.len != 0) {
+            // Only annotated arguments may be mirrored.
+            const found = for (annotations) |a| {
+                if (std.ascii.eqlIgnoreCase(a.name, field)) break a;
+            } else null;
+            const annotation = found orelse return false;
+            body_value = param_headers.valueAtPath(body_root, annotation.path);
+            if (body_value == null) return false;
+        } else {
+            body_value = body_root.object.get(field) orelse return false;
+        }
 
         var expected: ?[]const u8 = null;
         defer if (expected) |e| allocator.free(e);
-        switch (body_value) {
+        switch (body_value.?) {
             .string => |s| expected = try allocator.dupe(u8, s),
             .integer => |i| expected = try std.fmt.allocPrint(allocator, "{d}", .{i}),
-            .float => |f| expected = try std.fmt.allocPrint(allocator, "{d}", .{f}),
             .bool => |b| expected = try allocator.dupe(u8, if (b) "true" else "false"),
-            else => continue,
+            // `x-mcp-header` is only defined for string, integer and boolean
+            // primitives, so nothing else can legitimately be mirrored.
+            else => return false,
         }
         const want = expected orelse continue;
 
         if (!try headerMatchesBody(allocator, entry.value, want)) return false;
     }
+
+    // With a schema in hand, every annotated argument must also be mirrored.
+    if (annotations.len != 0) {
+        for (annotations) |a| {
+            var present = false;
+            for (mirrored.items) |entry| {
+                if (!std.mem.startsWith(u8, entry.name, header_param_prefix)) continue;
+                const field = entry.name[header_param_prefix.len..];
+                if (std.ascii.eqlIgnoreCase(a.name, field)) {
+                    present = true;
+                    break;
+                }
+            }
+            if (!present) return false;
+        }
+    }
+
     return true;
 }
 
@@ -531,6 +612,66 @@ test "spec: Mcp-Param-* headers are validated against the body" {
         .{ .name = "Mcp-Param-nope", .value = "x" },
     };
     try testing.expect(try validate(a, makeSource(&unknown), req_body, false) == .mismatch);
+}
+
+test "spec: Mcp-Param-* validation is schema-aware for nested tool arguments" {
+    const a = testing.allocator;
+
+    // `who` is annotated, so the client must mirror it as Mcp-Param-Who and
+    // the value must agree with params.arguments.who. `times` is not
+    // annotated, so mirroring it must be rejected.
+    const schema = try std.json.parseFromSlice(std.json.Value, a,
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "who": { "type": "string", "x-mcp-header": "Who" },
+        \\    "times": { "type": "integer" }
+        \\  },
+        \\  "required": ["who"]
+        \\}
+    , .{});
+    defer schema.deinit();
+
+    const SchemaCtx = struct { value: std.json.Value };
+    var schema_ctx = SchemaCtx{ .value = schema.value };
+
+    const resolve = struct {
+        fn f(user: *const anyopaque, tool_name: []const u8) ?std.json.Value {
+            if (!std.mem.eql(u8, tool_name, "greet")) return null;
+            const self: *const SchemaCtx = @ptrCast(@alignCast(user));
+            return self.value;
+        }
+    }.f;
+    const schemas: ArgumentSchemas = .{ .ctx = @ptrCast(&schema_ctx), .resolve = resolve };
+
+    const makeSource = struct {
+        fn f(params: []const ParamHeader) HeaderSource {
+            return .{
+                .fallback = &[_]?[]const u8{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
+                .params = params,
+            };
+        }
+    }.f;
+
+    const call_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"greet\",\"arguments\":{\"who\":\"Zig\",\"times\":3},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
+
+    // Mirroring the annotated argument with the right value is accepted.
+    const agree = [_]ParamHeader{.{ .name = "Mcp-Param-Who", .value = "Zig" }};
+    try testing.expect(try validateWithSchemas(a, makeSource(&agree), call_body, false, schemas) == .ok);
+
+    // A value that disagrees with the body is a header mismatch.
+    const disagree = [_]ParamHeader{.{ .name = "Mcp-Param-Who", .value = "Rust" }};
+    try testing.expect(try validateWithSchemas(a, makeSource(&disagree), call_body, false, schemas) == .mismatch);
+
+    // Mirroring an argument the schema does not annotate is rejected.
+    const unannotated = [_]ParamHeader{.{ .name = "Mcp-Param-Times", .value = "3" }};
+    try testing.expect(try validateWithSchemas(a, makeSource(&unannotated), call_body, false, schemas) == .mismatch);
+
+    // Every annotated argument must be mirrored, so omitting it is rejected.
+    try testing.expect(try validateWithSchemas(a, makeSource(&.{}), call_body, false, schemas) == .mismatch);
+
+    // Without a schema the old lenient behaviour still holds.
+    try testing.expect(try validateWithSchemas(a, makeSource(&.{}), call_body, false, .{}) == .ok);
 }
 
 test "http: Mcp-Name accepts the base64 sentinel encoding" {
