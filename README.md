@@ -171,7 +171,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     // Enable capabilities
     client.enableSampling();
-    client.enableRoots(true); // Supports list changed notifications
+    client.enableRoots(); // Deprecated; presence-only capability
 
     // Connect to server
     try client.connectStdio("my-server-binary", &.{});
@@ -301,7 +301,7 @@ try server.addPrompt(.{
 Define filesystem boundaries:
 
 ```zig
-client.enableRoots(true);
+client.enableRoots();
 try client.addRoot(allocator, "file:///projects", "Projects");
 ```
 

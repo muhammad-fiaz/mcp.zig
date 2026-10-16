@@ -470,8 +470,12 @@ pub const Client = struct {
     }
 
     /// Enables the roots capability (deprecated in 2026-07-28).
-    pub fn enableRoots(self: *Self, listChanged: bool) void {
-        self.capabilities.roots = .{ .listChanged = listChanged };
+    ///
+    /// `roots` is presence-only: the schema declares no properties and
+    /// `notifications/roots/list_changed` no longer exists, so there is no
+    /// `listChanged` flag to set.
+    pub fn enableRoots(self: *Self) void {
+        self.capabilities.roots = .{};
     }
 
     /// Enables the elicitation capability for handling server-initiated user input requests.
@@ -930,11 +934,6 @@ pub const Client = struct {
         try self.sendRequest("tasks/cancel", .{ .object = params });
     }
 
-    /// Sends the notifications/roots/list_changed notification (deprecated).
-    pub fn notifyRootsChanged(self: *Self) !void {
-        try self.sendNotification("notifications/roots/list_changed", null);
-    }
-
     /// Sends multiple JSON-RPC requests as a batch.
     /// Returns an array of responses.
     pub fn sendBatch(self: *Self, requests: []const jsonrpc.Request) !std.ArrayList(jsonrpc.Response) {
@@ -993,12 +992,12 @@ test "Client capabilities" {
     defer client.deinit();
 
     client.enableSampling();
-    client.enableRoots(true);
+    client.enableRoots();
     client.enableElicitation();
     try client.enableTasks();
 
     try std.testing.expect(client.capabilities.sampling != null);
-    try std.testing.expect(client.capabilities.roots.?.listChanged);
+    try std.testing.expect(client.capabilities.roots != null);
     try std.testing.expect(client.capabilities.elicitation != null);
     try std.testing.expect(client.hasExtension(protocol.EXTENSION_TASKS));
 }
@@ -1071,7 +1070,7 @@ test "Client enable all capabilities" {
     defer client.deinit();
 
     client.enableSamplingAdvanced(true, true);
-    client.enableRoots(true);
+    client.enableRoots();
     client.enableElicitation();
     try client.enableTasks();
 
@@ -1379,15 +1378,16 @@ test "deprecated Roots and Sampling capabilities serialize" {
 
     // Roots and Sampling are deprecated but still part of 2026-07-28, and MRTR
     // still requires their request types, so both must remain declarable.
-    client.enableRoots(true);
+    client.enableRoots();
     client.enableSamplingAdvanced(true, true);
 
     var arena_state = std.heap.ArenaAllocator.init(a);
     defer arena_state.deinit();
 
     const caps = try client.capabilities.toJson(arena_state.allocator());
+    // `roots?: {}` is presence-only; the removed listChanged flag must not appear.
     const roots = caps.get("roots").?.object;
-    try std.testing.expectEqual(@as(bool, true), roots.get("listChanged").?.bool);
+    try std.testing.expectEqual(@as(usize, 0), roots.count());
 
     const sampling = caps.get("sampling").?.object;
     try std.testing.expect(sampling.contains("tools"));
@@ -1436,7 +1436,6 @@ test "Client request maps do not leak" {
     try client.getTask("task-1");
     try client.cancelTask("task-1");
     try client.complete(.{ .string = "ref" }, .{ .string = "arg" });
-    try client.notifyRootsChanged();
 }
 
 test "Client sendBatch with unmanaged ArrayList (Zig 0.17 migration)" {

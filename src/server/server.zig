@@ -791,6 +791,21 @@ pub const Server = struct {
 
             var input_schema: std.json.ObjectMap = .empty;
             if (entry.inputSchema) |schema| {
+                // Start from the caller's full 2020-12 document so $ref/$defs
+                // and composition keywords survive, then overlay the typed
+                // convenience fields on top.
+                if (schema.raw) |raw| {
+                    switch (raw) {
+                        .object => |obj| {
+                            var it = obj.iterator();
+                            while (it.next()) |kv| {
+                                try input_schema.put(allocator, kv.key_ptr.*, kv.value_ptr.*);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
                 try input_schema.put(allocator, "type", .{ .string = schema.type });
 
                 if (schema.@"$schema") |s| try input_schema.put(allocator, "$schema", .{ .string = s });
@@ -809,6 +824,17 @@ pub const Server = struct {
 
             if (entry.outputSchema) |schema| {
                 var output_schema: std.json.ObjectMap = .empty;
+                if (schema.raw) |raw| {
+                    switch (raw) {
+                        .object => |obj| {
+                            var it = obj.iterator();
+                            while (it.next()) |kv| {
+                                try output_schema.put(allocator, kv.key_ptr.*, kv.value_ptr.*);
+                            }
+                        },
+                        else => {},
+                    }
+                }
                 try output_schema.put(allocator, "type", .{ .string = schema.type });
                 if (schema.@"$schema") |s| try output_schema.put(allocator, "$schema", .{ .string = s });
                 if (schema.properties) |p| try output_schema.put(allocator, "properties", p);
@@ -3098,6 +3124,62 @@ test "spec: paginate slices pages and round-trips the cursor" {
     // An empty string is a legitimate cursor value, so it must not be treated
     // as "no cursor" (the spec calls this out explicitly).
     try std.testing.expectError(error.InvalidCursor, Server.paginate(a, &keys, "", 2));
+}
+
+test "spec: tools/list preserves full JSON Schema 2020-12 documents" {
+    const a = std.testing.allocator;
+
+    const Handler = struct {
+        fn handler(_: ?*anyopaque, _: std.Io, _: std.mem.Allocator, _: ?std.json.Value) tools_mod.ToolError!tools_mod.ToolResult {
+            return tools_mod.textResult(std.heap.page_allocator, "ok") catch return tools_mod.ToolError.OutOfMemory;
+        }
+    };
+
+    // SEP-2100 makes inputSchema a complete 2020-12 document, so reference and
+    // composition keywords must survive serialisation instead of being dropped
+    // by the typed convenience struct.
+    const raw_schema = try std.json.parseFromSlice(std.json.Value, a,
+        \\{
+        \\  "$schema": "https://json-schema.org/draft/2020-12/schema",
+        \\  "type": "object",
+        \\  "additionalProperties": false,
+        \\  "allOf": [{ "type": "object" }],
+        \\  "$defs": { "Name": { "type": "string" } },
+        \\  "properties": { "name": { "$ref": "#/$defs/Name" } },
+        \\  "required": ["name"]
+        \\}
+    , .{});
+    defer raw_schema.deinit();
+
+    var tool_builder = tools_mod.ToolBuilder.init("echo-schema");
+    const tool = tool_builder
+        .description("uses a full 2020-12 schema")
+        .inputSchemaFromRaw(raw_schema.value)
+        .outputSchemaFromRaw(raw_schema.value)
+        .handler(Handler.handler)
+        .build();
+
+    var server = Server.init(a, .{ .name = "schema-server", .version = "1.0.0" });
+    defer server.deinit();
+    try server.addTool(tool);
+
+    const parsed = try runRequest(&server, a, "tools/list", null);
+    defer parsed.deinit();
+    const result = try resultOf(parsed);
+    const entry = result.get("tools").?.array.items[0].object;
+
+    const input = entry.get("inputSchema").?.object;
+    try std.testing.expectEqualStrings("https://json-schema.org/draft/2020-12/schema", input.get("$schema").?.string);
+    try std.testing.expectEqual(false, input.get("additionalProperties").?.bool);
+    try std.testing.expectEqual(@as(usize, 1), input.get("allOf").?.array.items.len);
+    try std.testing.expect(input.get("$defs") != null);
+    try std.testing.expectEqualStrings("#/$defs/Name", input.get("properties").?.object.get("name").?.object.get("$ref").?.string);
+    try std.testing.expectEqual(@as(usize, 1), input.get("required").?.array.items.len);
+
+    // The same must hold for outputSchema.
+    const output = entry.get("outputSchema").?.object;
+    try std.testing.expect(output.get("$defs") != null);
+    try std.testing.expectEqual(@as(usize, 1), output.get("allOf").?.array.items.len);
 }
 
 test "spec: tools/list paginates and reports nextCursor" {

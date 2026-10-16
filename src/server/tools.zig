@@ -101,6 +101,14 @@ pub const ToolBuilder = struct {
         return self;
     }
 
+    /// Sets the input schema from a raw JSON Schema 2020-12 document, so
+    /// keywords the typed struct cannot express (`$ref`, `$defs`, `allOf`,
+    /// `anyOf`, `additionalProperties`, ...) reach clients intact.
+    pub fn inputSchemaFromRaw(self: *Self, value: std.json.Value) *Self {
+        self.tool.inputSchema = types.InputSchema.fromJson(value);
+        return self;
+    }
+
     /// Sets the input schema from an InputSchemaBuilder using an allocator.
     pub fn inputSchemaFromBuilder(self: *Self, allocator: std.mem.Allocator, builder: *schema.InputSchemaBuilder) !*Self {
         self.tool.inputSchema = try builder.toInputSchema(allocator);
@@ -110,6 +118,12 @@ pub const ToolBuilder = struct {
     /// Sets the output schema for the tool.
     pub fn outputSchema(self: *Self, schema_value: types.OutputSchema) *Self {
         self.tool.outputSchema = schema_value;
+        return self;
+    }
+
+    /// Sets the output schema from a raw JSON Schema 2020-12 document.
+    pub fn outputSchemaFromRaw(self: *Self, value: std.json.Value) *Self {
+        self.tool.outputSchema = types.OutputSchema.fromJson(value);
         return self;
     }
 

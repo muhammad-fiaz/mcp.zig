@@ -58,7 +58,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
     client.enableSamplingAdvanced(true, true);
     client.enableElicitation();
     try client.enableTasks();
-    client.enableRoots(true);
+    client.enableRoots();
 
     try client.addRoot("file:///tmp", "Temp");
 
@@ -107,7 +107,7 @@ zig build
 2. **`enableSamplingAdvanced`** enables sampling with context and tool use support
 3. **`enableElicitation`** enables user-input elicitation capability
 4. **`enableTasks`** declares the `io.modelcontextprotocol/tasks` extension, without which a server refuses `tasks/get`, `tasks/update` and `tasks/cancel` with `-32021`
-5. **`enableRoots(true)`** enables roots capability and listChanged notification handling
+5. **`enableRoots()`** enables the deprecated roots capability (presence-only)
 6. **`addRoot`** registers filesystem roots that the server may request
 
 ## Connection APIs

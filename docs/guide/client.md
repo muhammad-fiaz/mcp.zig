@@ -52,7 +52,7 @@ The HTTP client transport uses httpx.zig 0.2.2 (Zig 0.17.0).
 ### Enable Roots
 
 ```zig
-client.enableRoots(true);
+client.enableRoots();
 ```
 
 ### Enable Sampling
@@ -221,7 +221,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer client.deinit();
 
     // Enable capabilities
-    client.enableRoots(true);
+    client.enableRoots();
 
     // Add roots
     try client.addRoot("file:///home/user/documents", "Documents");

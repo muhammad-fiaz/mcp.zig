@@ -56,7 +56,7 @@ Clean up client resources and pending state.
 ## Capabilities
 
 ```zig
-pub fn enableRoots(self: *Client, listChanged: bool) void
+pub fn enableRoots(self: *Client) void
 pub fn enableSampling(self: *Client) void
 pub fn enableSamplingAdvanced(self: *Client, context: bool, tools_support: bool) void
 pub fn enableElicitation(self: *Client) void
@@ -112,10 +112,8 @@ pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !v
 
 pub fn getTask(self: *Client, taskId: []const u8) !void
 pub fn getTaskResult(self: *Client, taskId: []const u8) !void
-pub fn listTasks(self: *Client) !void
+pub fn getTask(self: *Client, taskId: []const u8) !void
 pub fn cancelTask(self: *Client, taskId: []const u8) !void
-
-pub fn notifyRootsChanged(self: *Client) !void
 ```
 
 ---
@@ -137,7 +135,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     });
     defer client.deinit();
 
-    client.enableRoots(true);
+    client.enableRoots();
     client.enableSamplingAdvanced(true, true);
 
     try client.addRoot("file:///home/user/docs", "Documentation");

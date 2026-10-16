@@ -182,9 +182,8 @@ pub const ClientCapabilities = struct {
         const empty_obj: std.json.ObjectMap = .empty;
 
         if (self.roots) |roots| {
-            var obj: std.json.ObjectMap = .empty;
-            if (roots.listChanged) try obj.put(allocator, "listChanged", .{ .bool = true });
-            try caps.put(allocator, "roots", .{ .object = obj });
+            _ = roots;
+            try caps.put(allocator, "roots", .{ .object = empty_obj });
         }
         if (self.sampling) |sampling| {
             var obj: std.json.ObjectMap = .empty;
@@ -213,9 +212,9 @@ pub const ClientCapabilities = struct {
     }
 };
 
-pub const RootsCapability = struct {
-    listChanged: bool = false,
-};
+/// `roots` carries no properties: `notifications/roots/list_changed` was
+/// removed in 2026-07-28, so the capability is presence-only.
+pub const RootsCapability = struct {};
 
 pub const SamplingCapability = struct {
     /// Whether the client supports context inclusion.
@@ -591,20 +590,70 @@ pub const ToolDefinition = struct {
 };
 
 /// JSON Schema for tool input parameters.
+///
+/// SEP-2100 makes this a full JSON Schema 2020-12 document, so keywords
+/// beyond the typed convenience fields below are legal. Anything this struct
+/// cannot express (`$ref`, `$defs`, `allOf`/`anyOf`/`oneOf`,
+/// `additionalProperties`, `patternProperties`, bounds, ...) must be supplied
+/// through `raw`; the server emits `raw` verbatim and then overlays the typed
+/// fields, so no keyword is ever silently dropped.
 pub const InputSchema = struct {
     @"$schema": ?[]const u8 = null,
     type: []const u8 = "object",
     properties: ?std.json.Value = null,
     required: ?[]const []const u8 = null,
     description: ?[]const u8 = null,
+
+    /// The complete schema document, used as the base for serialisation.
+    raw: ?std.json.Value = null,
+
+    /// Wraps a raw JSON Schema 2020-12 document. Typed fields are also
+    /// populated where they can be read without allocating, so callers can
+    /// inspect `type`/`properties` directly while the untouched document
+    /// (including every unsupported keyword) is preserved for the wire.
+    pub fn fromJson(value: std.json.Value) InputSchema {
+        var out: InputSchema = .{ .raw = value };
+        const obj = switch (value) {
+            .object => |o| o,
+            else => return out,
+        };
+        if (obj.get("type")) |t| {
+            if (t == .string) out.type = t.string;
+        }
+        if (obj.get("$schema")) |s| {
+            if (s == .string) out.@"$schema" = s.string;
+        }
+        if (obj.get("description")) |d| {
+            if (d == .string) out.description = d.string;
+        }
+        if (obj.get("properties")) |p| out.properties = p;
+        return out;
+    }
 };
 
-/// JSON Schema for tool output.
+/// JSON Schema for tool output. Same `raw` passthrough rules as `InputSchema`.
 pub const OutputSchema = struct {
     @"$schema": ?[]const u8 = null,
     type: []const u8 = "object",
     properties: ?std.json.Value = null,
     required: ?[]const []const u8 = null,
+    raw: ?std.json.Value = null,
+
+    pub fn fromJson(value: std.json.Value) OutputSchema {
+        var out: OutputSchema = .{ .raw = value };
+        const obj = switch (value) {
+            .object => |o| o,
+            else => return out,
+        };
+        if (obj.get("type")) |t| {
+            if (t == .string) out.type = t.string;
+        }
+        if (obj.get("$schema")) |s| {
+            if (s == .string) out.@"$schema" = s.string;
+        }
+        if (obj.get("properties")) |p| out.properties = p;
+        return out;
+    }
 };
 
 /// Execution-related properties for a tool.

@@ -210,9 +210,8 @@ pub const Method = enum {
     @"elicitation/create",
     @"notifications/elicitation/complete",
 
-    // Roots (deprecated)
+    // Roots (deprecated; list_changed was removed in 2026-07-28)
     @"roots/list",
-    @"notifications/roots/list_changed",
 
     // Completion
     @"completion/complete",

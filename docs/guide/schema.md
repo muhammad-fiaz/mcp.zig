@@ -116,6 +116,41 @@ _ = schema.setPropertyRange("age", 18, 120);
 | `date-time` | ISO 8601 datetime |
 | `uuid`      | UUID string       |
 
+### Full JSON Schema 2020-12 documents
+
+`Tool.inputSchema` and `Tool.outputSchema` are complete JSON Schema 2020-12
+documents, not just a property bag. The typed struct covers the common cases,
+but keywords it cannot express (`$ref`, `$defs`, `allOf`/`anyOf`/`oneOf`,
+`additionalProperties`, `patternProperties`, bounds, ...) would otherwise be
+silently dropped. Pass the raw document instead:
+
+```zig
+var b = try std.json.parseFromSlice(std.json.Value, allocator,
+    \\{
+    \\  "$schema": "https://json-schema.org/draft/2020-12/schema",
+    \\  "type": "object",
+    \\  "additionalProperties": false,
+    \\  "$defs": { "Name": { "type": "string" } },
+    \\  "properties": { "name": { "$ref": "#/$defs/Name" } },
+    \\  "required": ["name"]
+    \\}
+, .{});
+defer b.deinit();
+
+const input = mcp.types.InputSchema.fromJson(b.value);
+
+var builder = mcp.tools.ToolBuilder.init("greet");
+const tool = builder
+    .description("Greets somebody")
+    .inputSchemaFromRaw(b.value)
+    .handler(handler)
+    .build();
+```
+
+The server emits `raw` verbatim and then overlays any typed fields that are
+also set, so nothing is lost either way. `OutputSchema.fromJson` and
+`outputSchemaFromRaw` work the same way.
+
 ## Common Schemas
 
 Pre-defined schemas for common types:
