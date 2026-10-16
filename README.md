@@ -341,15 +341,34 @@ The generated files (including `index.html`, `main.js`, and `main.wasm`) will be
 
 ## Protocol Version
 
-This library implements MCP protocol version **2026-07-28**.
+This library implements MCP protocol version **2026-07-28**, and speaks that
+version by default everywhere. Every request carries its version and the
+client's capabilities in `_meta`; there is no `initialize` handshake.
 
-| Version    | Status        |
-| ---------- | ------------- |
-| 2026-07-28 | Supported  |
-| 2025-11-25 | Compatible |
-| 2025-06-18 | Compatible |
-| 2025-03-26 | Compatible |
-| 2024-11-05 | Compatible |
+| Version    | Status                    |
+| ---------- | ------------------------- |
+| 2026-07-28 | Supported (default)       |
+
+Earlier revisions (`2025-11-25` and older) are **not** supported: they
+established a session with an `initialize` handshake, which this revision
+removed. A server speaking one of them will reject these requests, and this
+client will not fall back to the legacy handshake.
+
+### Deprecated but supported features
+
+Roots, Sampling, and Logging are deprecated in `2026-07-28` but remain part of
+the specification, so they are fully supported here:
+
+- **Roots** and **Sampling** are reachable through Multi Round-Trip Requests,
+  because the MRTR schema still defines `ListRootsRequest` and
+  `CreateMessageRequest` as valid `inputRequests` entries.
+- **Logging** is per-request: a client opts in with
+  `_meta.io.modelcontextprotocol/logLevel`, and the server emits no
+  `notifications/message` when the field is absent. The removed
+  `logging/setLevel` method is not implemented.
+
+New code should prefer tool parameters, resource URIs, and `stderr` over these
+features.
 
 ## Contributing
 

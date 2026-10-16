@@ -111,29 +111,84 @@ try client.getPrompt("summarize", .{ .object = args });
 
 ## Handling Responses
 
-All request APIs send JSON-RPC messages and return `!void`. To read responses,
-use the underlying transport and parse the incoming messages:
+Request APIs are fire-and-forget: they send a JSON-RPC message and return
+`!void`. Feed every received payload into `handleMessage`, which resolves the
+matching pending request and stores the result for `takeResult`:
 
 ```zig
-try client.listTools();
+// Start a request; it returns the id it was sent under.
+const id = try client.listToolsPage(null);
 
+// Pump each payload from the transport.
 if (client.transport) |t| {
     if (try t.receive(client.io, client.allocator)) |json| {
-        const parsed = try mcp.jsonrpc.parseMessage(client.allocator, json);
-        defer parsed.deinit();
-
-        switch (parsed.message) {
-            .response => |resp| {
-                std.debug.print("Response: {any}\n", .{resp.result});
-            },
-            .error_response => |err| {
-                std.debug.print("Error: {s}\n", .{err.@"error".message});
-            },
-            else => {},
-        }
+        try client.handleMessage(json);
     }
 }
+
+if (client.takeResult(id)) |raw| {
+    defer client.allocator.free(raw);
+    var parsed = try std.json.parseFromSlice(std.json.Value, client.allocator, raw, .{});
+    defer parsed.deinit();
+    std.debug.print("Tools: {any}\n", .{parsed.value});
+}
 ```
+
+`handleMessage` also validates the `resultType` discriminator. An absent one
+is read as `"complete"` for earlier-protocol servers; an unrecognised value
+returns `error.UnknownResultType`, because the base protocol says such a result
+is invalid.
+
+### Automatic MRTR rounds
+
+`callToolResolved`, `readResourceResolved` and `getPromptResolved` start a
+request that walks Multi Round-Trip Requests automatically. Supply an
+`InputResolver`, pump messages as usual, and the client resolves each
+`inputRequests` entry, echoes `requestState`, and retries under a new JSON-RPC
+id until the server produces a final result:
+
+```zig
+const Resolver = struct {
+    fn resolve(ctx: *anyopaque, allocator: std.mem.Allocator, key: []const u8, request: std.json.Value) anyerror!std.json.Value {
+        // Ask the user, run an LLM, etc. The value is borrowed by the client
+        // only for the duration of the round.
+        _ = ctx;
+        _ = allocator;
+        _ = key;
+        _ = request;
+        var accept: std.json.ObjectMap = .empty;
+        try accept.put(allocator, "action", .{ .string = "accept" });
+        return .{ .object = accept };
+    }
+};
+
+const id = try client.callToolResolved("needs_input", null, .{ .ctx = undefined, .resolve = Resolver.resolve });
+```
+
+Rounds are bounded by `client.max_mrtr_rounds`, so a server that keeps asking
+fails with `error.MrtrRoundLimitExceeded` instead of looping forever.
+
+### Notifications
+
+Register a handler per method. Notifications delivered on a
+`subscriptions/listen` stream also carry the subscription id, so several
+concurrent streams can be told apart:
+
+```zig
+try client.onNotification("notifications/tools/list_changed", .{
+    .ctx = undefined,
+    .handle = struct {
+        fn onChange(ctx: *anyopaque, params: std.json.ObjectMap, subscription_id: ?i64) void {
+            _ = ctx;
+            _ = params;
+            std.debug.print("tools changed (subscription {?})\n", .{subscription_id});
+        }
+    }.onChange,
+});
+```
+
+`params` borrows the receive buffer and is only valid for the duration of the
+call; copy anything that has to outlive it.
 
 ## Managing Roots
 

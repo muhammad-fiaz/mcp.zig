@@ -30,7 +30,9 @@ The following breaking changes were introduced in the MCP specification revision
 ## Implementation notes
 
 - **Server identity**: `serverInfo` is emitted under the namespaced `_meta` key `io.modelcontextprotocol/serverInfo`, not as a top-level result field, matching the 2026-07-28 `DiscoverResult` shape.
-- **`resultType`**: every completed result carries `resultType: "complete"`.
+- **`resultType`**: every completed result carries `resultType: "complete"`. The client treats an absent `resultType` as `"complete"` for earlier-protocol servers, and rejects any value it does not recognise (`complete`, `input_required`, or the tasks extension's `task`).
+- **MRTR retries are not cacheable**: a request carrying `inputResponses` or `requestState` is a retry rather than a fresh call, so its result is emitted **without** `ttlMs`/`cacheScope`. Those fields depend on inputs that are not part of the cache key.
+- **Invalid cursors are rejected**: an undecodable `cursor` returns `-32602` rather than silently restarting from the first page. An empty-string cursor is a valid cursor and is not treated as "no cursor".
 - **Caching hints**: emitted automatically on the six cacheable operations. Defaults are `ttlMs = 300000` / `cacheScope = "public"` for lists and `server/discover`, and `ttlMs = 60000` / `cacheScope = "private"` for `resources/read`. Override them through the server's `cache` configuration:
 
   ```zig

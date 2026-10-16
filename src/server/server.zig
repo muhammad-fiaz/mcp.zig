@@ -218,6 +218,10 @@ pub const Server = struct {
     /// `_meta.io.modelcontextprotocol/logLevel`. Null means the client did not
     /// ask for logs, and the server must then emit no `notifications/message`.
     request_log_level: ?protocol.LogLevel = null,
+    /// True when the current request is an MRTR retry. Results produced by a
+    /// retry carry `inputResponses` or `requestState`, which are not part of
+    /// the cache key, so the spec forbids advertising caching hints for them.
+    suppress_cache_hints: bool = false,
     /// Host the HTTP listener is bound to, used for Origin validation.
     http_host: ?[]const u8 = null,
     io: ?std.Io = null,
@@ -591,6 +595,10 @@ pub const Server = struct {
             return;
         };
         defer self.request_log_level = null;
+
+        // A retry of an MRTR request must not look cacheable.
+        self.suppress_cache_hints = Self.isMrtrRetry(request.params);
+        defer self.suppress_cache_hints = false;
 
         if (std.mem.eql(u8, request.method, "server/discover")) {
             try self.handleDiscover(io, allocator, request);
@@ -1769,7 +1777,10 @@ pub const Server = struct {
         page_size: usize,
     ) !Page {
         const start: usize = if (cursor) |c| blk: {
-            const idx = decodeCursor(allocator, c) orelse break :blk 0;
+            // An empty string is a valid cursor, so only an undecodable one is
+            // an error, and the spec asks for -32602 rather than a silent
+            // restart from the first page.
+            const idx = decodeCursor(allocator, c) orelse return error.InvalidCursor;
             break :blk @min(idx, keys.len);
         } else 0;
 
@@ -1925,6 +1936,23 @@ pub const Server = struct {
         try params.put(allocator, "data", .{ .string = message });
 
         try self.sendNotification(io, allocator, "notifications/message", .{ .object = params });
+    }
+
+    /// True when the request carries MRTR retry state.
+    ///
+    /// Either `inputResponses` or `requestState` means this is a retry rather than
+    /// a fresh call, which changes both caching and header handling.
+    fn isMrtrRetry(params: ?std.json.Value) bool {
+        const p = params orelse return false;
+        if (p != .object) return false;
+        if (p.object.contains("inputResponses")) return true;
+        // `requestState` normally travels at the top level of params.
+        if (p.object.contains(protocol.META_REQUEST_STATE)) return true;
+        // It may also sit in `_meta`, where the spec's reserved keys live.
+        if (p.object.get("_meta")) |meta| {
+            if (meta == .object and meta.object.contains(protocol.META_REQUEST_STATE)) return true;
+        }
+        return false;
     }
 
     /// Reads `io.modelcontextprotocol/logLevel` out of a request's `_meta`.
@@ -2293,25 +2321,28 @@ pub const Server = struct {
     /// Emits the mandatory caching hints on a cacheable result:
     /// `ttlMs` (clamped to >= 0) and `cacheScope`.
     fn putCacheHints(
+        self: *Self,
         allocator: std.mem.Allocator,
         result: *std.json.ObjectMap,
         ttl_ms: i64,
         scope: types.CacheScope,
     ) !void {
         const clamped = if (ttl_ms < 0) 0 else ttl_ms;
+        // An MRTR retry is not cacheable, so the hints are omitted entirely.
+        if (self.suppress_cache_hints) return;
         try result.put(allocator, "ttlMs", .{ .integer = clamped });
         try result.put(allocator, "cacheScope", .{ .string = scope.toString() });
     }
 
     /// Convenience: emit the standard list/discover cache hints.
     fn putListCacheHints(self: *Self, allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
-        try Self.putCacheHints(allocator, result, self.config.cache.ttl_ms, self.config.cache.scope);
+        try self.putCacheHints(allocator, result, self.config.cache.ttl_ms, self.config.cache.scope);
     }
 
     /// Convenience: emit cache hints for `resources/read` results, which are
     /// treated as user-specific by default.
     fn putReadCacheHints(self: *Self, allocator: std.mem.Allocator, result: *std.json.ObjectMap) !void {
-        try Self.putCacheHints(allocator, result, self.config.cache.read_ttl_ms, self.config.cache.read_scope);
+        try self.putCacheHints(allocator, result, self.config.cache.read_ttl_ms, self.config.cache.read_scope);
     }
 
     /// Emits the server identity under the spec-mandated namespaced `_meta`
@@ -3060,9 +3091,13 @@ test "spec: paginate slices pages and round-trips the cursor" {
     try std.testing.expectEqualStrings("e", third.items[0]);
     try std.testing.expect(third.next_cursor == null);
 
-    const stale = try Server.paginate(a, &keys, "not-base64!!", 2);
-    defer if (stale.next_cursor) |c| a.free(c);
-    try std.testing.expectEqualStrings("a", stale.items[0]);
+    // A cursor the client could not have obtained from us is rejected rather
+    // than silently restarting from the first page.
+    try std.testing.expectError(error.InvalidCursor, Server.paginate(a, &keys, "not-base64!!", 2));
+
+    // An empty string is a legitimate cursor value, so it must not be treated
+    // as "no cursor" (the spec calls this out explicitly).
+    try std.testing.expectError(error.InvalidCursor, Server.paginate(a, &keys, "", 2));
 }
 
 test "spec: tools/list paginates and reports nextCursor" {

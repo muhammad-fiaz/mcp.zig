@@ -40,6 +40,12 @@ pub const ClientState = enum {
 /// In MCP 2026-07-28, the protocol is stateless per-request. Every request
 /// carries the protocol version and client info in _meta.
 pub const Client = struct {
+    /// Errors surfaced by the receive pump.
+    pub const ClientError = error{
+        /// A result carried a `resultType` this client does not implement.
+        UnknownResultType,
+    };
+
     io: std.Io,
     allocator: std.mem.Allocator,
     config: ClientConfig,
@@ -57,6 +63,8 @@ pub const Client = struct {
     /// Subscription id of the most recent notification, for demultiplexing
     /// concurrent `subscriptions/listen` streams.
     last_subscription_id: ?i64 = null,
+    /// Set when a response carried a result the client cannot interpret.
+    last_error: ?ClientError = null,
     /// Resolver driving automatic MRTR rounds, when one is set.
     input_resolver: ?InputResolver = null,
     /// Upper bound on automatic MRTR rounds, guarding against a server that
@@ -185,6 +193,16 @@ pub const Client = struct {
         return self.last_subscription_id;
     }
 
+    /// True for result types this client understands.
+    ///
+    /// Core defines "complete" and "input_required"; the tasks extension adds
+    /// "task". Anything else is invalid per the base protocol.
+    pub fn isKnownResultType(kind: []const u8) bool {
+        return std.mem.eql(u8, kind, protocol.RESULT_TYPE_COMPLETE) or
+            std.mem.eql(u8, kind, protocol.RESULT_TYPE_INPUT_REQUIRED) or
+            std.mem.eql(u8, kind, protocol.RESULT_TYPE_TASK);
+    }
+
     /// Feeds one received JSON-RPC payload into the client.
     ///
     /// Applications pump this for every line or chunk the transport produces.
@@ -211,6 +229,19 @@ pub const Client = struct {
                     .integer => |i| i,
                     else => return,
                 };
+
+                // Validate the discriminator before anything else, so a
+                // response we are not tracking is still checked.
+                if (obj.get("result")) |res| {
+                    if (res == .object) {
+                        if (res.object.get("resultType")) |k| {
+                            if (k == .string and !isKnownResultType(k.string)) {
+                                self.last_error = error.UnknownResultType;
+                                return error.UnknownResultType;
+                            }
+                        }
+                    }
+                }
 
                 const entry = self.pending_requests.fetchRemove(id) orelse {
                     // Not a request we are tracking: record it anyway so a late
@@ -1277,6 +1308,90 @@ test "notifications dispatch to handlers and carry the subscription id" {
         \\{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{}}
     );
     try std.testing.expectEqualStrings("ack", seen.method);
+}
+
+test "unrecognized resultType is rejected, absent is read as complete" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    // The three result types a conforming client understands.
+    try std.testing.expect(Client.isKnownResultType("complete"));
+    try std.testing.expect(Client.isKnownResultType("input_required"));
+    try std.testing.expect(Client.isKnownResultType("task"));
+    try std.testing.expect(!Client.isKnownResultType("something_else"));
+
+    // An unrecognized discriminator is invalid.
+    try std.testing.expectError(
+        error.UnknownResultType,
+        client.handleMessage(
+            \\{"jsonrpc":"2.0","id":1,"result":{"resultType":"from_the_future"}}
+        ),
+    );
+    try std.testing.expectEqual(@as(?Client.ClientError, error.UnknownResultType), client.last_error);
+    try std.testing.expect(client.takeResult(1) == null);
+
+    // An earlier-protocol server omits resultType; that means "complete".
+    client.last_error = null;
+    try client.handleMessage(
+        \\{"jsonrpc":"2.0","id":2,"result":{"ok":true}}
+    );
+    const stored = client.takeResult(2) orelse return error.NoResultStored;
+    defer a.free(stored);
+    try std.testing.expect(std.mem.indexOf(u8, stored, "\"ok\":true") != null);
+}
+
+test "elicitation capability names the modes it supports" {
+    // toJson builds nested mode maps that the outer map references but does not
+    // own, so it is called with a per-request arena in production and here.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    var caps = types.ClientCapabilities{};
+    caps.elicitation = .{ .form = .{}, .url = .{} };
+    var both = try caps.toJson(a);
+    defer both.deinit(a);
+    const both_elicit = both.get("elicitation").?.object;
+    try std.testing.expect(both_elicit.contains("form"));
+    try std.testing.expect(both_elicit.contains("url"));
+
+    // Form only is declared as form, not as an empty object, so a server can
+    // tell the difference between "form" and "both".
+    caps.elicitation = .{ .form = .{} };
+    var form = try caps.toJson(a);
+    defer form.deinit(a);
+    const form_elicit = form.get("elicitation").?.object;
+    try std.testing.expect(form_elicit.contains("form"));
+    try std.testing.expect(!form_elicit.contains("url"));
+
+    // Declaring the capability with no mode still advertises at least form.
+    caps.elicitation = .{};
+    var bare = try caps.toJson(a);
+    defer bare.deinit(a);
+    try std.testing.expect(bare.get("elicitation").?.object.contains("form"));
+}
+
+test "deprecated Roots and Sampling capabilities serialize" {
+    const a = std.testing.allocator;
+    var client = Client.init(std.Io.failing, a, .{ .name = "c", .version = "1.0.0" });
+    defer client.deinit();
+
+    // Roots and Sampling are deprecated but still part of 2026-07-28, and MRTR
+    // still requires their request types, so both must remain declarable.
+    client.enableRoots(true);
+    client.enableSamplingAdvanced(true, true);
+
+    var arena_state = std.heap.ArenaAllocator.init(a);
+    defer arena_state.deinit();
+
+    const caps = try client.capabilities.toJson(arena_state.allocator());
+    const roots = caps.get("roots").?.object;
+    try std.testing.expectEqual(@as(bool, true), roots.get("listChanged").?.bool);
+
+    const sampling = caps.get("sampling").?.object;
+    try std.testing.expect(sampling.contains("tools"));
+    try std.testing.expect(sampling.contains("context"));
 }
 
 test "Client request maps do not leak" {

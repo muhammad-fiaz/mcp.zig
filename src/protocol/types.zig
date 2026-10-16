@@ -169,6 +169,11 @@ pub const ClientCapabilities = struct {
     /// `_meta["io.modelcontextprotocol/clientCapabilities"]`, which the spec
     /// requires on every client request. Only capabilities actually declared
     /// are emitted, so a server never assumes support the client lacks.
+    ///
+    /// Call this with a per-request arena: nested capability objects (the
+    /// elicitation mode map) are separate allocations that the returned map
+    /// references but does not own, so freeing the outer map alone leaves them
+    /// behind.
     pub fn toJson(self: ClientCapabilities, allocator: std.mem.Allocator) !std.json.ObjectMap {
         var caps: std.json.ObjectMap = .empty;
         errdefer caps.deinit(allocator);
@@ -187,8 +192,16 @@ pub const ClientCapabilities = struct {
             if (sampling.tools != null) try obj.put(allocator, "tools", .{ .object = empty_obj });
             try caps.put(allocator, "sampling", .{ .object = obj });
         }
-        if (self.elicitation != null) {
-            try caps.put(allocator, "elicitation", .{ .object = empty_obj });
+        if (self.elicitation) |elicitation| {
+            // The declared modes must be named: an empty object only means
+            // "form" for backwards compatibility, so a client supporting URL
+            // mode has to say so or servers must not send URL elicitations.
+            var modes: std.json.ObjectMap = .empty;
+            if (elicitation.form != null) try modes.put(allocator, "form", .{ .object = empty_obj });
+            if (elicitation.url != null) try modes.put(allocator, "url", .{ .object = empty_obj });
+            // A client must declare at least one mode; form is the safe default.
+            if (modes.count() == 0) try modes.put(allocator, "form", .{ .object = empty_obj });
+            try caps.put(allocator, "elicitation", .{ .object = modes });
         }
         if (self.experimental) |exp| {
             try caps.put(allocator, "experimental", exp);
