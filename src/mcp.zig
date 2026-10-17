@@ -61,6 +61,10 @@ pub const types = @import("protocol/types.zig");
 pub const jsonrpc = @import("protocol/jsonrpc.zig");
 pub const schema = @import("protocol/schema.zig");
 
+// MCP Apps extension constants
+pub const EXTENSION_UI = protocol.EXTENSION_UI;
+pub const MIME_TYPE_MCP_APP = protocol.MIME_TYPE_MCP_APP;
+
 // Transport layer implementations
 pub const transport = @import("transport/transport.zig");
 pub const StdioTransport = transport.StdioTransport;
@@ -80,9 +84,12 @@ pub const Tool = tools.Tool;
 pub const ToolBuilder = tools.ToolBuilder;
 pub const ToolResult = tools.ToolResult;
 pub const ToolUi = types.ToolUi;
+pub const uiResult = tools.uiResult;
 
 pub const resources = @import("server/resources.zig");
 pub const Resource = resources.Resource;
+pub const ResourceBuilder = resources.ResourceBuilder;
+pub const ResourceContent = resources.ResourceContent;
 pub const ResourceTemplate = resources.ResourceTemplate;
 
 pub const prompts = @import("server/prompts.zig");

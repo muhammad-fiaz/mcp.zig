@@ -315,6 +315,24 @@ pub fn structuredResult(allocator: std.mem.Allocator, structured: std.json.Value
     };
 }
 
+/// Creates a tool result pointing to an MCP Apps UI resource with an optional text fallback.
+pub fn uiResult(allocator: std.mem.Allocator, resource_uri: []const u8, text_fallback: ?[]const u8) !ToolResult {
+    var ui_obj: std.json.ObjectMap = .empty;
+    try ui_obj.put(allocator, "resourceUri", .{ .string = resource_uri });
+    var meta_obj: std.json.ObjectMap = .empty;
+    try meta_obj.put(allocator, "ui", .{ .object = ui_obj });
+
+    const fallback = text_fallback orelse resource_uri;
+    const owned_text = try allocator.dupe(u8, fallback);
+    const content = try allocator.alloc(types.ContentBlock, 1);
+    content[0] = .{ .text = .{ .text = owned_text } };
+
+    return .{
+        .content = content,
+        ._meta = .{ .object = meta_obj },
+    };
+}
+
 /// Extracts a string argument from tool arguments by key.
 pub fn getString(args: ?std.json.Value, key: []const u8) ?[]const u8 {
     if (args) |a| {
@@ -484,6 +502,12 @@ test "ToolBuilder with meta and ui" {
         .content = &.{},
     };
     try std.testing.expect(!result_without_ui.hasUi());
+
+    const generated_ui_res = try uiResult(allocator, "ui://charts/interactive", "Chart displayed in UI");
+    try std.testing.expect(generated_ui_res.hasUi());
+    try std.testing.expectEqualStrings("Chart displayed in UI", generated_ui_res.content[0].text.text);
+    const gen_meta_ui = generated_ui_res._meta.?.object.get("ui").?.object;
+    try std.testing.expectEqualStrings("ui://charts/interactive", gen_meta_ui.get("resourceUri").?.string);
 }
 
 test "isValidToolName" {

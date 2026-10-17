@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "health-check-example", .src = "examples/health_check_example.zig", .run_step = "run-health-check", .desc = "Run the health check example" },
         .{ .name = "shutdown-example", .src = "examples/shutdown_example.zig", .run_step = "run-shutdown", .desc = "Run the shutdown example" },
         .{ .name = "validator-example", .src = "examples/validator_example.zig", .run_step = "run-validator", .desc = "Run the validator example" },
+        .{ .name = "mcp-app-server", .src = "examples/mcp_app_server.zig", .run_step = "run-mcp-app", .desc = "Run the MCP Apps server example" },
     };
 
     inline for (examples) |ex| {

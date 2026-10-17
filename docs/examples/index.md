@@ -60,6 +60,10 @@ Request validation for tool arguments using `RequestValidator`.
 
 Rate limiting for tool calls using `RateLimiter`.
 
+#### [MCP Apps Server](/examples/mcp-app-server)
+
+Interactive UI application server using the MCP Apps extension (`io.modelcontextprotocol/ui`), `mcp.MIME_TYPE_MCP_APP`, and `_meta.ui`.
+
 ### Clients
 
 #### [Simple Client](/examples/simple-client)
@@ -124,6 +128,9 @@ zig build run-all-examples
 
 # Rate limiter
 ./zig-out/bin/rate-limiter-example
+
+# MCP Apps server
+./zig-out/bin/mcp-app-server
 ```
 
 PowerShell (Windows):
@@ -141,6 +148,7 @@ PowerShell (Windows):
 .\zig-out\bin\shutdown-example.exe
 .\zig-out\bin\validator-example.exe
 .\zig-out\bin\rate-limiter-example.exe
+.\zig-out\bin\mcp-app-server.exe
 ```
 
 ### Run a Client Example

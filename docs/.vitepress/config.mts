@@ -442,6 +442,7 @@ gtag('config', '${GA_ID}');`,
           { text: "Shutdown", link: "/examples/shutdown-example" },
           { text: "Validator", link: "/examples/validator-example" },
           { text: "Rate Limiter", link: "/examples/rate-limiter-example" },
+          { text: "MCP Apps (UI)", link: "/examples/mcp-app-server" },
         ],
       },
       {
