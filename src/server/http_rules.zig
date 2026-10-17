@@ -356,13 +356,13 @@ pub const ParamHeader = struct {
 /// plain map.
 pub const HeaderSource = struct {
     context: ?*const anyopaque = null,
-    fallback: ?*const [3]?[]const u8 = null,
+    fallback: [3]?[]const u8 = .{ null, null, null },
     /// Mirrored parameter headers, supplied directly by tests. Real requests
     /// read these off the httpx context instead.
     params: []const ParamHeader = &.{},
 
     pub fn fromHeaders(protocol_version: ?[]const u8, method_header: ?[]const u8, name_header: ?[]const u8) HeaderSource {
-        return .{ .fallback = &[_]?[]const u8{ protocol_version, method_header, name_header } };
+        return .{ .fallback = .{ protocol_version, method_header, name_header } };
     }
 
     fn protocolVersion(self: HeaderSource) ?[]const u8 {
@@ -370,21 +370,21 @@ pub const HeaderSource = struct {
             const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_protocol_version);
         }
-        return self.fallback.?[0];
+        return self.fallback[0];
     }
     fn method(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
             const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_method);
         }
-        return self.fallback.?[1];
+        return self.fallback[1];
     }
     fn name(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
             const ctx: *const httpx.Context = @ptrCast(@alignCast(c));
             return ctx.header(header_name);
         }
-        return self.fallback.?[2];
+        return self.fallback[2];
     }
     pub fn origin(self: HeaderSource) ?[]const u8 {
         if (self.context) |c| {
@@ -603,7 +603,7 @@ test "spec: Mcp-Param-* headers are validated against the body" {
     const makeSource = struct {
         fn f(params: []const ParamHeader) HeaderSource {
             return .{
-                .fallback = &[_]?[]const u8{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
+                .fallback = .{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
                 .params = params,
             };
         }
@@ -658,7 +658,7 @@ test "spec: Mcp-Param-* validation is schema-aware for nested tool arguments" {
     const makeSource = struct {
         fn f(params: []const ParamHeader) HeaderSource {
             return .{
-                .fallback = &[_]?[]const u8{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
+                .fallback = .{ protocol.PROTOCOL_VERSION, "tools/call", "greet" },
                 .params = params,
             };
         }
