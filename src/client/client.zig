@@ -699,13 +699,26 @@ pub const Client = struct {
         client_secret: []const u8,
         scope: ?[]const u8,
     ) !void {
-        var resp = try @import("../protocol/auth.zig").requestClientCredentialsToken(
+        return self.authenticateWithClientCredentialsResource(token_endpoint, client_id, client_secret, scope, null);
+    }
+
+    /// Obtains an OAuth 2.0 access token with optional RFC 8707 Resource Indicator and sets it on the client.
+    pub fn authenticateWithClientCredentialsResource(
+        self: *Self,
+        token_endpoint: []const u8,
+        client_id: []const u8,
+        client_secret: []const u8,
+        scope: ?[]const u8,
+        resource: ?[]const u8,
+    ) !void {
+        var resp = try @import("../protocol/auth.zig").requestClientCredentialsTokenWithResource(
             self.allocator,
             self.io,
             token_endpoint,
             client_id,
             client_secret,
             scope,
+            resource,
         );
         defer resp.deinit(self.allocator);
         try self.setAuthorizationToken(resp.access_token);
@@ -714,7 +727,7 @@ pub const Client = struct {
         }
     }
 
-    /// Fetches and returns OAuth Protected Resource Metadata (RFC 9728).
+    /// Fetches and returns OAuth Protected Resource Metadata (RFC 9728) from a metadata URL.
     pub fn discoverProtectedResource(
         self: *Self,
         metadata_url: []const u8,
@@ -723,6 +736,32 @@ pub const Client = struct {
             self.allocator,
             self.io,
             metadata_url,
+        );
+    }
+
+    /// Discovers Protected Resource Metadata from an MCP endpoint and optional WWW-Authenticate header.
+    pub fn discoverProtectedResourceEndpoint(
+        self: *Self,
+        mcp_endpoint_url: []const u8,
+        www_authenticate_header: ?[]const u8,
+    ) !@import("../protocol/auth.zig").ProtectedResourceMetadata {
+        return @import("../protocol/auth.zig").discoverProtectedResourceMetadata(
+            self.allocator,
+            self.io,
+            mcp_endpoint_url,
+            www_authenticate_header,
+        );
+    }
+
+    /// Discovers and validates Authorization Server Metadata from an issuer URL (RFC 8414 & OIDC Discovery).
+    pub fn discoverAuthorizationServer(
+        self: *Self,
+        issuer_url: []const u8,
+    ) !@import("../protocol/auth.zig").AuthorizationServerMetadata {
+        return @import("../protocol/auth.zig").discoverAuthorizationServerMetadata(
+            self.allocator,
+            self.io,
+            issuer_url,
         );
     }
 

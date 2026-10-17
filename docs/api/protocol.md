@@ -327,7 +327,7 @@ pub fn parseWwwAuthenticate(header: []const u8) WwwAuthenticateChallenge
 
 Parses an HTTP `WWW-Authenticate` response challenge header. Extracts `scheme`, `realm`, `resource_metadata`, `scope`, `error`, and `error_description`.
 
-### `fetchProtectedResourceMetadata`
+### `fetchProtectedResourceMetadata` & `discoverProtectedResourceMetadata`
 
 ```zig
 pub fn fetchProtectedResourceMetadata(
@@ -335,11 +335,30 @@ pub fn fetchProtectedResourceMetadata(
     io: std.Io,
     url: []const u8,
 ) !ProtectedResourceMetadata
+
+pub fn discoverProtectedResourceMetadata(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    mcp_endpoint_url: []const u8,
+    www_authenticate_header: ?[]const u8,
+) !ProtectedResourceMetadata
 ```
 
-Fetches and parses RFC 9728 OAuth 2.0 Protected Resource Metadata from the server's `.well-known` endpoint.
+Fetches and discovers RFC 9728 OAuth 2.0 Protected Resource Metadata from challenge headers or automatic well-known URI probing.
 
-### `requestClientCredentialsToken`
+### `discoverAuthorizationServerMetadata`
+
+```zig
+pub fn discoverAuthorizationServerMetadata(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    issuer_url: []const u8,
+) !AuthorizationServerMetadata
+```
+
+Probes OAuth 2.0 and OpenID Connect discovery endpoints in priority order and validates the issuer against mix-up attacks (RFC 8414 Section 3.3).
+
+### `requestClientCredentialsToken` & `requestClientCredentialsTokenWithResource`
 
 ```zig
 pub fn requestClientCredentialsToken(
@@ -350,9 +369,60 @@ pub fn requestClientCredentialsToken(
     client_secret: []const u8,
     scope: ?[]const u8,
 ) !ClientCredentialsTokenResponse
+
+pub fn requestClientCredentialsTokenWithResource(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    token_endpoint: []const u8,
+    client_id: []const u8,
+    client_secret: []const u8,
+    scope: ?[]const u8,
+    resource: ?[]const u8,
+) !ClientCredentialsTokenResponse
 ```
 
-Executes an RFC 6749 Section 4.4 Client Credentials Grant request to an OAuth token endpoint and returns the access token.
+Executes an RFC 6749 Section 4.4 Client Credentials Grant request with optional RFC 8707 Resource Indicators.
+
+### `ClientIdMetadataDocument` (CIMD)
+
+```zig
+pub const ClientIdMetadataDocument = struct {
+    client_id: []const u8,
+    client_name: []const u8,
+    client_uri: ?[]const u8 = null,
+    logo_uri: ?[]const u8 = null,
+    redirect_uris: []const []const u8 = &.{},
+    grant_types: ?[]const []const u8 = null,
+    response_types: ?[]const []const u8 = null,
+    token_endpoint_auth_method: []const u8 = "none",
+
+    pub fn validate(self: ClientIdMetadataDocument) bool;
+    pub fn deinit(self: *ClientIdMetadataDocument, allocator: std.mem.Allocator) void;
+};
+
+pub fn parseClientIdMetadataDocument(allocator: std.mem.Allocator, json_bytes: []const u8) !ClientIdMetadataDocument;
+```
+
+### `generatePkce` & `verifyPkce` (RFC 7636 / OAuth 2.1)
+
+```zig
+pub const PkcePair = struct {
+    verifier: [43]u8,
+    challenge: [43]u8,
+    method: []const u8 = "S256",
+};
+
+pub fn generatePkce(random: std.Random) PkcePair;
+pub fn verifyPkce(verifier: []const u8, expected_challenge: []const u8) bool;
+```
+
+### `validateTokenAudience` (RFC 8707 / RFC 9728)
+
+```zig
+pub fn validateTokenAudience(token_audience: []const u8, expected_resource_uri: []const u8) bool;
+```
+
+Validates inbound token audience claims on the server to prevent token reuse across services.
 
 ---
 

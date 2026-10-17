@@ -93,10 +93,27 @@ pub fn authenticateWithClientCredentials(
     client_secret: []const u8,
     scope: ?[]const u8,
 ) !void
+pub fn authenticateWithClientCredentialsResource(
+    self: *Client,
+    token_endpoint: []const u8,
+    client_id: []const u8,
+    client_secret: []const u8,
+    scope: ?[]const u8,
+    resource: ?[]const u8,
+) !void
 pub fn discoverProtectedResource(
     self: *Client,
     resource_metadata_url: []const u8,
 ) !mcp.auth.ProtectedResourceMetadata
+pub fn discoverProtectedResourceEndpoint(
+    self: *Client,
+    mcp_endpoint_url: []const u8,
+    www_authenticate_header: ?[]const u8,
+) !mcp.auth.ProtectedResourceMetadata
+pub fn discoverAuthorizationServer(
+    self: *Client,
+    issuer_url: []const u8,
+) !mcp.auth.AuthorizationServerMetadata
 pub fn disconnect(self: *Client) void
 ```
 
