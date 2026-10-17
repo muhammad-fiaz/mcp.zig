@@ -60,12 +60,6 @@ both a server and a client, so that Zig programs can:
 - **Middleware** - Optional rate limiting, request validation, batch requests, and logging around tool handlers
 - **Tests** - Unit tests for the protocol layer, transports, server, client, and cross-target CI
 
-### Known limitations
-
-- **Streamable HTTP streams** - The transport vtable exchanges whole messages; the HTTP client accepts both `application/json` and `text/event-stream` responses; the HTTP server answers a single POST with a single response (including formatted SSE stream events when requested).
-- **Interactive browser OAuth flows** - While OAuth 2.0 Client Credentials, Bearer authentication, `WWW-Authenticate` parsing, and RFC 9728 Protected Resource discovery are fully supported, interactive user-facing browser redirects (PKCE authorization code flow) require a host browser or UI shell.
-- **Cancellation** - Cancellation is cooperative: long-running loops and tasks should poll `token.check()` or `token.isCancelled()`.
-
 ## Documentation
 
 Full documentation is available at **[muhammad-fiaz.github.io/mcp.zig](https://muhammad-fiaz.github.io/mcp.zig/)**

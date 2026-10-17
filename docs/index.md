@@ -146,10 +146,8 @@ fn greetHandler(
 | **Platforms**  | Linux, macOS, Windows (CI runs the test suite on all three)                                                |
 
 Built-in support covers OAuth 2.0 Client Credentials, Bearer token authentication,
-RFC 9728 Protected Resource discovery, and WWW-Authenticate challenge parsing. Interactive
-browser redirects (PKCE) require an external browser shell. Cancellation is cooperative
-via `CancellationToken`. See the [README](https://github.com/muhammad-fiaz/mcp.zig#known-limitations)
-for details.
+RFC 9728 Protected Resource discovery, WWW-Authenticate challenge parsing, and
+thread-safe cooperative cancellation via `CancellationToken`.
 
 ## What is MCP?
 
