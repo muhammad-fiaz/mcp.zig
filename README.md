@@ -77,15 +77,31 @@ For the official MCP specification and resources, visit:
 
 ## Related Zig Projects
 
-- For API framework support, check out [api.zig](https://github.com/muhammad-fiaz/api.zig).
-
-- For web framework support, check out [zix](https://github.com/muhammad-fiaz/zix).
-
-- For logging support, check out [logly.zig](https://github.com/muhammad-fiaz/logly.zig).
-
-- For data validation and serialization support, check out [zigantic](https://github.com/muhammad-fiaz/zigantic).
-
-- For Http Client and Server support, check out [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig).
+- For **Env.zig** (.env parsing), check out **[env.zig](https://github.com/muhammad-fiaz/env.zig)**.
+- For **TUI** support, check out **[tui.zig](https://github.com/muhammad-fiaz/tui.zig)**.
+- For **ZON file format** support, check out **[zon.zig](https://github.com/muhammad-fiaz/zon.zig)**.
+- For **Spinners/loading/progress bar** support, check out **[loaders.zig](https://github.com/muhammad-fiaz/loaders.zig)**.
+- For **Terminal colors & text styles** support, check out **[tint.zig](https://github.com/muhammad-fiaz/tint.zig)**.
+- For **MCP** support, check out **[mcp.zig](https://github.com/muhammad-fiaz/mcp.zig)**.
+- For **API framework** support, check out **[api.zig](https://github.com/muhammad-fiaz/api.zig)**.
+- For **Web framework** support, check out **[zix](https://github.com/muhammad-fiaz/zix)**.
+- For **archive/compression** support, check out **[archive.zig](https://github.com/muhammad-fiaz/archive.zig)**.
+- For **compression file format** support, check out **[zigx](https://github.com/muhammad-fiaz/zigx)**.
+- For **CUDA** support, check out **[cuda.zig](https://github.com/muhammad-fiaz/cuda.zig)**.
+- For **Simplified build.zig config** support, check out **[buildx.zig](https://github.com/muhammad-fiaz/buildx.zig)**.
+- For **SQLite (zig-native implementation)** support, check out **[sqlite.zig](https://github.com/muhammad-fiaz/sqlite.zig)**.
+- For **File downloading** support, check out **[downloader.zig](https://github.com/muhammad-fiaz/downloader.zig)**.
+- For **update checker/auto-updater** support, check out **[updater.zig](https://github.com/muhammad-fiaz/updater.zig)**.
+- For **Numerical computing** support, check out **[num.zig](https://github.com/muhammad-fiaz/num.zig)**.
+- For **Logging** support, check out **[logly.zig](https://github.com/muhammad-fiaz/logly.zig)**.
+- For **Data validation and serialization** support, check out **[zigantic](https://github.com/muhammad-fiaz/zigantic)**.
+- For **UUID** support, check out **[uuid.zig](https://github.com/muhammad-fiaz/uuid.zig)**.
+- For **Key-Value database** support, check out **[zkv.zig](https://github.com/muhammad-fiaz/zkv.zig)**.
+- For **Terminal color & text styles** support, check out **[hint.zig](https://github.com/muhammad-fiaz/hint.zig)**.
+- For **Brotli compression** support, check out **[brotli.zig](https://github.com/muhammad-fiaz/brotli.zig)**.
+- For **Zstd compression** support, check out **[zstd.zig](https://github.com/muhammad-fiaz/zstd.zig)**.
+- For **Tree-Sitter** support, check out **[tree-sitter.zig](https://github.com/muhammad-fiaz/tree-sitter.zig)**.
+- For **HTTP client and server** support, check out **[httpx.zig](https://github.com/muhammad-fiaz/httpx.zig)**.
 
 ## Quick Start
 
