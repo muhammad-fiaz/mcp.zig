@@ -392,6 +392,7 @@ gtag('config', '${GA_ID}');`,
           { text: "Client Concepts", link: "/guide/client-concepts" },
           { text: "Authorization", link: "/guide/authorization" },
           { text: "Inspector", link: "/guide/inspector" },
+          { text: "Extensions & MCP Apps", link: "/guide/extensions" },
         ],
       },
       {

@@ -71,3 +71,9 @@ Both Roots and Sampling are reachable in practice through Multi Round-Trip
 Requests: a server that needs either one asks for it inside an `input_required`
 result's `inputRequests` map, and the client answers through `tasks/update` or
 an MRTR retry rather than by handling an out-of-band server-initiated request.
+
+### Extensions Negotiation
+
+Clients declare supported extensions in `_meta["io.modelcontextprotocol/clientCapabilities"].extensions` with every request. Calling `client.enableUi()` negotiates support for **MCP Apps** (`io.modelcontextprotocol/ui`), allowing the client to receive and render interactive HTML interfaces. After discovery, check `client.hasServerUi()` to verify if the server provides UI extensions.
+
+See the [Extensions & MCP Apps Guide](/guide/extensions) for full details.

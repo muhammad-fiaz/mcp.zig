@@ -319,6 +319,21 @@ pub const LoggingLevel = enum {
 
 ---
 
+## MCP Apps UI Types
+
+### `ToolUi`
+
+Metadata declared under `_meta.ui` linking a tool or result to an interactive MCP App resource:
+
+```zig
+pub const ToolUi = struct {
+    resourceUri: []const u8,
+    visibility: ?[]const []const u8 = null,
+};
+```
+
+---
+
 ## Complete Example
 
 ```zig

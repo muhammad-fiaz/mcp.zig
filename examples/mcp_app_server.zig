@@ -133,9 +133,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator, process_args: std.process.Args)
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool Handlers
-// ---------------------------------------------------------------------------
 
 fn openDashboardHandler(
     _: ?*anyopaque,
@@ -184,9 +182,7 @@ fn updateMetricHandler(
     ) catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-// ---------------------------------------------------------------------------
 // Resource Handlers
-// ---------------------------------------------------------------------------
 
 fn dashboardResourceHandler(
     _: ?*anyopaque,
@@ -398,9 +394,7 @@ fn analyticsResourceHandler(
     };
 }
 
-// ---------------------------------------------------------------------------
 // Schemas
-// ---------------------------------------------------------------------------
 
 fn buildMetricSchema(allocator: std.mem.Allocator) !mcp.types.InputSchema {
     var b = mcp.schema.InputSchemaBuilder.init(allocator);

@@ -103,3 +103,10 @@ blocked on input with `tasks/update`, and stops it with `tasks/cancel`.
 ## Bringing Servers Together
 
 The power of MCP emerges when multiple servers work together. For example, a Travel Server, Weather Server, and Calendar Server can be combined by the Host to fulfill a complex user request like "Plan my vacation".
+
+## Extensions & MCP Apps
+
+Servers can extend core functionality by advertising supported extensions in `capabilities.extensions` during `server/discover`. The most prominent extension is **MCP Apps** (`io.modelcontextprotocol/ui`), allowing servers to deliver interactive HTML applications (`text/html;profile=mcp-app`) that render inline in host applications like Claude Desktop, Zed, and Goose.
+
+For complete details, see the [Extensions & MCP Apps Guide](/guide/extensions).
+

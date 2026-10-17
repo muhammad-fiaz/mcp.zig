@@ -30,12 +30,12 @@ features:
     details: server/discover as the entry point, _meta on every request, resultType on every result, Multi Round-Trip Requests, and the opt-in tasks extension. No initialize handshake.
   - title: Two transports
     details: STDIO and Streamable HTTP, built on httpx.zig, behind a whole-message transport interface that custom transports can implement.
+  - title: MCP Apps & UI
+    details: Build interactive HTML interfaces (text/html;profile=mcp-app) with io.modelcontextprotocol/ui that render inline inside Claude Desktop, Zed, and Goose.
   - title: Full JSON Schema
     details: inputSchema and outputSchema are complete JSON Schema 2020-12 documents. Typed builders cover the common cases; raw documents are emitted verbatim.
   - title: Type-safe handlers
     details: Tool, resource, and prompt handlers are plain Zig functions with typed results, so mistakes surface at compile time.
-  - title: Testable
-    details: Unit tests cover the protocol layer, both transports, the server, and the client, and CI runs them on Linux, Windows, and macOS.
 ---
 
 <style>
@@ -140,6 +140,7 @@ fn greetHandler(
 | **Protocol**   | Revision `2026-07-28` over JSON-RPC 2.0, stateless per request, `server/discover` entry point, MRTR        |
 | **Server**     | Tools, resources, resource templates, prompts, pagination, caching hints, subscriptions, MRTR, tasks        |
 | **Client**     | STDIO and HTTP transports, tool calls, reads, prompts, completion, batches, elicitation, sampling, roots   |
+| **Extensions** | MCP Apps (`io.modelcontextprotocol/ui`), Tasks (`io.modelcontextprotocol/tasks`), capability negotiation   |
 | **Transports** | STDIO and Streamable HTTP via httpx.zig, behind a whole-message `Transport` interface                       |
 | **Dependencies** | One external package: `httpx.zig`. No other runtime dependencies                                         |
 | **Platforms**  | Linux, macOS, Windows (CI runs the test suite on all three)                                                |

@@ -59,3 +59,13 @@ For MCP servers using the **STDIO transport**, you can use environment-based cre
     ```
 
 The MCP server validates the token and processes the request.
+
+## Authorization Extensions
+
+In addition to core interactive OAuth 2.1 authorization, MCP defines supplementary authorization extensions:
+
+- **OAuth Client Credentials** (`io.modelcontextprotocol/oauth-client-credentials`): Used for machine-to-machine integrations, background services, and CI/CD pipelines without user interaction.
+- **Enterprise-Managed Authorization** (`io.modelcontextprotocol/enterprise-managed-authorization`): Enables organizations to enforce centralized access control and SSO policies via enterprise identity providers (IdPs like Okta or Azure AD) using Identity Assertion JWTs (ID-JAG).
+
+Learn more in the [Extensions & MCP Apps Guide](/guide/extensions).
+
