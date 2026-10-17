@@ -145,12 +145,11 @@ fn greetHandler(
 | **Dependencies** | One external package: `httpx.zig`. No other runtime dependencies                                         |
 | **Platforms**  | Linux, macOS, Windows (CI runs the test suite on all three)                                                |
 
-Not implemented: per-request SSE stream lifetime for Streamable HTTP, and OAuth
-2.1/OIDC discovery — authorization is limited to
-`Client.setAuthorizationToken` (bearer token). Cancellation is cooperative, so
-a handler that never polls its token is not interrupted. See the
-[README](https://github.com/muhammad-fiaz/mcp.zig#known-limitations) for the
-full list.
+Built-in support covers OAuth 2.0 Client Credentials, Bearer token authentication,
+RFC 9728 Protected Resource discovery, and WWW-Authenticate challenge parsing. Interactive
+browser redirects (PKCE) require an external browser shell. Cancellation is cooperative
+via `CancellationToken`. See the [README](https://github.com/muhammad-fiaz/mcp.zig#known-limitations)
+for details.
 
 ## What is MCP?
 

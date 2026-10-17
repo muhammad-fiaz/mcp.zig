@@ -691,6 +691,41 @@ pub const Client = struct {
         self.authorization_token = try self.allocator.dupe(u8, token);
     }
 
+    /// Obtains an OAuth 2.0 access token using client credentials and sets it on the client.
+    pub fn authenticateWithClientCredentials(
+        self: *Self,
+        token_endpoint: []const u8,
+        client_id: []const u8,
+        client_secret: []const u8,
+        scope: ?[]const u8,
+    ) !void {
+        var resp = try @import("../protocol/auth.zig").requestClientCredentialsToken(
+            self.allocator,
+            self.io,
+            token_endpoint,
+            client_id,
+            client_secret,
+            scope,
+        );
+        defer resp.deinit(self.allocator);
+        try self.setAuthorizationToken(resp.access_token);
+        if (self.http_transport) |http| {
+            try http.setAuthorizationToken(self.allocator, resp.access_token);
+        }
+    }
+
+    /// Fetches and returns OAuth Protected Resource Metadata (RFC 9728).
+    pub fn discoverProtectedResource(
+        self: *Self,
+        metadata_url: []const u8,
+    ) !@import("../protocol/auth.zig").ProtectedResourceMetadata {
+        return @import("../protocol/auth.zig").fetchProtectedResourceMetadata(
+            self.allocator,
+            self.io,
+            metadata_url,
+        );
+    }
+
     /// Connects to a server via HTTP at the specified URL.
     pub fn connectHttp(self: *Self, url: []const u8) !void {
         self.state = .connecting;

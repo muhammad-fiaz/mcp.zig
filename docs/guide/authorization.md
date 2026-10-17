@@ -60,12 +60,101 @@ For MCP servers using the **STDIO transport**, you can use environment-based cre
 
 The MCP server validates the token and processes the request.
 
+## Using Authorization in mcp.zig
+
+`mcp.zig` provides built-in protocol and client helpers to implement secure authorization flows.
+
+### Client: Setting a Bearer Token
+
+For pre-provisioned or environment-based tokens, set the bearer token directly on the client:
+
+```zig
+const std = @import("std");
+const mcp = @import("mcp");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var client = mcp.Client.init(allocator, .{});
+    defer client.deinit();
+
+    // Attach static Bearer token
+    client.setAuthorizationToken("mcp_token_secret_12345");
+
+    try client.connectHttp("https://api.example.com/mcp", .{});
+    // All subsequent HTTP requests carry: Authorization: Bearer mcp_token_secret_12345
+}
+```
+
+### Client: Machine-to-Machine OAuth Client Credentials (RFC 6749)
+
+For service accounts, background workers, and automation, acquire an access token automatically from the OAuth token endpoint:
+
+```zig
+const std = @import("std");
+const mcp = @import("mcp");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var client = mcp.Client.init(allocator, .{});
+    defer client.deinit();
+
+    // Authenticate via OAuth 2.0 client credentials grant
+    try client.authenticateWithClientCredentials(
+        "https://auth.example.com/oauth/token",
+        "mcp-client-id",
+        "mcp-client-secret",
+        "mcp:tools mcp:resources",
+    );
+
+    try client.connectHttp("https://api.example.com/mcp", .{});
+}
+```
+
+### Parsing `WWW-Authenticate` Challenges
+
+When an HTTP endpoint returns `401 Unauthorized`, parse the challenge to discover resource metadata or error reasons:
+
+```zig
+const mcp = @import("mcp");
+
+const header = "Bearer realm=\"mcp\", resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"";
+const challenge = mcp.auth.parseWwwAuthenticate(header);
+
+if (std.mem.eql(u8, challenge.scheme, "Bearer")) {
+    if (challenge.resource_metadata) |meta_url| {
+        // Discovered Protected Resource Metadata URL
+    }
+}
+```
+
+### Protected Resource Metadata Discovery (RFC 9728)
+
+Fetch authorization server information directly from the protected resource metadata endpoint:
+
+```zig
+var meta = try client.discoverProtectedResource(
+    "https://api.example.com/.well-known/oauth-protected-resource",
+);
+defer meta.deinit();
+
+for (meta.authorization_servers) |as_url| {
+    std.debug.print("Authorization Server: {s}\n", .{as_url});
+}
+```
+
 ## Authorization Extensions
 
 In addition to core interactive OAuth 2.1 authorization, MCP defines supplementary authorization extensions:
 
-- **OAuth Client Credentials** (`io.modelcontextprotocol/oauth-client-credentials`): Used for machine-to-machine integrations, background services, and CI/CD pipelines without user interaction.
+- **OAuth Client Credentials** (`io.modelcontextprotocol/oauth-client-credentials`): Used for machine-to-machine integrations, background services, and CI/CD pipelines without user interaction. Built into `mcp.Client.authenticateWithClientCredentials`.
 - **Enterprise-Managed Authorization** (`io.modelcontextprotocol/enterprise-managed-authorization`): Enables organizations to enforce centralized access control and SSO policies via enterprise identity providers (IdPs like Okta or Azure AD) using Identity Assertion JWTs (ID-JAG).
 
 Learn more in the [Extensions & MCP Apps Guide](/guide/extensions).
+
 

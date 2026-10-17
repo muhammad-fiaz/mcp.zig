@@ -315,6 +315,64 @@ HTTP mode details:
 
 ---
 
+## Authorization (`mcp.auth`)
+
+Protocol-level authorization primitives for OAuth 2.0 / 2.1 authentication and resource discovery.
+
+### `parseWwwAuthenticate`
+
+```zig
+pub fn parseWwwAuthenticate(header: []const u8) WwwAuthenticateChallenge
+```
+
+Parses an HTTP `WWW-Authenticate` response challenge header. Extracts `scheme`, `realm`, `resource_metadata`, `scope`, `error`, and `error_description`.
+
+### `fetchProtectedResourceMetadata`
+
+```zig
+pub fn fetchProtectedResourceMetadata(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    url: []const u8,
+) !ProtectedResourceMetadata
+```
+
+Fetches and parses RFC 9728 OAuth 2.0 Protected Resource Metadata from the server's `.well-known` endpoint.
+
+### `requestClientCredentialsToken`
+
+```zig
+pub fn requestClientCredentialsToken(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    token_endpoint: []const u8,
+    client_id: []const u8,
+    client_secret: []const u8,
+    scope: ?[]const u8,
+) !ClientCredentialsTokenResponse
+```
+
+Executes an RFC 6749 Section 4.4 Client Credentials Grant request to an OAuth token endpoint and returns the access token.
+
+---
+
+## Cooperative Cancellation (`mcp.CancellationToken`)
+
+Thread-safe atomic cancellation token for cooperative cancellation across tasks, tool handlers, and async workers:
+
+```zig
+pub const CancellationToken = struct {
+    pub fn init() CancellationToken;
+    pub fn cancel(self: *CancellationToken) void;
+    pub fn isCancelled(self: *const CancellationToken) bool;
+    pub fn reset(self: *CancellationToken) void;
+    pub fn check(self: *const CancellationToken) error{Cancelled}!void;
+};
+```
+
+---
+
+
 ## Complete Example
 
 ```zig

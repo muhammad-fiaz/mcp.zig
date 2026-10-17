@@ -49,19 +49,22 @@ both a server and a client, so that Zig programs can:
 
 - **Server framework** - Expose tools, resource templates, and prompts over STDIO or HTTP
 - **Client framework** - Connect over STDIO or HTTP and declare elicitation, sampling, roots, and extension capabilities
-- **MCP 2026-07-28** - Stateless per-request model: `server/discover` as the entry point, `_meta` on every request, `resultType` on every result, no `initialize` handshake
+- **MCP 2026-07-28** - Stateless per-request model: `server/discover` as the entry point, `_meta` on every request, `resultType` on every result, strictly advertised active revisions, no `initialize` handshake
+- **MCP Apps extension** - Full `io.modelcontextprotocol/ui` support: serve interactive HTML interfaces with MIME `text/html;profile=mcp-app` (`mcp.MIME_TYPE_MCP_APP`), link tools via `_meta.ui.resourceUri` (`ToolBuilder.ui`), and return UI results (`uiResult`) rendered in host viewports (Claude Desktop, Zed, Goose, etc.)
 - **MRTR** - Multi Round-Trip Requests: a handler returning `error.InputRequired` yields an `input_required` result that the client resolves and retries under a new request id
 - **Tasks extension** - Opt-in `io.modelcontextprotocol/tasks` support: a `tools/call` augmented with `_meta["io.modelcontextprotocol/task"]` returns `resultType: "task"`, results carry `_meta["io.modelcontextprotocol/relatedTask"]`, and the server pushes `notifications/tasks`; `tasks/get`, `tasks/update`, and `tasks/cancel` are available on both sides
+- **OAuth 2.0 / 2.1 & Authorization** - Bearer tokens, `WWW-Authenticate` challenge parsing (RFC 6750), Protected Resource Metadata discovery (RFC 9728), Authorization Server Metadata discovery (RFC 8414), and Client Credentials grant (`requestClientCredentialsToken`)
+- **Cooperative Cancellation** - Thread-safe, atomic `CancellationToken` (`check()`, `isCancelled()`, `cancel()`) for long-running operations and handlers
 - **Content types** - Text, image, audio, resource-link, and structured tool results
-- **Transports** - STDIO and Streamable HTTP, built on [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig)
+- **Transports** - STDIO and Streamable HTTP, built on [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig) with full JSON and SSE (`text/event-stream`) support
 - **Middleware** - Optional rate limiting, request validation, batch requests, and logging around tool handlers
-- **Tests** - Unit tests for the protocol layer, transports, server, and client
+- **Tests** - Unit tests for the protocol layer, transports, server, client, and cross-target CI
 
 ### Known limitations
 
-- **Streamable HTTP streams** - The transport vtable exchanges whole messages, so the per-request SSE stream lifetime that `subscriptions/listen` needs is not modelled end to end. The HTTP client accepts both `application/json` and `text/event-stream` responses; the HTTP server answers a single POST with a single response.
-- **Authorization** - Only `setAuthorizationToken` (a bearer token) is implemented. There is no protected-resource or authorization-server metadata discovery, no `WWW-Authenticate` parsing, no PKCE, dynamic client registration, token refresh, or step-up.
-- **Cancellation** - Cooperative and poll-based: a synchronous handler that never consults its cancellation token cannot be interrupted.
+- **Streamable HTTP streams** - The transport vtable exchanges whole messages; the HTTP client accepts both `application/json` and `text/event-stream` responses; the HTTP server answers a single POST with a single response (including formatted SSE stream events when requested).
+- **Interactive browser OAuth flows** - While OAuth 2.0 Client Credentials, Bearer authentication, `WWW-Authenticate` parsing, and RFC 9728 Protected Resource discovery are fully supported, interactive user-facing browser redirects (PKCE authorization code flow) require a host browser or UI shell.
+- **Cancellation** - Cancellation is cooperative: long-running loops and tasks should poll `token.check()` or `token.isCancelled()`.
 
 ## Documentation
 

@@ -80,17 +80,27 @@ pub fn addRoot(self: *Client, uri: []const u8, name: ?[]const u8) !void
 
 ---
 
-## Connection Management
+## Connection & Authorization Management
 
 ```zig
 pub fn connectStdio(self: *Client, command: []const u8, args: []const []const u8) !void
 pub fn connectHttp(self: *Client, url: []const u8) !void
 pub fn setAuthorizationToken(self: *Client, token: []const u8) !void
+pub fn authenticateWithClientCredentials(
+    self: *Client,
+    token_endpoint: []const u8,
+    client_id: []const u8,
+    client_secret: []const u8,
+    scope: ?[]const u8,
+) !void
+pub fn discoverProtectedResource(
+    self: *Client,
+    resource_metadata_url: []const u8,
+) !mcp.auth.ProtectedResourceMetadata
 pub fn disconnect(self: *Client) void
 ```
 
-`connectHttp` expects the full MCP endpoint URL, e.g.
-`http://127.0.0.1:8080/mcp` (server exposes `POST /mcp`).
+`connectHttp` expects the full MCP endpoint URL, e.g. `http://127.0.0.1:8080/mcp` (server exposes `POST /mcp`).
 
 ---
 
@@ -116,7 +126,6 @@ pub fn complete(self: *Client, ref: std.json.Value, argument: std.json.Value) !v
 
 pub fn getTask(self: *Client, taskId: []const u8) !void
 pub fn getTaskResult(self: *Client, taskId: []const u8) !void
-pub fn getTask(self: *Client, taskId: []const u8) !void
 pub fn cancelTask(self: *Client, taskId: []const u8) !void
 ```
 

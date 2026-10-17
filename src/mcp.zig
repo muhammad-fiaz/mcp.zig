@@ -60,6 +60,7 @@ pub const protocol = @import("protocol/protocol.zig");
 pub const types = @import("protocol/types.zig");
 pub const jsonrpc = @import("protocol/jsonrpc.zig");
 pub const schema = @import("protocol/schema.zig");
+pub const auth = @import("protocol/auth.zig");
 
 // MCP Apps extension constants
 pub const EXTENSION_UI = protocol.EXTENSION_UI;
@@ -127,6 +128,7 @@ pub const RateLimiter = middleware.RateLimiter;
 pub const RequestValidator = middleware.RequestValidator;
 pub const BatchRequest = middleware.BatchRequest;
 pub const LoggingContext = middleware.LoggingContext;
+pub const CancellationToken = utils.cancellation.CancellationToken;
 
 test {
     std.testing.refAllDecls(@This());
