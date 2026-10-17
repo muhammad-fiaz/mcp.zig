@@ -33,18 +33,16 @@ fn loggingMiddleware(ctx: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator,
 // Middleware that checks authentication
 fn authMiddleware(ctx: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, name: []const u8, args: ?std.json.Value) ?mcp.tools.ToolResult {
     _ = name;
-    _ = args;
+    _ = io;
     const c: *Ctx = @ptrCast(@alignCast(ctx.?));
 
-    if (c.auth_token == null) {
+    const token = mcp.tools.getString(args, "auth_token") orelse c.auth_token;
+    if (token == null) {
         std.debug.print("[MIDDLEWARE] Authentication failed: no token provided\n", .{});
-        const result = mcp.tools.textResult(allocator, "Error: Authentication required") catch return null;
-        _ = io;
-        return result; // Short-circuit with error
+        return mcp.tools.errorResult(allocator, "Authentication required") catch null;
     }
 
     std.debug.print("[MIDDLEWARE] Authentication passed\n", .{});
-    _ = io;
     return null; // Continue to actual handler
 }
 
@@ -88,19 +86,16 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     std.debug.print("Tools: protected_action, public_action\n", .{});
     std.debug.print("Use auth_token to protect access\n", .{});
 
-    // In a real server, you'd set the auth token based on incoming requests
-    // For demo purposes, we show how middleware intercepts calls
     try server.run(io, allocator, .stdio);
 }
 
-fn protectedActionHandler(user_data: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
-    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
-    _ = ctx;
+fn protectedActionHandler(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    if (loggingMiddleware(user_data, io, allocator, "protected_action", args)) |res| return res;
+    if (authMiddleware(user_data, io, allocator, "protected_action", args)) |res| return res;
     return mcp.tools.textResult(allocator, "Protected action executed successfully!") catch return mcp.tools.ToolError.OutOfMemory;
 }
 
-fn publicActionHandler(user_data: ?*anyopaque, _: std.Io, allocator: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
-    const ctx: *Ctx = @ptrCast(@alignCast(user_data.?));
-    _ = ctx;
+fn publicActionHandler(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    if (loggingMiddleware(user_data, io, allocator, "public_action", args)) |res| return res;
     return mcp.tools.textResult(allocator, "Public action executed successfully!") catch return mcp.tools.ToolError.OutOfMemory;
 }

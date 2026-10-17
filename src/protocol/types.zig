@@ -210,6 +210,21 @@ pub const ClientCapabilities = struct {
         }
         return caps;
     }
+
+    /// Frees the nested and top-level ObjectMaps allocated by `toJson`.
+    pub fn freeJson(caps: *std.json.ObjectMap, allocator: std.mem.Allocator) void {
+        if (caps.getPtr("sampling")) |sampling| {
+            if (sampling.* == .object) {
+                sampling.object.deinit(allocator);
+            }
+        }
+        if (caps.getPtr("elicitation")) |elicitation| {
+            if (elicitation.* == .object) {
+                elicitation.object.deinit(allocator);
+            }
+        }
+        caps.deinit(allocator);
+    }
 };
 
 /// `roots` carries no properties: `notifications/roots/list_changed` was

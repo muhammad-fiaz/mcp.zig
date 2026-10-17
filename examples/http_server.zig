@@ -63,7 +63,8 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 
     // Print connection info to stderr before blocking
     std.debug.print("HTTP MCP Server starting on http://127.0.0.1:8080\n", .{});
-    std.debug.print("Send JSON-RPC via: curl -X POST http://127.0.0.1:8080/mcp -H 'Content-Type: application/json' -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}'\n", .{});
+    std.debug.print("Discover:  curl -X POST http://127.0.0.1:8080/mcp -H 'Content-Type: application/json' -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: server/discover' -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"server/discover\",\"params\":{{\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{{\"name\":\"curl\",\"version\":\"1.0\"}},\"io.modelcontextprotocol/clientCapabilities\":{{}}}}}}}}'\n", .{});
+    std.debug.print("Tool call: curl -X POST http://127.0.0.1:8080/mcp -H 'Content-Type: application/json' -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: ping' -d '{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"ping\",\"arguments\":{{\"message\":\"hi\"}},\"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{{\"name\":\"curl\",\"version\":\"1.0\"}},\"io.modelcontextprotocol/clientCapabilities\":{{}}}}}}}}'\n", .{});
 
     // Run HTTP transport on 127.0.0.1:8080
     try server.run(io, allocator, .{ .http = .{ .host = "127.0.0.1", .port = 8080 } });

@@ -591,6 +591,12 @@ pub const Client = struct {
 
     /// Releases all resources held by the client.
     pub fn deinit(self: *Self) void {
+        var p_it = self.pending_requests.valueIterator();
+        while (p_it.next()) |p| {
+            if (p.mrtr) |*m| {
+                m.base_params.deinit(self.allocator);
+            }
+        }
         self.pending_requests.deinit();
         var it = self.results.valueIterator();
         while (it.next()) |raw| self.allocator.free(raw.*);
@@ -821,7 +827,7 @@ pub const Client = struct {
             .object = info,
         });
         var caps = try self.capabilities.toJson(self.allocator);
-        defer caps.deinit(self.allocator);
+        defer types.ClientCapabilities.freeJson(&caps, self.allocator);
         try meta.put(self.allocator, "io.modelcontextprotocol/clientCapabilities", .{ .object = caps });
 
         var merged_params: std.json.ObjectMap = .empty;

@@ -87,7 +87,7 @@ fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer ctx.store.deinit();
 
     // Seed some demo notes
-    try ctx.store.add("Welcome", "Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.6.");
+    try ctx.store.add("Welcome", "Welcome to the Notes MCP server!\nBuilt with mcp.zig v0.0.9.");
     try ctx.store.add("README", "This server stores notes in memory.\nAll notes are lost on restart.");
 
     try server.addTool(.{
