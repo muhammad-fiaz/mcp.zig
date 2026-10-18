@@ -2,7 +2,7 @@ import { defineConfig } from "vitepress";
 import llmstxt from "vitepress-plugin-llms";
 
 // Site configuration
-export const SITE_URL = "https://muhammad-fiaz.github.io/mcp.zig";
+export const SITE_URL = "https://muhammad-fiaz.github.io/mcp.zig/";
 export const SITE_NAME = "MCP.zig";
 export const SITE_DESCRIPTION =
   "The first comprehensive Model Context Protocol (MCP) library for Zig — build MCP servers and clients with tools, resources, prompts, STDIO/HTTP transport, JSON-RPC 2.0, and native Zig performance.";
@@ -29,13 +29,6 @@ export default defineConfig({
 
   sitemap: {
     hostname: SITE_URL,
-    // Project Pages are served under the "/mcp.zig/" subpath, which
-    // VitePress does not prepend to sitemap locations on its own.
-    transformItems: (items) =>
-      items.map((item) => ({
-        ...item,
-        url: `/mcp.zig/${item.url.replace(/^\//, "")}`,
-      })),
   },
 
   vite: {
